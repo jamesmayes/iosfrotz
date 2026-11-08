@@ -40,6 +40,12 @@ NS_ASSUME_NONNULL_BEGIN
 -(void)maybeShowEnterKey;
 -(void)hideEnterKey;
 -(void)setTextKeepCompletion:(NSString*)text;
+
+/// Typing API
+// One path for every keyboard, so completion, paging and single-key input behave the same.
+-(void)typeText:(NSString *)text;
+-(void)typeBackspace;
+-(void)typeReturn;
 @end
 
 NS_ASSUME_NONNULL_END
