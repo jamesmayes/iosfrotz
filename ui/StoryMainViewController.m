@@ -1835,6 +1835,8 @@ extern void gli_ios_set_focus(window_t *winNum);
                           @"tap:ESC", @"tap:BREAK", @"tap:HELP", @"tap:INVERSE" ],
         @"amiga500": @[ @"⌫", @"Return", @"Shift", @"tap:Shift", @"tap:`", @"tap:\\", @"tap:Caps Lock", @"tap:B", @"tap:Caps Lock",
                         @"tap:c", @"clear:", @"tap:↑", @"tap:↓", @"tap:Esc", @"tap:Help", @"tap:Del", @"tap:F1" ],
+        @"amiga1200": @[ @"⌫", @"Return", @"Shift", @"tap:Shift", @"tap:`", @"tap:\\", @"tap:Caps Lock", @"tap:B", @"tap:Caps Lock",
+                         @"tap:c", @"clear:", @"tap:↑", @"tap:↓", @"tap:Esc", @"tap:Help", @"tap:Del", @"tap:F1" ],
     };
     NSArray *keys = faithful[m_keyboardController.skinID];
     if (keys) {
