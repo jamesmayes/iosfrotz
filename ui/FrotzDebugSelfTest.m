@@ -469,6 +469,9 @@ static NSMutableArray<NSString *> *sHeldActions;
                        @"tap:↓", @"tap:CLEAR", @"tap:BREAK" ],
         @"ibmpcjr": @[ @"⌫", @"↵", @"⇧", @"tap:⇧", @"tap:1", @"tap:'", @"tap:Caps Lock", @"tap:A", @"tap:Caps Lock", @"tap:b",
                        @"clear:", @"tap:↑", @"tap:↓", @"tap:Esc", @"tap:Ins", @"tap:Del" ],
+        @"tandy1000": @[ @"SPACE", @"ENTER", @"SHIFT", @"tap:SHIFT", @"tap:1", @"tap:CAPS", @"tap:A", @"tap:CAPS", @"tap:b",
+                         @"tap:DELETE", @"tap:F1", @"tap:F12", @"tap:BREAK", @"tap:HOLD", @"tap:PRINT", @"clear:", @"tap:↑", @"tap:↓",
+                         @"tap:ESC", @"tap:INSERT" ],
     };
     NSArray *keys = faithful[m_keyboardController.skinID];
     if (keys) {
