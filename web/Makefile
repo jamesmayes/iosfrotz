@@ -644,6 +644,11 @@ asyncify-check: $(BENCH)/tads2-check.js $(BENCH)/tads2-check.wasm $(BENCH)/tads3
 dist: all
 	node deploy/build-site.js $(SITE)
 
+# The checks that need a real Safari (bench/safari-check.js): run before any
+# release, on an unlocked Mac. Writes bench/last-safari-check.md.
+safari-check: dist
+	node bench/safari-check.js
+
 serve: dist
 	python3 deploy/serve.py $(SITE) 8000
 
@@ -653,5 +658,5 @@ serve-dev: all
 clean:
 	rm -rf $(DIST) $(SITE)
 
-.PHONY: all frotz git tads2 tads3 bench bench-tads check asyncify-lists asyncify-check dist serve \
+.PHONY: all frotz git tads2 tads3 bench bench-tads check asyncify-lists asyncify-check dist safari-check serve \
         serve-dev clean FORCE

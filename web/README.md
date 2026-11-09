@@ -42,12 +42,32 @@ make check      # the checks below; must stay green
 make asyncify-lists # regenerate tads/asyncify-tads{2,3}.txt after changing TADS code or flags
 make asyncify-check # play every TADS walkthrough on ASYNCIFY-assertion builds
 make serve-dev  # serve web/ itself (unhashed) on :8000, for editing the page
+make safari-check # make dist, then the Safari checks; run before any release (below)
 make clean      # removes dist/ and dist-site/
 ```
 
 `dist/` (including the object files in `dist/obj/`) is git-ignored. `make serve-dev` serves the working files, so an edit to `index.html` or a script shows on reload with no build; `make dist` is only for deploying.
 
 **Files.** `index.html` (the page and all its CSS), `main.js` (start page: catalogue, file picker, format detection, loading the interpreter), `ui.js` (what both interpreters share: format detection, the Saves button, dialog and import, viewport pinning, notices, the hashed-asset lookup), `app.js` (the Z-code front end), `glk.js` (the Glulx front end), `saves.js` (the save store and session), `src/web_os.c` (Frotz's browser OS layer), `glk/` (the browser Glk and git's startup file), `bench/` (checks and measurement), `deploy/` (the site build, its server and the deploy notes).
+
+### Before a release: `make safari-check`
+
+`make check` runs in Node; what only a real browser can show is in `make safari-check`. Run it on an unlocked Mac before any release, and commit the report it writes, `bench/last-safari-check.md`. It takes a few minutes and needs nothing from you once it starts: do not use Safari while it runs.
+
+It builds the site (`make dist`), serves `dist-site/` on <http://127.0.0.1:8790> from `bench/safari-check.js` (Node, no packages), opens two Safari windows side by side, and runs these in order, each line PASS, FAIL or SKIP with what it saw:
+
+1. **Z-code** (*Balances*): start, three turns, SAVE, reload, RESTORE (the status line after RESTORE must match the one after SAVE).
+2. **Glulx**: *Glulxercise* starts; char input (`q`, Left) and the two-second timer in *InputEventTest*; SAVE, reload, RESTORE in *Alabaster* (`git/test/`).
+3. **TADS 2** (*The Keeper's Errand*) and **TADS 3** (*The Silent Belfry*): start, the first 20 commands of the walkthrough (without SAVE, RESTORE, UNDO), SAVE, reload, RESTORE, and the Saves dialog listing `<story>.glksave` "in browser storage".
+4. **Persistence**: two tabs on one story. The second is session-only (its SAVE leaves the stored file alone) until the first closes, then takes over and stores. Then the stolen queued grant: a waiting tab is granted the lock while its snapshot is held (IndexedDB opens gated), another page steals the lock, and the waiting tab must stay session-only ("no longer owns"), never the writer, and not queue again.
+5. **Startup timings** per interpreter: when the `.js` and `.wasm` arrived, when the wasm was instantiated, the first text, and the first prompt, in ms from navigation start.
+
+Page errors, unhandled rejections and `console.warn` lines go in the report too. Browser storage for that origin is wiped at the start. The exit status is 0 if nothing failed, 1 if a check failed, and 2 if it stopped before checking.
+
+- **What it needs.** An unlocked screen: a locked or hidden page gets its timers and storage held back by Safari, which is what spoiled the Safari runs of tasks 5 and 6, so the script checks first (`ioreg`'s `CGSSessionScreenIsLocked`) and stops with a message if the screen is locked, if Safari does not answer AppleScript within 15 s, if no page reports in within 20 s, or if the page says it is hidden. It also needs the **Automation** permission for your terminal to control Safari (System Settings › Privacy & Security › Automation; macOS asks the first time): AppleScript only opens, places and closes the windows.
+- **What it does not need.** Not Screen Recording (no screenshots), not Accessibility (no keystrokes: input goes through the page's own form with `requestSubmit()` and synthetic `keydown` events), and not Safari's "Allow JavaScript from Apple Events" (the page is driven by a script the test server injects into `index.html`, which polls it for commands; the repo's pages have no such hook).
+- **Test stories.** The server adds the TADS test games (`bench/tads`), *Alabaster* (`git/test`) and, if present, `bench/local/inputeventtest.ulx` to the catalogue it serves; none of them ships. *InputEventTest* is Andrew Plotkin's unit test from `erkyrath/glk-dev`, not in the repo: copy it to `bench/local/` (ignored by git), or the char-input and timer checks SKIP.
+- `--only zcode,glulx,tads2,tads3,persistence` runs some of them, `--port N` moves the server, `--serve-only` serves the instrumented site and waits (to look by hand), `--dry-run` stops after the preflight.
 
 ### How the core is compiled
 
