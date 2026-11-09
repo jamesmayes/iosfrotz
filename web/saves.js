@@ -61,6 +61,9 @@
 // nothing, list() reports the tombstone (sessions leave it out of the
 // Saves dialog), and a stale tab that saves the old version afterwards gets
 // a conflict like any other, instead of bringing the file back unnoticed.
+// Another tab that holds a clean copy of the file in its own MEMFS removes
+// it the next time the game opens the file or asks whether it exists (see
+// load() in createSaveSession), so the deletion holds there too.
 //
 // Timeouts and supersession: every operation is a promise that settles
 // within `timeoutMs`. There is at most one live operation per kind and file
@@ -303,6 +306,33 @@
         });
       },
 
+      // { rec, meta } for name, read in one transaction: rec as get()
+      // returns it, meta the file's meta record (a tombstone after a
+      // delete) or null. Does not change the rev this tab has seen.
+      lookup(name, purpose) {
+        const kind = purpose || "read";
+        return guarded(`get-${kind}:${name}`, `Reading ${name}`, async (ctx) => {
+          const db = await open(ctx);
+          return transact(ctx, db, [SAVES, META], "readonly", (tx, set) => {
+            const out = { rec: null, meta: null };
+            let left = 2;
+            const done = () => { if (--left === 0) set(out); };
+            const r1 = tx.objectStore(SAVES).get(name);
+            r1.onsuccess = () => {
+              if (!ctx.live()) return;
+              out.rec = r1.result || null;
+              done();
+            };
+            const r2 = tx.objectStore(META).get(name);
+            r2.onsuccess = () => {
+              if (!ctx.live()) return;
+              out.meta = r2.result || null;
+              done();
+            };
+          });
+        });
+      },
+
       // This tab now holds the stored version `rev` of name (a restore
       // copied it into MEMFS), so its next save may replace it. The only
       // way, besides this tab's own commits and snapshot(), that the
@@ -484,6 +514,7 @@
     const unpersisted = new Map(); // name -> { reason: "conflict"|"failed"|"timeout"|"session" }
     const base = new Map(); // name -> stored rev the MEMFS copy equals
     const mutations = new Map(); // name -> count of this session's local writes
+    const inflight = new Map(); // name -> puts of this tab not yet answered
     let stored = []; // last list()
     let mode = "none";
     const changed = () => { if (opts.onChange) opts.onChange(); };
@@ -562,7 +593,20 @@
       if (meta) stored.push({ name, ...meta });
     }
 
+    // put() with this tab's write counted as in flight until it answers:
+    // until then the MEMFS copy is newer than anything stored.
     async function put(path, expectedRev) {
+      const name = baseName(path);
+      inflight.set(name, (inflight.get(name) || 0) + 1);
+      try {
+        return await putNow(path, expectedRev);
+      } finally {
+        const n = inflight.get(name) - 1;
+        if (n) inflight.set(name, n); else inflight.delete(name);
+      }
+    }
+
+    async function putNow(path, expectedRev) {
       const name = baseName(path);
       mutated(name);
       let r;
@@ -680,33 +724,60 @@
         return put(`${dir}/${name}`, s ? s.rev || 0 : 0);
       },
 
-      // Before the game reads path: bring the stored copy into MEMFS if
-      // MEMFS lacks it or holds a different stored revision. A copy that
-      // is not in storage (a session-only, failed or conflicted save) is
-      // this tab's own latest save and is kept. So is any local write
-      // (save, import, Keep this one, delete) that happens while storage is
-      // being read: the stored result is then discarded. Resolves "copied",
-      // "same", "none", "local" (kept this tab's copy) or "error" (storage
-      // could not be read; MEMFS is unchanged). Never rejects.
+      // Before the game reads path (or asks whether it exists): bring the
+      // stored copy into MEMFS if MEMFS lacks it or holds a different
+      // stored revision. A copy that is not in storage (a session-only,
+      // failed or conflicted save, or a save still being written) is this
+      // tab's own latest save and is kept. So is any local write (save,
+      // import, Keep this one, delete) that happens while storage is being
+      // read: the stored result is then discarded.
+      //
+      // If storage has nothing under the name (another tab deleted it,
+      // leaving a tombstone, or the record is gone) and this tab's copy is
+      // clean, i.e. exactly a stored revision this tab read or wrote, the
+      // copy is removed from MEMFS too: the deletion holds in every tab,
+      // and the game sees the file as gone. This tab's baseline moves to
+      // the tombstone's rev (0 with no record), so a new save of the name
+      // is not a conflict with a deletion it has already seen.
+      //
+      // Resolves "copied", "same", "none", "deleted" (the clean copy was
+      // removed), "local" (kept this tab's copy) or "error" (storage could
+      // not be read; MEMFS is unchanged). Never rejects.
       async load(path) {
         const name = baseName(path);
         if (!store) return "none";
-        if (unpersisted.has(name) && exists(path)) return "local";
+        if ((unpersisted.has(name) || inflight.has(name)) && exists(path)) return "local";
         const before = mutations.get(name) || 0;
-        let rec;
+        let rec, meta;
         try {
-          rec = await store.get(name, "load");
+          ({ rec, meta } = await store.lookup(name, "load"));
         } catch (e) {
           log.warn(`could not read ${path} from IndexedDB`, e);
           return "error";
         }
         // No await from here on: nothing can change MEMFS in between.
-        if ((mutations.get(name) || 0) !== before || (unpersisted.has(name) && exists(path))) {
+        if ((mutations.get(name) || 0) !== before ||
+            ((unpersisted.has(name) || inflight.has(name)) && exists(path))) {
           log.warn(`${path} changed in this tab while browser storage was read; ` +
             "kept this tab's copy");
           return exists(path) ? "local" : "none";
         }
-        if (!rec) return "none";
+        if (!rec) {
+          if (!exists(path) || !base.has(name)) return "none";
+          // Clean: not unpersisted or in flight (checked above, again
+          // after the read), and equal to stored revision base.get(name).
+          try {
+            opts.fs().unlink(path);
+          } catch (e) {
+            log.warn(`could not remove ${name}, deleted in another tab, from memory`, e);
+            return "error";
+          }
+          base.delete(name);
+          store.adopt(name, meta ? meta.rev || 0 : 0);
+          noteStored(name, meta);
+          changed();
+          return "deleted";
+        }
         const rev = rec.rev || 0;
         if (exists(path) && base.get(name) === rev) return "same";
         try {

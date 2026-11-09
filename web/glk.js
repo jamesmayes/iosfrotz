@@ -224,6 +224,12 @@ let pending = null;         // { resolve, timer }
 let arrangePending = false;
 let ended = false;
 const typeAhead = []; // lines submitted while the game was busy
+// True from compositionstart to compositionend: the bar then holds an input
+// method's uncommitted (preedit) text, which no path may hand to the game.
+// Checking an event's isComposing is not enough, because a char request is
+// also read from the bar when a wait starts (after a timer or Arrange
+// event ended the previous one), with no event to ask.
+let composing = false;
 
 const cpLen = (t) => [...t].length;
 const cpSlice = (t, n) => [...t].slice(0, n).join("");
@@ -243,6 +249,12 @@ function inputReq(id, kind, initial, maxlen, terms) {
   r.maxlen = maxlen;
   r.terms = terms;
   r.seen = true;
+  // A limit can drop under a pending line (a grid narrowed by a resize):
+  // hold what is typed so far to it.
+  if (kind === 1) {
+    if (cpLen(r.partial) > maxlen) r.partial = cpSlice(r.partial, maxlen);
+    if (target === id && !composing && cpLen(input.value) > maxlen) input.value = cpSlice(input.value, maxlen);
+  }
 }
 
 // Put the target's own text in the bar: its line so far, or nothing.
@@ -310,6 +322,7 @@ function finishTarget(ev, keepBar) {
 // The first code point typed into the bar, for a char request (a soft
 // keyboard or an input method commits text rather than sending keys).
 function takeChar() {
+  if (composing) return null; // preedit text is not input yet
   const cps = [...input.value];
   if (!cps.length) return null;
   input.value = cps.slice(1).join("");
@@ -332,7 +345,7 @@ function wait(ms) {
     arrangePending = false;
     return Promise.resolve({ type: EV.Arrange });
   }
-  if (targetReq(1) && typeAhead.length) {
+  if (targetReq(1) && typeAhead.length && !composing) {
     const win = target;
     return Promise.resolve(finishTarget({ type: EV.LineInput, win, text: typeAhead.shift() }, true));
   }
@@ -375,7 +388,7 @@ function cancelChar(id) {
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  if (ended) return;
+  if (ended || composing) return; // Return during a composition commits it
   if (pending && targetReq(1)) {
     const win = target;
     const t = input.value;
@@ -390,7 +403,7 @@ form.addEventListener("submit", (e) => {
 });
 
 input.addEventListener("keydown", (e) => {
-  if (!pending || e.isComposing) return;
+  if (!pending || e.isComposing || composing) return;
   const k = keyCode(e);
   if (k === null) return;
   const line = targetReq(1);
@@ -417,7 +430,7 @@ input.addEventListener("keydown", (e) => {
 // (the HTML maxlength attribute counts UTF-16 units, so a supplementary
 // character would not fit in a maxlen of one).
 function onText(e) {
-  if (e.isComposing) return;
+  if (e.isComposing || composing) return;
   const line = targetReq(1);
   if (line) {
     if (cpLen(input.value) > line.maxlen) input.value = cpSlice(input.value, line.maxlen);
@@ -432,7 +445,14 @@ function onText(e) {
   }
 }
 input.addEventListener("input", onText);
-input.addEventListener("compositionend", onText);
+input.addEventListener("compositionstart", () => { composing = true; });
+input.addEventListener("compositionend", (e) => {
+  composing = false;
+  onText(e);
+});
+// Losing focus ends a composition; if a browser leaves out compositionend,
+// do not keep refusing input for good.
+input.addEventListener("blur", () => { composing = false; });
 
 // A tap on a window with a pending request makes the command bar serve it.
 glkRoot.addEventListener("click", (e) => {
@@ -530,6 +550,7 @@ async function loadFile(path) {
   const r = await saves.load(path);
   if (r === "error") notice("Could not read browser storage; using this session's copy only.");
   else if (r === "local") notice(`Using this tab's own ${baseName(path)}, which is not in browser storage.`);
+  else if (r === "deleted") notice(`${baseName(path)} was deleted in another tab.`);
 }
 
 // The tombstone in browser storage keeps the file deleted after a reload

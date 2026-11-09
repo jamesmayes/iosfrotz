@@ -381,6 +381,27 @@ static glui32 utf8_decode(const unsigned char **s)
 
 /* ---- Layout ---- */
 
+/* What is left of a grid's current row from the cursor: 0 if the cursor is
+   outside the grid. */
+static glui32 grid_row_left(const window_t *w)
+{
+    return (w->curx >= 0 && w->curx < w->cols && w->cury >= 0 && w->cury < w->rows)
+           ? (glui32) (w->cols - w->curx) : 0;
+}
+
+/* The code points a line request on w accepts: the game's maxlen, and in a
+   grid no more than the rest of the cursor's row, so the echo cannot wrap.
+   Recomputed when a grid is resized under a pending request. */
+static glui32 line_limit_for(const window_t *w, glui32 maxlen)
+{
+    if (w->type == wintype_TextGrid) {
+        glui32 left = grid_row_left(w);
+        if (maxlen > left)
+            return left;
+    }
+    return maxlen;
+}
+
 static void grid_resize(window_t *w, int cols, int rows)
 {
     glui32 *ch;
@@ -405,6 +426,11 @@ static void grid_resize(window_t *w, int cols, int rows)
     w->cols = cols;
     w->rows = rows;
     w->gdirty = 1;
+    /* A pending line now fits the new width: shrinking the grid must not
+       let it run into the next row, and growing it may give room back. The
+       page gets the new limit with the requests before the next wait. */
+    if (w->line_req)
+        w->line_limit = line_limit_for(w, w->line_maxlen);
 }
 
 /* The size a fixed split of `size` units takes for key window `key`. */
@@ -635,6 +661,13 @@ static void flush_all(void);
    game's own text, such as the echo of SAVE. */
 static void load_file(const char *path)
 {
+    stream_t *s;
+    /* While the game has the file open for writing, MEMFS holds its newest
+       bytes, which are stored when the stream closes: storage must neither
+       replace nor remove that copy. */
+    for (s = strlist; s; s = s->next)
+        if (s->type == STR_FILE && s->writable && s->path && strcmp(s->path, path) == 0)
+            return;
     flush_all();
     js_load_file(path);
 }
@@ -1512,6 +1545,10 @@ static void echo_text(window_t *w, const glui32 *text, glui32 n)
     glui32 old = w->style, i;
     if (!w->line_echo || !w->str)
         return;
+    /* In a grid the echo stays on the cursor's row, whatever happened to
+       the grid or the cursor since the request was made. */
+    if (w->type == wintype_TextGrid && n > grid_row_left(w))
+        n = grid_row_left(w);
     w->style = style_Input;
     for (i = 0; i < n; i++)
         window_put(w, text[i]);
@@ -1547,19 +1584,14 @@ static void finish_line(window_t *w, const char *utf8, glui32 term, event_t *ev)
 
 static void request_line(window_t *w, void *buf, glui32 maxlen, glui32 initlen, int uni)
 {
-    glui32 i, limit = maxlen;
+    glui32 i, limit;
     char *init;
     size_t k = 0;
     if (!w || w->line_req || w->char_req)
         return;
     /* In a grid the line is typed at the cursor and cannot run past the
        end of the row. */
-    if (w->type == wintype_TextGrid) {
-        glui32 left = (w->curx < w->cols && w->cury >= 0 && w->cury < w->rows)
-                      ? (glui32) (w->cols - w->curx) : 0;
-        if (limit > left)
-            limit = left;
-    }
+    limit = line_limit_for(w, maxlen);
     if (initlen > limit)
         initlen = limit;
     w->line_req = 1;

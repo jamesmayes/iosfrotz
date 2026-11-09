@@ -7,7 +7,8 @@
  *
  * Covered: set_arrangement (direction change keeps the children in place,
  * axis change and a fixed blank key are refused, a nested key, closing the
- * key collapses cleanly); grid line input limited to the rest of the row;
+ * key collapses cleanly); grid line input limited to the rest of the row,
+ * and the limit and echo following a resize under a pending request;
  * cancelling a line before it was shown returns its initial text; the echo
  * setting is fixed per request; overdue timers wait on the page between
  * consecutive timer events; deleting a /saves file reaches the page and the
@@ -158,6 +159,46 @@ static void grid_input(void)
     glk_window_close(glk_window_get_root(), NULL);
 }
 
+/* A grid resized under a pending line request: the limit follows the new
+   width (both ways) and the echo stays on the row. */
+static void grid_resize_input(void)
+{
+    winid_t a, g;
+    char buf[256];
+    event_t ev;
+    glui32 cols, cols2, rows;
+    a = glk_window_open(NULL, 0, 0, wintype_TextBuffer, 1);
+    next_id++;
+    g = glk_window_open(a, winmethod_Above | winmethod_Fixed, 3, wintype_TextGrid, 2);
+    next_id += 2;
+    glk_window_get_size(g, &cols, &rows);
+    glk_window_move_cursor(g, cols - 5, 0);
+    glk_request_line_event(g, buf, sizeof buf, 0);
+    driver_mark("shrink");
+    glk_select(&ev); /* the driver narrows the page by 3 columns */
+    glk_window_get_size(g, &cols2, &rows);
+    check(ev.type == evtype_Arrange && cols2 == cols - 3, "the grid shrinks by 3 columns");
+    driver_mark("grid-shrunk");
+    glk_select(&ev); /* 20 characters */
+    check(ev.type == evtype_LineInput && ev.win == g && ev.val1 == 2,
+          "after a shrink the pending line takes only what is left of the row");
+    check(driver_count("grid-maxlen") == 2, "the page is told the new limit");
+    flush();
+    check(driver_count("grid-echo-ab") == 1, "the echo stays on the shrunk row");
+
+    /* Grow: a request made at 5 from the end gets the 3 columns back. */
+    glk_window_move_cursor(g, cols2 - 5, 0);
+    glk_request_line_event(g, buf, sizeof buf, 0);
+    driver_mark("grow");
+    glk_select(&ev);
+    check(ev.type == evtype_Arrange, "the grid grows back");
+    driver_mark("grid-grown");
+    glk_select(&ev);
+    check(ev.type == evtype_LineInput && ev.val1 == 8,
+          "after a grow the pending line takes the wider row");
+    glk_window_close(glk_window_get_root(), NULL);
+}
+
 static void cancel_and_echo(void)
 {
     winid_t a;
@@ -266,6 +307,7 @@ void glk_main(void)
 {
     arrangement();
     grid_input();
+    grid_resize_input();
     cancel_and_echo();
     timers();
     deletion();

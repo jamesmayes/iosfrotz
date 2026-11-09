@@ -353,6 +353,7 @@ async function loadSave(path) {
   const name = path.slice(path.lastIndexOf("/") + 1);
   if (r === "error") transcriptNotice("Could not read browser storage; restoring from this session only.");
   else if (r === "local") transcriptNotice(`Restoring this tab's own ${name}, which is not in browser storage.`);
+  else if (r === "deleted") transcriptNotice(`${name} was deleted in another tab.`);
 }
 
 let importMessage = "";

@@ -59,11 +59,18 @@ static const char *validate_glulx(const git_uint8 *g, uint64_t len)
     return NULL;
 }
 
+static int cmp_key(const void *a, const void *b)
+{
+    uint64_t x = *(const uint64_t *) a, y = *(const uint64_t *) b;
+    return x < y ? -1 : x > y;
+}
+
 /* A Blorb (IFF FORM of type IFRS) of len bytes, len >= 12. Checks, before
    gi_blorb.c sees it: the FORM fits the file; every chunk header and
    payload fits the FORM; the resource index has its count and as many
-   12-byte entries as it claims, each at the start of a real chunk; and the
-   executable (Exec 0) is a GLUL chunk holding a sound Glulx image. */
+   12-byte entries as it claims, each at the start of a real chunk, with no
+   (usage, number) key twice; and the executable (Exec 0) is a GLUL chunk
+   holding a sound Glulx image. */
 static const char *validate_blorb(const git_uint8 *b, uint64_t len)
 {
     static const char *damaged = "This Blorb file is damaged: a part of it "
@@ -83,7 +90,9 @@ static const char *validate_blorb(const git_uint8 *b, uint64_t len)
         if (pos + 8 > end)
             return damaged;
         size = be32(b + pos + 4);
-        if (pos + 8 + size > end)
+        /* The payload and, if its size is odd, the pad byte after it must
+           both fit (gi_blorb.c also refuses a pad byte past the end). */
+        if (pos + 8 + size + (size & 1) > end)
             return damaged;
         if (be32(b + pos) == ID('R', 'I', 'd', 'x')) {
             if (have_ridx)
@@ -103,22 +112,60 @@ static const char *validate_blorb(const git_uint8 *b, uint64_t len)
     if (count * 12 > ridxlen - 4)
         return damaged;
 
-    for (i = 0; i < count; i++) {
-        const git_uint8 *e = b + ridx + 4 + i * 12;
-        uint64_t start = be32(e + 8);
-        int found = 0;
-        /* The entry must name the start of a chunk walked above. */
-        for (j = 12; j < end; ) {
-            uint64_t size = be32(b + j + 4);
-            if (j == start) { found = 1; break; }
-            j += 8 + size + (size & 1);
+    if (count == 0)
+        return "This Blorb file does not contain a Glulx game.";
+
+    /* Every entry must name the start of a top-level chunk, and no two
+       entries may share a (usage, number) key. gi_blorb.c sorts the index
+       with a quicksort that never terminates on equal keys, and its binary
+       search could pick a different duplicate than the one checked here. */
+    {
+        uint64_t nchunks = 0, *starts, *keys;
+        for (pos = 12; pos < end; nchunks++) {
+            uint64_t size = be32(b + pos + 4);
+            pos += 8 + size + (size & 1);
         }
-        if (!found)
-            return "This Blorb file is damaged: its index points outside its chunks.";
-        if (be32(e) == ID('E', 'x', 'e', 'c') && be32(e + 4) == 0) {
-            have_exec = 1;
-            exec = start;
+        starts = malloc((size_t) (nchunks ? nchunks : 1) * sizeof *starts);
+        keys = malloc((size_t) count * sizeof *keys);
+        if (!starts || !keys)
+            fatalError("Not enough memory to check the story file.");
+        for (pos = 12, j = 0; pos < end; j++) {
+            uint64_t size = be32(b + pos + 4);
+            starts[j] = pos;
+            pos += 8 + size + (size & 1);
         }
+
+        for (i = 0; i < count; i++) {
+            const git_uint8 *e = b + ridx + 4 + i * 12;
+            uint64_t start = be32(e + 8);
+            /* starts[] is ascending: the chunks were walked in order. */
+            uint64_t lo = 0, hi = nchunks;
+            while (lo < hi) {
+                uint64_t mid = lo + (hi - lo) / 2;
+                if (starts[mid] < start) lo = mid + 1; else hi = mid;
+            }
+            if (lo >= nchunks || starts[lo] != start) {
+                free(starts);
+                free(keys);
+                return "This Blorb file is damaged: its index points outside its chunks.";
+            }
+            keys[i] = ((uint64_t) be32(e) << 32) | be32(e + 4);
+            if (be32(e) == ID('E', 'x', 'e', 'c') && be32(e + 4) == 0) {
+                have_exec = 1;
+                exec = start;
+            }
+        }
+
+        qsort(keys, (size_t) count, sizeof *keys, cmp_key);
+        for (i = 1; i < count; i++) {
+            if (keys[i] == keys[i - 1]) {
+                free(starts);
+                free(keys);
+                return "This Blorb file is damaged: its index lists the same resource twice.";
+            }
+        }
+        free(starts);
+        free(keys);
     }
 
     if (!have_exec)

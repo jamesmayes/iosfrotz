@@ -81,6 +81,38 @@ add("short RIdx", blorb(image, Buffer.from([0, 1])), /claims more bytes/);
 add("RIdx count too large", blorb(image, Buffer.concat([u32(0x15555556), ascii("Exec"), u32(0), u32(36)])),
   /claims more bytes/);
 
+// 4. Duplicate resource keys: gi_blorb.c's quicksort never finishes on six
+//    equal keys, and with three its binary search picks the middle entry.
+//    With more entries the RIdx is longer, so the GLUL chunk moves.
+function dupBlorb(n) {
+  const ridxLen = 4 + 12 * n;
+  const at = 12 + 8 + ridxLen;
+  const entries = [];
+  for (let i = 0; i < n; i++) entries.push(ascii("Exec"), u32(0), u32(at));
+  return blorb(image, Buffer.concat([u32(n), ...entries]));
+}
+add("six identical Exec 0 entries", dupBlorb(6), /same resource twice/);
+add("three identical Exec 0 entries", dupBlorb(3), /same resource twice/);
+// Same key on different usages is fine: Exec 0 plus Pict 0 at the same chunk.
+{
+  const at = 12 + 8 + 4 + 24;
+  const ridx = Buffer.concat([u32(2), ascii("Exec"), u32(0), u32(at), ascii("Pict"), u32(0), u32(at)]);
+  add("Exec 0 and Pict 0 (control)", blorb(image, ridx), "input");
+}
+
+// 5. Odd final payload whose pad byte is outside the FORM: a 3-byte chunk at
+//    the end, with the FORM length covering the payload but not the pad.
+{
+  const tail = Buffer.concat([ascii("Odd "), u32(3), Buffer.from([1, 2, 3])]);
+  const b = Buffer.concat([good, tail]);
+  put32(b, 4, be32(b, 4) + tail.length);
+  add("odd trailing payload, pad byte missing", b, /claims more bytes/);
+  // ... and the same chunk with its pad byte inside the FORM (control).
+  const p = Buffer.concat([good, tail, Buffer.alloc(1)]);
+  put32(p, 4, be32(p, 4) + tail.length + 1);
+  add("odd trailing payload, padded (control)", p, "input");
+}
+
 // A Glulx header whose memory map is larger than the image.
 {
   const b = Buffer.from(image.subarray(0, 4096));

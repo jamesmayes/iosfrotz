@@ -11,7 +11,8 @@
 #                      Node builds of git for bench/run-bench.js
 #   make check      -> builds dist/bench/glk-check.{js,wasm} (bench/glk-check.c
 #                      on the browser Glk) and git-sync, then runs
-#                      bench/check-glk.js and bench/check-malformed.js
+#                      bench/check-glk.js, bench/check-malformed.js and
+#                      bench/check-page.js (glk.js and saves.js on fakes)
 #   make serve      -> python3 -m http.server on :8000 from web/
 #   make clean
 
@@ -111,18 +112,22 @@ bench: $(BENCH)/git-async.js $(BENCH)/git-async.wasm $(BENCH)/git-sync.js $(BENC
 check: $(BENCH)/glk-check.js $(BENCH)/glk-check.wasm $(BENCH)/git-sync.js $(BENCH)/git-sync.wasm
 	node bench/check-glk.js
 	node bench/check-malformed.js
+	node bench/check-page.js
 
 $(OBJDIR) $(OBJDIR)/git $(OBJDIR)/glk $(DIST) $(BENCH):
 	mkdir -p $@
 
 # Link flags per output. dist/obj/<name>.ldflags holds the flags the output
-# was last linked with. It is checked each time make reads this file; when
-# the flags differ it is rewritten and that output's .js and .wasm are
-# removed, so changing a flag (GIT_ASYNC_STACK=..., an edit here) relinks
-# just the outputs it affects. (Removing them, rather than relying on the
-# stamp's mtime, matters on GNU make 3.81, whose timestamps are whole
-# seconds: a stamp written in the same second as the last link would not
-# count as newer.)
+# was last linked with; the link recipe writes it after a successful link.
+# When make reads this file it only compares the flags with the stamp (a
+# read-only cmp): if they differ, or there is no stamp, that output's .js
+# and .wasm get the phony prerequisite FORCE and are relinked. So changing
+# a flag (GIT_ASYNC_STACK=..., an edit here) relinks just the outputs it
+# affects, and nothing is written or removed while the Makefile is parsed,
+# so `make -n` never touches dist/. The decision does not depend on the
+# stamp's mtime, which matters on GNU make 3.81: its timestamps are whole
+# seconds, so a stamp written in the same second as the last link would not
+# count as newer.
 LINK_frotz     := $(LDFLAGS)
 LINK_git       := $(GIT_LDFLAGS)
 LINK_git-async := $(BENCH_LDFLAGS) -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK)
@@ -135,12 +140,11 @@ OUT_git-async  := $(BENCH)/git-async
 OUT_git-sync   := $(BENCH)/git-sync
 OUT_glk-check  := $(BENCH)/glk-check
 
-ifneq ($(MAKECMDGOALS),clean)
-_ldflags := $(shell mkdir -p $(OBJDIR))$(foreach n,$(LINK_OUTPUTS),$(shell \
-    printf '%s\n' '$(LINK_$(n))' | cmp -s - $(OBJDIR)/$(n).ldflags || { \
-    printf '%s\n' '$(LINK_$(n))' > $(OBJDIR)/$(n).ldflags; \
-    rm -f $(OUT_$(n)).js $(OUT_$(n)).wasm; }))
-endif
+stale_link = $(shell printf '%s\n' '$(LINK_$(1))' | cmp -s - $(OBJDIR)/$(1).ldflags 2>/dev/null || echo stale)
+$(foreach n,$(LINK_OUTPUTS),$(if $(call stale_link,$(n)),$(eval $(OUT_$(n)).js $(OUT_$(n)).wasm: FORCE)))
+# Recipe line: record the flags an output was just linked with.
+stamp_link = printf '%s\n' '$(LINK_$(1))' > $(OBJDIR)/$(1).ldflags
+FORCE:
 
 $(OBJDIR)/%.o: $(CORE)/%.c $(HEADERS) | $(OBJDIR)
 	$(EMCC) $(CFLAGS) $(CORE_CFLAGS) -c $< -o $@
@@ -178,20 +182,25 @@ $(OBJDIR)/glk/glk-check.o: bench/glk-check.c $(GIT_HEADERS) | $(OBJDIR)/glk
 # too. Each rule's pattern only matches its own pair ("frotz%js" matches
 # dist/frotz.js with the stem "."), so the two interpreters cannot pick up
 # each other's link rule.
-$(DIST)/frotz%js $(DIST)/frotz%wasm: $(CORE_OBJ) $(WEB_OBJ) $(OBJDIR)/frotz.ldflags | $(DIST)
+$(DIST)/frotz%js $(DIST)/frotz%wasm: $(CORE_OBJ) $(WEB_OBJ) | $(DIST)
 	$(EMCC) $(LINK_frotz) $(CORE_OBJ) $(WEB_OBJ) -o $(DIST)/frotz.js
+	$(call stamp_link,frotz)
 
-$(DIST)/git%js $(DIST)/git%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) $(OBJDIR)/git.ldflags | $(DIST)
+$(DIST)/git%js $(DIST)/git%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) | $(DIST)
 	$(EMCC) $(LINK_git) $(GIT_OBJ) $(GLK_ASYNC_OBJ) -o $(DIST)/git.js
+	$(call stamp_link,git)
 
-$(BENCH)/git-async%js $(BENCH)/git-async%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) $(OBJDIR)/git-async.ldflags | $(BENCH)
+$(BENCH)/git-async%js $(BENCH)/git-async%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) | $(BENCH)
 	$(EMCC) $(LINK_git-async) $(GIT_OBJ) $(GLK_ASYNC_OBJ) -o $(BENCH)/git-async.js
+	$(call stamp_link,git-async)
 
-$(BENCH)/git-sync%js $(BENCH)/git-sync%wasm: $(GIT_OBJ) $(GLK_SYNC_OBJ) $(OBJDIR)/git-sync.ldflags | $(BENCH)
+$(BENCH)/git-sync%js $(BENCH)/git-sync%wasm: $(GIT_OBJ) $(GLK_SYNC_OBJ) | $(BENCH)
 	$(EMCC) $(LINK_git-sync) $(GIT_OBJ) $(GLK_SYNC_OBJ) -o $(BENCH)/git-sync.js
+	$(call stamp_link,git-sync)
 
-$(BENCH)/glk-check%js $(BENCH)/glk-check%wasm: $(CHECK_OBJ) $(OBJDIR)/glk-check.ldflags | $(BENCH)
+$(BENCH)/glk-check%js $(BENCH)/glk-check%wasm: $(CHECK_OBJ) | $(BENCH)
 	$(EMCC) $(LINK_glk-check) $(CHECK_OBJ) -o $(BENCH)/glk-check.js
+	$(call stamp_link,glk-check)
 
 # Objects reached only through a pattern rule would count as intermediate
 # and be deleted after the link; keep them so rebuilds are incremental.
@@ -203,4 +212,4 @@ serve: all
 clean:
 	rm -rf $(DIST)
 
-.PHONY: all frotz git bench check serve clean
+.PHONY: all frotz git bench check serve clean FORCE

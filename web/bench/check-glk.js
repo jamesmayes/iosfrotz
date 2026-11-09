@@ -20,6 +20,7 @@ const bump = (k, n = 1) => counts.set(k, (counts.get(k) || 0) + n);
 let mark = "";
 let inputs = [];
 let lines = [];
+let rootWidth = 800; // narrowed and widened by the "shrink"/"grow" marks
 
 const glkCheck = {
   rect: (id) => rects.get(id) || null,
@@ -28,7 +29,7 @@ const glkCheck = {
 };
 
 const glkWeb = {
-  metrics: () => [800, 600, 9, 18, 9, 24, 6, 2, 16, 8],
+  metrics: () => [rootWidth, 600, 9, 18, 9, 24, 6, 2, 16, 8],
   layout(recs, n) {
     rects.clear();
     for (let i = 0; i < n; i++) {
@@ -49,11 +50,13 @@ const glkWeb = {
     }
     if (lines.length > 1 && lines[0].endsWith("abcde") && lines[1].trim() === "")
       bump("grid-row1-blank");
+    if (lines.length > 1 && lines[0].endsWith(" ab") && lines[1].trim() === "")
+      bump("grid-echo-ab");
   },
   inputsBegin() { inputs = []; },
   input(id, kind, initial, maxlen) {
     inputs.push({ id, kind, initial, maxlen });
-    if (mark === "grid" && kind === 1) counts.set("grid-maxlen", maxlen);
+    if (mark.startsWith("grid") && kind === 1) counts.set("grid-maxlen", maxlen);
   },
   wait(ms) {
     bump("wait");
@@ -61,9 +64,14 @@ const glkWeb = {
     const line = inputs.find((i) => i.kind === 1);
     const ch = inputs.find((i) => i.kind === 2);
     const m = mark;
+    if (m === "shrink" || m === "grow") {
+      mark = "";
+      rootWidth += m === "shrink" ? -27 : 27; // 3 grid columns of 9 px
+      return { type: 5 }; // Arrange
+    }
     if (line && m) {
       mark = "";
-      const text = m === "grid" ? "abcdefghijklmnopqrst" : m === "echo" ? "xyzzy" : "plugh";
+      const text = m.startsWith("grid") ? "abcdefghijklmnopqrst" : m === "echo" ? "xyzzy" : "plugh";
       return { type: 3, win: line.id, text };
     }
     if (ch && m === "timers") {
