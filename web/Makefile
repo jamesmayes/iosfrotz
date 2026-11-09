@@ -24,8 +24,9 @@
 #   make bench      -> dist/bench/git-async.{js,wasm} and git-sync.{js,wasm},
 #                      Node builds of git for bench/run-bench.js
 #   make check      -> builds dist/bench/glk-check.{js,wasm} (bench/glk-check.c
-#                      on the browser Glk), git-sync, tads2-sync and
-#                      tads3-sync, then runs bench/check-glk.js,
+#                      on the browser Glk), git-sync, tads2-sync,
+#                      tads3-sync and tads3-async (for check-page.js's QUIT
+#                      through the page), then runs bench/check-glk.js,
 #                      bench/check-malformed.js, bench/check-page.js (glk.js
 #                      and saves.js on fakes) and bench/check-tads.js
 #   make dist       -> dist-site/: the static site to deploy (deploy/build-site.js;
@@ -283,7 +284,8 @@ bench-tads: $(BENCH)/tads2-async.js $(BENCH)/tads2-async.wasm \
             $(BENCH)/tads3-sync.js $(BENCH)/tads3-sync.wasm
 
 check: $(BENCH)/glk-check.js $(BENCH)/glk-check.wasm $(BENCH)/git-sync.js $(BENCH)/git-sync.wasm \
-       $(BENCH)/tads2-sync.js $(BENCH)/tads2-sync.wasm $(BENCH)/tads3-sync.js $(BENCH)/tads3-sync.wasm
+       $(BENCH)/tads2-sync.js $(BENCH)/tads2-sync.wasm $(BENCH)/tads3-sync.js $(BENCH)/tads3-sync.wasm \
+       $(BENCH)/tads3-async.js $(BENCH)/tads3-async.wasm
 	node bench/check-glk.js
 	node bench/check-malformed.js
 	node bench/check-page.js

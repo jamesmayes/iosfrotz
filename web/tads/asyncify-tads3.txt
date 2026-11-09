@@ -564,7 +564,6 @@ main
 match_tzofs(date_parse_result*, char const*&, unsigned long&)
 non-virtual thunk to CTPNInlineObjectBase::parse_nested_obj_prop(CTPNObjProp*&, int*, tcprs_term_info*, CTcToken const*, int)
 os_banner_delete
-os_banner_delete_all
 os_banners_close
 os_banners_redraw
 os_get_event

@@ -41,7 +41,6 @@ os_banner_delete_all
 os_banners_close
 os_banners_redraw
 os_getc
-os_term
 osfoprb
 osfoprt
 osfopwb

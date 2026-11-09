@@ -37,7 +37,12 @@ int main(int argc, char **argv)
     os_init(&targc, args, 0, 0, 0);
     stat = trdmain(targc, args, NULL, NULL);
     os_uninit();
-    os_term(stat);
+    /* Not os_term (tads/osglk.c): it closes the root window, which drops
+       the text not yet handed to the page, and the browser Glk then takes
+       every window off the page, the game's last words with them, and the
+       page's end notice has nowhere to go. One game per instance, so there
+       is nothing to tear down: hand over what is pending and stop, with the
+       windows as the game left them. */
     glkweb_finish();
     return stat;
 }

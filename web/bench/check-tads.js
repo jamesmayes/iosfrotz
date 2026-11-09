@@ -13,6 +13,9 @@
 //     the write-mode close, by its /saves path (<story>.glksave, from the
 //     Glk file prompt); the file is the interpreter's own save format;
 //   - RESTORE asks the page to load the file before it is read, and works;
+//   - QUIT leaves the game's windows on the page, with its last words in
+//     them, when the game ends (no os_term, web/tads/tads2_web.c), and a
+//     transcript (setLogFile) still open then is stored, ending included;
 //   - a file without the interpreter's signature is refused with a message
 //     in the story window;
 //   - text crosses the port in the game's character set (web/tads/
@@ -51,10 +54,16 @@ async function play(engine, story, commands) {
   let partial = null;
   let exited = false;
   let Module = null;
+  // The windows of the last layout, and of the last layout before exit().
+  let windows = [];
+  let atExit = null;
+  // Each text() and the windows of the layout it arrived in.
+  const log = [];
   const glkWeb = {
     metrics: () => [800, 600, 9, 18, 9, 24, 4, 2, 16, 8],
-    layout() {},
+    layout(rec, n) { windows = [...rec].filter((_, i) => i % 6 === 0).slice(0, n); },
     text(id, s, clear) {
+      log.push([id, s]);
       texts.set(id, (texts.get(id) || "") + (clear ? "\n" : "") + s.replace(/\x01./g, ""));
     },
     grid(id, cols, rows, ch) {
@@ -107,12 +116,17 @@ async function play(engine, story, commands) {
     },
     persistFile(p) {
       let head = "";
-      try { head = Buffer.from(Module.FS.readFile(p).slice(0, 16)).toString("latin1"); } catch (e) { /* absent */ }
-      calls.push(["persist", p, head]);
+      let all = "";
+      try {
+        const b = Buffer.from(Module.FS.readFile(p));
+        head = b.slice(0, 16).toString("latin1");
+        all = b.toString("utf8");
+      } catch (e) { /* absent */ }
+      calls.push(["persist", p, head, all, exited]);
     },
     deleteFile(p) { calls.push(["delete", p]); },
     setStory() {},
-    exit() { exited = true; },
+    exit() { exited = true; atExit = windows.slice(); },
   };
   Module = await create({ glkWeb, print() {}, printErr() {} });
   Module.FS.mkdir("/games");
@@ -125,7 +139,7 @@ async function play(engine, story, commands) {
   }
   let saves = [];
   try { saves = Module.FS.readdir("/saves").filter((f) => f !== "." && f !== ".."); } catch (e) { /* none */ }
-  return { text: [...texts.values()].join("\n"), grid, calls, saves, exited };
+  return { text: [...texts.values()].join("\n"), grid, calls, saves, exited, atExit, log };
 }
 
 // The storage calls for one path between two commands.
@@ -157,6 +171,18 @@ async function checkGame(engine, file, sig, setup, label) {
   ok(r.saves.includes(`${stem}.glksave`), `${label}: the save is in MEMFS /saves`);
 }
 
+// After QUIT: the game ended (exit()), its last words reached a window
+// that was still laid out when it did, and that window had the story text.
+function checkQuit(r, last, label) {
+  const at = r.log.findIndex(([, s]) => s.includes(last));
+  const win = at >= 0 ? r.log[at][0] : null;
+  ok(r.exited && at >= 0, `${label}: QUIT ends the game after its closing text`);
+  ok(r.atExit && r.atExit.includes(win),
+    `${label}: the story window is still laid out when the game ends (${r.atExit ? r.atExit.length : 0} windows)`);
+  ok(at >= 0 && r.log.slice(0, at).some(([id, s]) => id === win && s.includes(">")),
+    `${label}: the closing text is in the story window, after the turns`);
+}
+
 (async () => {
   await checkGame("tads2", "errand.gam", "TADS2 save", ["open drawer", "take key"], "TADS 2");
   await checkGame("tads3", "belfry.t3", "T3-state-v", ["e", "take lantern"], "TADS 3");
@@ -165,7 +191,8 @@ async function checkGame(engine, file, sig, setup, label) {
   {
     const long = "é".repeat(300);
     const r = await play("tads3", path.join(WEB, "bench", "tads", "utf8.t3"),
-      ["café ☕ 😀", "timed", { timer: "Grüße" }, "Grüße, Welt", long, "a😀".repeat(100), "quit"]);
+      ["café ☕ 😀", "timed", { timer: "Grüße" }, "Grüße, Welt", long, "a😀".repeat(100), "log",
+       "naïve", "quit"]);
     ok(r.text.includes("Grüße aus Zürich: café, naïve, Ελληνικά, 日本語, ☕."),
       "TADS 3: UTF-8 output is shown as its characters");
     ok(r.text.includes("Display charset utf-8."), "TADS 3: the game is told the display is UTF-8");
@@ -186,11 +213,17 @@ async function checkGame(engine, file, sig, setup, label) {
     ok(cut && cut[1].length === 127 && Number(cut[2]) === 127,
       `TADS 3: a line of 3-byte characters is cut at a whole character (${cut ? cut[2] : "none"} characters)`);
     ok(!/Ã|ߘ/.test(r.text), "TADS 3: nothing is mis-decoded");
+    checkQuit(r, "Auf Wiedersehen — the end.", "TADS 3");
+    const logs = r.calls.filter((c) => c[0] === "persist" && c[1] === "/saves/utf8.log");
+    ok(logs.length === 1 && !logs[0][4] && logs[0][3].includes("got [naïve] 5:") &&
+       logs[0][3].includes("Auf Wiedersehen — the end."),
+      "TADS 3: a transcript left open at QUIT is stored, closing text included, before the game ends");
   }
   {
     const r = await play("tads2", path.join(WEB, "bench", "tads", "cp1252.gam"), ["café “x”", "quit"]);
     ok(r.text.includes("Café naïve, € 5, “quoted”."), "TADS 2: Windows-1252 output is shown as its characters");
     ok(r.text.includes("got [café “x”] 8 bytes"), "TADS 2: a typed line reaches the game in Windows-1252");
+    checkQuit(r, "Fin — the end.", "TADS 2");
   }
 
   // The wrong file for each interpreter.

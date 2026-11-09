@@ -3,13 +3,20 @@
 // (glk.js on a small fake DOM) and of web/saves.js across tabs (two save
 // sessions on one small fake IndexedDB, each with its own fake MEMFS).
 //
-//   node bench/check-page.js   (part of `make check`; needs no build)
+//   node bench/check-page.js   (part of `make check`; needs
+//                              dist/bench/tads3-async.js, make bench-tads)
 //
 // The page is run as index.html runs it: saves.js, ui.js and main.js, which
 // fetches the catalogue, detects the story's format from its bytes and
 // loads glk.js (dist/git.js is the fake createGit below). Also covered:
 // WebFrotzUI.detectFormat on Z-code, Glulx, Blorb, TADS 2, TADS 3 and other
 // files, and which save files Import accepts for each format.
+//
+// A normal QUIT is played through the real page as well: a second page, on
+// its own fake DOM, opens bench/tads/utf8.t3 on dist/bench/tads3-async.js
+// (the ASYNCIFY TADS 3 build for Node, standing in for dist/tads3.js), and
+// the game's closing text and the page's end notice must stay in the story
+// window after the game ends (web/tads/tads3_web.cpp does not call os_term).
 //
 // Covered: while the interpreter's scripts are still loading the command
 // field is disabled and a submit is cancelled (no page reload); no path hands an input method's uncommitted (preedit) text to a
@@ -479,10 +486,101 @@ async function saveChecks() {
     "with no record at all the clean copy is removed");
 }
 
+// ---- a normal QUIT through the page, on the real TADS 3 build ----
+
+async function tadsQuitCheck() {
+  const create = require(path.join(WEB, "dist", "bench", "tads3-async.js"));
+  const story = fs.readFileSync(path.join(WEB, "bench", "tads", "utf8.t3"));
+  const ids = {};
+  for (const id of ["glk-root", "command-form", "command", "saves-button", "saves-dialog", "saves-list",
+    "import-save", "import-note", "picker", "story-list", "open-story", "stories-button", "story-title",
+    "picker-status"])
+    ids[id] = new El("div", id);
+  let tctx = null;
+  const loaded = [];
+  class TadsBody extends El {
+    appendChild(c) {
+      if (c.tag !== "script") return super.appendChild(c);
+      loaded.push(c.src);
+      setTimeout(() => {
+        if (!c.src.startsWith("dist/")) vm.runInContext(fs.readFileSync(path.join(WEB, c.src), "utf8"), tctx);
+        c.onload();
+      }, 0);
+      return c;
+    }
+  }
+  const doc = {
+    getElementById: (id) => ids[id],
+    createElement: (t) => new El(t),
+    createDocumentFragment: () => new El("#frag"),
+    documentElement: { style: { setProperty() {} } },
+    body: new TadsBody("body"),
+    title: "",
+  };
+  let ended = false;
+  const quiet = { log() {}, warn() {}, info() {}, error: (...a) => console.error(...a) };
+  tctx = {
+    document: doc, console: quiet, setTimeout, clearTimeout, Promise, Uint8Array, URL, Blob: class {},
+    navigator: {},
+    window: {
+      addEventListener() {},
+      getSelection: () => ({ toString: () => "" }),
+      indexedDB: null,
+      innerHeight: 600,
+    },
+    location: { hash: "#story=utf8", pathname: "/index.html", search: "", reload() {}, replace() {} },
+    history: { replaceState() {} },
+    fetch: async (u) => (u.endsWith(".json")
+      ? { ok: true, json: async () => [{ file: "utf8.t3", title: "U", author: "A", format: "tads3" }] }
+      : { ok: true, arrayBuffer: async () => story.buffer.slice(story.byteOffset, story.byteOffset + story.length) }),
+    WebFrotzSaves: Saves,
+    // The Node build finds its own .wasm; the page's locateFile is for dist/.
+    createTads3: (opts) => {
+      const glkWeb = opts.glkWeb;
+      const exit = glkWeb.exit;
+      glkWeb.exit = () => { exit(); ended = true; };
+      return create({ glkWeb, print() {}, printErr() {} });
+    },
+  };
+  vm.createContext(tctx);
+  for (const f of ["ui.js", "main.js"]) vm.runInContext(fs.readFileSync(path.join(WEB, f), "utf8"), tctx);
+
+  const root = ids["glk-root"];
+  const field = ids.command;
+  const buffer = () => root.children.find((c) => c.className.includes("glk-buffer"));
+  const until = async (cond, ms = 5000) => {
+    for (let t = 0; t < ms && !cond(); t += 5) await sleep(5);
+    return cond();
+  };
+  const type = async (line) => {
+    const before = buffer() ? buffer().textContent.length : 0;
+    field.value = line;
+    ids["command-form"].fire("submit");
+    await until(() => ended || (buffer() && buffer().textContent.length > before
+      && buffer().textContent.endsWith(">")));
+  };
+  ok(await until(() => buffer() && buffer().textContent.endsWith(">")) &&
+     loaded.join(" ") === "dist/tads3.js glk.js",
+    "TADS 3 page: utf8.t3 starts on the ASYNCIFY build through main.js and glk.js");
+  await type("naïve");
+  await type("quit");
+  ok(await until(() => ended), "TADS 3 page: QUIT ends the game");
+  const b = buffer();
+  const t = b ? b.textContent : "";
+  ok(!!b && root.children.includes(b), "TADS 3 page: the story window stays on the page after the game ends");
+  ok(t.includes("got [naïve] 5:") && t.includes("Auf Wiedersehen — the end."),
+    "TADS 3 page: it keeps the turns and the closing text");
+  ok(t.indexOf("Auf Wiedersehen — the end.") < t.indexOf("[The story has ended.]") &&
+     b.children.some((c) => c.className === "notice" && c.textContent.includes("[The story has ended.]")),
+    "TADS 3 page: the end notice follows the closing text in the story window");
+  ok(field.disabled === true, "TADS 3 page: the command field is disabled after the end");
+}
+
 (async () => {
   formatChecks();
   await pageChecks();
   await saveChecks();
+  await tadsQuitCheck();
   console.log(failed ? `${failed} of ${total} failed` : `all ${total} passed`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => {

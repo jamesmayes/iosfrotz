@@ -14,6 +14,8 @@
  *   check-tads.js can tell whether text crosses the Glk port intact:
  *     TIMED  reads a line with a 30 ms timeout, then (without printing,
  *            so the line is resumed) reads it again without one;
+ *     LOG    starts a transcript in /saves/utf8.log (setLogFile), left
+ *            open, so the game ends with it open;
  *     QUIT   ends the game with a closing message.
  *
  *   Build (the native compiler, scratch only; see the README):
@@ -110,6 +112,11 @@ _main(args)
             "timed <<a[1]>> then <<b[1]>>\n";
             describe('first', a[2]);
             describe('then', b[2]);
+        }
+        else if (line == 'log')
+        {
+            setLogFile('/saves/utf8.log');
+            "Logging.\n";
         }
         else
             describe('got', line);
