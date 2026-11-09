@@ -15,8 +15,9 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 // The window routes touches on the story view, status line and input line to their handleTouch:
-// first. A phase that returns NO is consumed: UIKit still delivers it, so the touch's lifecycle and
-// gesture recognizers stay whole, but those views ignore it, in their touch handlers and recognizers.
+// first. A phase that returns NO consumes the touch until it ends: UIKit still delivers it, so the
+// touch's lifecycle stays whole, but those views ignore it, in their touch handlers and recognizers,
+// and recognizers already tracking it on the routed view are reset.
 FOUNDATION_EXPORT BOOL FrotzTouchIsConsumed(UITouch *touch);
 FOUNDATION_EXPORT NSSet<UITouch *> *FrotzUnconsumedTouches(NSSet<UITouch *> *touches); // the set itself when none is consumed
 FOUNDATION_EXPORT BOOL FrotzViewHasConsumedTouch(UIView *view);  // a consumed touch routed to it or a subview

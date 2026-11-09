@@ -158,19 +158,25 @@
 }
 
 // Flow: a completion label that would sit on the fold band (the lower half is short) goes just above
-// it, or just below it when there is no room above, kept within the view either way.
--(CGFloat)completionLabelY:(CGFloat)y height:(CGFloat)height inView:(UIView *)view {
+// it, or just below it when there is no room above, kept within the view either way. When neither
+// side has room it is hidden rather than cover the band; its text still drives the completion.
+-(void)placeCompletionLabelAt:(CGPoint)origin inView:(UIView *)view {
+    CGFloat height = m_completionLabel.frame.size.height;
     StoryMainViewController *storyController = (StoryMainViewController*)[m_storyView delegate];
     CGRect band = [storyController foldExclusionInView: view];
-    if (CGRectIsNull(band) || y >= CGRectGetMaxY(band) || y + height <= CGRectGetMinY(band))
-        return y;
-    CGRect bounds = view.bounds;
-    CGFloat above = CGRectGetMinY(band) - height - 2, below = CGRectGetMaxY(band) + 2;
-    if (above >= CGRectGetMinY(bounds))
-        return above;
-    if (below + height <= CGRectGetMaxY(bounds))
-        return below;
-    return MAX(CGRectGetMinY(bounds), above);
+    BOOL fits = YES;
+    if (!CGRectIsNull(band) && origin.y < CGRectGetMaxY(band) && origin.y + height > CGRectGetMinY(band)) {
+        CGRect bounds = view.bounds;
+        CGFloat above = CGRectGetMinY(band) - height - 2, below = CGRectGetMaxY(band) + 2;
+        if (above >= CGRectGetMinY(bounds))
+            origin.y = above;
+        else if (below + height <= CGRectGetMaxY(bounds))
+            origin.y = below;
+        else
+            fits = NO;
+    }
+    [m_completionLabel setOrigin: origin];
+    m_completionLabel.hidden = !fits;
 }
 
 -(void)launchInputHelper:(id)unused {
@@ -411,10 +417,9 @@ BOOL cursorVisible = YES;
 
     [self setFrame: myFrame];
     if (m_completionLabel) {
-        CGRect labelFrame = [m_completionLabel frame];
-        labelFrame.origin.y = [self completionLabelY: myFrame.origin.y - myFrame.size.height-pad-4
-                                              height: labelFrame.size.height inView: [self superview]];
-        [m_completionLabel setOrigin: labelFrame.origin];
+        CGPoint labelOrigin = [m_completionLabel frame].origin;
+        labelOrigin.y = myFrame.origin.y - myFrame.size.height-pad-4;
+        [self placeCompletionLabelAt: labelOrigin inView: [self superview]];
     }
 
 
@@ -650,8 +655,7 @@ const int kCompletionViewTag = 21;
             frame.size = textSize;
             frame.origin.y = -frame.size.height-4;
             frame = [self convertRect:frame toView:parentView];
-            frame.origin.y = [self completionLabelY: frame.origin.y height: frame.size.height inView: parentView];
-            [m_completionLabel setOrigin: frame.origin];
+            [self placeCompletionLabelAt: frame.origin inView: parentView];
             [parentView addSubview: m_completionLabel];
         } else {
             [m_completionLabel removeFromSuperview];

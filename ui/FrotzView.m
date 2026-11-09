@@ -43,6 +43,8 @@
 }
 
 -(void)storyViewTwoFingerTap:(UITapGestureRecognizer *) recognizer {
+    if (FrotzViewHasConsumedTouch(self))
+        return; // a finger of it was consumed (a magnification drag); see FrotzWindow
     if ((ipzAllowInput & kIPZNoEcho))
         iosif_feed_input(@"\x1b"); // press ESC
 }
@@ -114,7 +116,7 @@
 }
 
 // A touch consumed after its Began was already received, as a magnification drag is: the recognizer
-// can't start from it.
+// can't start from it. (One already tracking it was reset by the window when it was consumed.)
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
     if (FrotzViewHasConsumedTouch(self))
         return NO;

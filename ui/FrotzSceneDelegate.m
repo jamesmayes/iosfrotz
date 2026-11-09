@@ -23,11 +23,12 @@
 - (void)sendEvent:(UIEvent *)event;                    // called by UIApplication to dispatch events to views inside the window
 @end
 
-// Touches whose current phase the story view, status line or input line consumed (handleTouch:
+// Touches a phase of which the story view, status line or input line consumed (handleTouch:
 // returned NO), mapped to the view they were routed to. The event itself still goes to UIKit, so
 // every touch keeps its whole lifecycle in UIKit and its gesture recognizers; the routed views
-// ignore a consumed phase instead (FrotzTouchIsConsumed). Other touches, such as the in-app
-// keyboard's, are never in it.
+// ignore a consumed touch instead (FrotzTouchIsConsumed). A touch stays consumed from that phase
+// until its Ended or Cancelled phase has been through UIKit, so nothing it did after it was
+// consumed can complete a gesture. Other touches, such as the in-app keyboard's, are never in it.
 static NSMapTable<UITouch *, UIView *> *ConsumedTouches(void) {
     static NSMapTable<UITouch *, UIView *> *consumed;
     if (!consumed)
@@ -54,6 +55,16 @@ BOOL FrotzViewHasConsumedTouch(UIView *view) {
     return NO;
 }
 
+// A touch consumed after its Began reached UIKit (a magnification drag) may already be held by
+// recognizers on the routed view: reset them, so a two-finger tap or a scroll it started can't fire.
+static void FrotzResetRecognizers(UITouch *touch, UIView *routedRoot) {
+    for (UIGestureRecognizer *recognizer in [touch.gestureRecognizers copy])
+        if (recognizer.enabled && [recognizer.view isDescendantOfView: routedRoot]) {
+            recognizer.enabled = NO; // cancels it if it began, fails it if it was still possible
+            recognizer.enabled = YES;
+        }
+}
+
 @implementation FrotzWindow
 - (void)sendEvent:(UIEvent *)event {
     // The view each touch's Began was routed to, for its later phases that arrive with no view.
@@ -71,27 +82,29 @@ BOOL FrotzViewHasConsumedTouch(UIView *view) {
 
         if (!view && phase != UITouchPhaseBegan)
             view = [routedTouches objectForKey: touch]; // for some reason sometimes view is nil and we lose the phase ended event!
-        BOOL routed = NO, keep = YES;
+        UIView *routedRoot = nil;
+        BOOL keep = YES;
         if ([touch tapCount]>=1 || phase == UITouchPhaseEnded) {
             if ([view isDescendantOfView: theInputLine]) {
-                routed = YES;
+                routedRoot = theInputLine;
                 keep = [theInputLine handleTouch: touch withEvent: event];
             } else if ([view isDescendantOfView: theStoryView]) {
-                routed = YES;
+                routedRoot = theStoryView;
                 keep = [theStoryView handleTouch: touch withEvent: event];
             } else if ([view isDescendantOfView: theStatusLine]) {
-                routed = YES;
+                routedRoot = theStatusLine;
                 keep = [theStatusLine handleTouch: touch withEvent: event];
             }
         }
-        if (routed && phase == UITouchPhaseBegan)
+        if (routedRoot && phase == UITouchPhaseBegan)
             [routedTouches setObject: view forKey: touch];
         else if (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled)
             [routedTouches removeObjectForKey: touch];
-        if (keep)
-            [consumed removeObjectForKey: touch];
-        else
-            [consumed setObject: view forKey: touch]; // only a routed touch, so view is set
+        if (!keep && ![consumed objectForKey: touch]) { // only a routed touch, so view is set
+            [consumed setObject: view forKey: touch];
+            if (phase != UITouchPhaseBegan)
+                FrotzResetRecognizers(touch, routedRoot);
+        }
     }
     if ([event isKindOfClass: [UIPressesEvent class]]) {
         StoryMainViewController *smvc = [theStoryBrowser storyMainViewController];
@@ -103,7 +116,7 @@ BOOL FrotzViewHasConsumedTouch(UIView *view) {
         }
     }
     [super sendEvent: event];
-    for (UITouch *touch in touches)
+    for (UITouch *touch in touches) // only now that UIKit has delivered the terminal phase
         if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled)
             [consumed removeObjectForKey: touch];
 }
