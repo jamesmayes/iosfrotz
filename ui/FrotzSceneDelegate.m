@@ -125,6 +125,20 @@
 
     for (UIOpenURLContext *context in connectionOptions.URLContexts)
         [self handleOpenURLContext: context];
+#if DEBUG
+    // FROTZ_SELFTEST_STORY=<story file> opens it as a file handed to Frotz would be, so the
+    // self-tests can reach the story screen on a fresh simulator that can't be tapped. A session
+    // waiting to be restored already gets there, and launching over it lands on the story list.
+    NSString *selfTestStory = [[NSProcessInfo processInfo] environment][@"FROTZ_SELFTEST_STORY"];
+    if (selfTestStory.length && ![[m_browser storyMainViewController] willAutoRestoreSession: YES]) {
+        [m_browser setLaunchPath: selfTestStory keepOriginal: YES];
+        NSString *launchPath = [m_browser launchPath];
+        if (launchPath) {
+            [m_browser setStoryDetails: [[StoryInfo alloc] initWithPath: launchPath browser: m_browser]];
+            [m_browser performSelector: @selector(launchStory:) withObject: launchPath afterDelay: 0.05];
+        }
+    }
+#endif
 
     [window makeKeyAndVisible];
 }

@@ -30,6 +30,7 @@
 #import "GlkView.h"
 
 #import "FileBrowser.h"
+#import "FrotzKeyboardStylePicker.h"
 
 #import "ui_setup.h"
 #import "ui_utils.h"
@@ -1768,6 +1769,41 @@ extern void gli_ios_set_focus(window_t *winNum);
         [self performSelector: @selector(runKeyboardSelfTest) withObject: nil afterDelay: 2.0];
 }
 
+// FROTZ_SETTINGS_SELFTEST=1 walks Settings > Keyboard Style, picks row FROTZ_SETTINGS_SELFTEST_ROW
+// (default 1, the first skin; 0 is the system keyboard) and backs out, since the lane can't tap.
+-(void)runSettingsSelfTestIfRequested {
+    static BOOL started;
+    NSDictionary *env = [[NSProcessInfo processInfo] environment];
+    if (started || ![env[@"FROTZ_SETTINGS_SELFTEST"] boolValue])
+        return;
+    started = YES;
+    NSInteger row = env[@"FROTZ_SETTINGS_SELFTEST_ROW"] ? [env[@"FROTZ_SETTINGS_SELFTEST_ROW"] integerValue] : 1;
+    [self settingsSelfTestStep: 0 row: row picker: nil];
+}
+
+-(void)settingsSelfTestStep:(NSUInteger)step row:(NSInteger)row picker:(FrotzKeyboardStylePicker *)picker {
+    FrotzSettingsController *settings = [m_storyBrowser settings];
+    NSString *name;
+    switch (step) {
+        case 0: name = @"start (keyboard up)"; [self activateKeyboard]; break;
+        case 1: name = @"settings"; [m_frotzInfoController frotzInfo]; break;
+        case 2: name = @"picker"; picker = [settings showKeyboardStylePicker]; break;
+        case 3: name = [NSString stringWithFormat: @"select row=%d", (int)row]; [picker selectRow: row]; break;
+        case 4: name = @"pop"; [settings.navigationController popViewControllerAnimated: YES]; break;
+        case 5: name = @"done-pressed"; [settings donePressed]; break;
+        default: name = @"done"; break;
+    }
+    NSLog(@"kbsettings step %d %@ keyboardStyle=%@ skinID=%@ duoLayoutMode=%@ inAppShowing=%d kbShown=%d lineFirstResponder=%d top=%@", (int)step, name,
+          m_keyboardStyle, m_keyboardController.skinID, m_duoLayoutMode, m_keyboardController.isShowing, m_kbShown,
+          [m_inputLine isFirstResponder], NSStringFromClass([settings.navigationController.topViewController class]));
+    if (step > 5)
+        return;
+    __weak StoryMainViewController *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf settingsSelfTestStep: step + 1 row: row picker: picker];
+    });
+}
+
 // Drives the keyboard's own key handling through the typing API, since the simulator can't be
 // tapped from a script. Each entry is "tap:<label>", "wait:<seconds>", "story:" (log the end of
 // the transcript), "select:last2", "type:<text>" (straight to typeText:, for what no Classic key types),
@@ -1874,6 +1910,7 @@ extern void gli_ios_set_focus(window_t *winNum);
         [self scheduleVerticalBarMeasurement]; // the keyboard's did-show handles the other case
 #if DEBUG
     [self showInAppKeyboardIfRequested];
+    [self runSettingsSelfTestIfRequested];
 #endif
 }
 
@@ -4199,6 +4236,10 @@ static UIColor *scanColor(NSString *colorStr) {
 
 -(void)setKeyboardStyle:(NSString *)skinID {
     m_keyboardStyle = skinID.length ? [skinID copy] : nil;
+    // Under the settings sheet the input line would raise the new keyboard over it; settings
+    // hands first responder back when it closes.
+    if (self.navigationController.presentedViewController)
+        [m_inputLine resignFirstResponder];
     m_keyboardController.skinID = m_keyboardStyle;
     [self savePrefs];
 }
