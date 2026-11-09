@@ -14,7 +14,10 @@
 //   grid(id, cols, rows, ch, st)
 //                        redraw a text grid window (code points, styles)
 //   inputsBegin(), input(id, kind, initial, maxlen, terms)
-//                        the windows waiting for input (kind 1 line, 2 char)
+//                        the windows waiting for input (kind 1 line, 2 char),
+//                        all of them before every wait. initial is non-null
+//                        only the first time a request is sent; maxlen is in
+//                        code points
 //   wait(ms)             Promise<{type, win, val1, val2, text}>: the next
 //                        event, or {type: 1} when ms (>= 0) runs out. Awaited
 //                        from EM_ASYNC_JS, so the interpreter's C stack is
@@ -24,7 +27,7 @@
 //   pollArrange()        true once after the page changed size
 //   loadFile(path)       Promise; bring one /saves file in from IndexedDB
 //   persistFile(path)    Promise; write one /saves file to IndexedDB
-//   deleteFile(path)     the game deleted a file
+//   deleteFile(path)     Promise; the game deleted a /saves file
 //   setStory(stem, saveName)
 //   exit()               the game ended
 //
@@ -106,6 +109,7 @@ function layout(recs, n) {
     if (!win) {
       const el = document.createElement("div");
       el.className = `glk-win glk-${WINTYPE[type] || "blank"}`;
+      el.dataset.win = String(id);
       if (type === 3) el.setAttribute("aria-live", "polite");
       glkRoot.appendChild(el);
       win = { el, type };
@@ -201,30 +205,115 @@ function notice(msg) {
 }
 
 // ---- Input ----
+//
+// One record per pending request, kept across waits: { kind (1 line, 2
+// char), maxlen (code points), terms, partial (a line's text while the
+// command bar serves another window), seen }. glk_web.c sends every pending
+// request before each wait, and the initial text only with the first. A
+// request that is not sent again has ended and is dropped.
+//
+// There is one command bar. It serves one request at a time, the target:
+// by default the first line request, else the first char request. Tapping
+// a window that has a request makes it the target, so char input on one
+// window is not blocked by a line request on another. Switching keeps the
+// line typed so far in its record.
 
-let lineReq = null;   // { id, maxlen, terms }
-let charReqs = [];    // window ids
-let pending = null;   // { resolve, timer }
+const requests = new Map(); // window id -> request record
+let target = null;          // window id the command bar serves, or null
+let pending = null;         // { resolve, timer }
 let arrangePending = false;
 let ended = false;
 const typeAhead = []; // lines submitted while the game was busy
 
+const cpLen = (t) => [...t].length;
+const cpSlice = (t, n) => [...t].slice(0, n).join("");
+
 function inputsBegin() {
-  lineReq = null;
-  charReqs = [];
+  for (const r of requests.values()) r.seen = false;
 }
 
 function inputReq(id, kind, initial, maxlen, terms) {
-  if (kind === 1) {
-    if (lineReq) return; // one line field: the first window asking gets it
-    lineReq = { id, maxlen, terms };
-    if (initial !== null) {
-      input.value = initial;
-      input.setSelectionRange(initial.length, initial.length);
-    }
-  } else {
-    charReqs.push(id);
+  let r = requests.get(id);
+  if (!r || r.kind !== kind || (kind === 1 && initial !== null)) {
+    // A new request: a line starts with its initial text.
+    r = { kind, partial: kind === 1 ? cpSlice(initial || "", maxlen) : "" };
+    requests.set(id, r);
+    if (target === id) loadTarget();
   }
+  r.maxlen = maxlen;
+  r.terms = terms;
+  r.seen = true;
+}
+
+// Put the target's own text in the bar: its line so far, or nothing.
+function loadTarget() {
+  const r = target !== null ? requests.get(target) : null;
+  input.value = r && r.kind === 1 ? r.partial : "";
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+
+// Show which kind of input the bar takes, and (with several requests)
+// which window it serves.
+function showTarget() {
+  const r = target !== null ? requests.get(target) : null;
+  form.dataset.waiting = r ? (r.kind === 1 ? "line" : "key") : "";
+  for (const win of windows.values()) {
+    if (win.el.dataset.win === String(target) && requests.size > 1) win.el.dataset.target = "";
+    else delete win.el.dataset.target;
+  }
+}
+
+// The player chose another window: keep the line typed so far.
+function setTarget(id) {
+  if (id === target) return;
+  const old = target !== null ? requests.get(target) : null;
+  if (old && old.kind === 1) old.partial = input.value;
+  target = id;
+  loadTarget();
+  showTarget();
+}
+
+// Drop requests that were not sent again, and pick a target if there is
+// none. What the player typed while the game was busy stays in the bar for
+// the new target, unless a line starts with initial text of its own.
+function settleRequests() {
+  for (const [id, r] of requests) if (!r.seen) requests.delete(id);
+  if (target !== null && !requests.has(target)) target = null;
+  if (target === null) {
+    for (const [id, r] of requests) {
+      if (r.kind === 1) { target = id; break; }
+      if (target === null) target = id;
+    }
+    const r = target !== null ? requests.get(target) : null;
+    if (r && r.kind === 1 && r.partial) loadTarget();
+  }
+  showTarget();
+}
+
+// The request the command bar serves, if it is of this kind.
+function targetReq(kind) {
+  const r = target !== null ? requests.get(target) : null;
+  return r && r.kind === kind ? r : null;
+}
+
+// End the target request with ev: the request is done, so its record goes.
+// The bar is emptied unless the event came from elsewhere (type-ahead), in
+// which case what is in the bar is the player's next input.
+function finishTarget(ev, keepBar) {
+  requests.delete(target);
+  target = null;
+  if (!keepBar) input.value = "";
+  form.dataset.waiting = "";
+  return ev;
+}
+
+// The first code point typed into the bar, for a char request (a soft
+// keyboard or an input method commits text rather than sending keys).
+function takeChar() {
+  const cps = [...input.value];
+  if (!cps.length) return null;
+  input.value = cps.slice(1).join("");
+  return cps[0].codePointAt(0);
 }
 
 function settle(ev) {
@@ -238,44 +327,63 @@ function settle(ev) {
 }
 
 function wait(ms) {
+  settleRequests();
   if (arrangePending) {
     arrangePending = false;
     return Promise.resolve({ type: EV.Arrange });
   }
-  if (lineReq && typeAhead.length)
-    return Promise.resolve({ type: EV.LineInput, win: lineReq.id, text: typeAhead.shift() });
+  if (targetReq(1) && typeAhead.length) {
+    const win = target;
+    return Promise.resolve(finishTarget({ type: EV.LineInput, win, text: typeAhead.shift() }, true));
+  }
+  if (targetReq(2)) {
+    const c = takeChar(); // typed while the game was busy
+    if (c !== null) {
+      const win = target;
+      return Promise.resolve(finishTarget({ type: EV.CharInput, win, val1: c | 0 }, true));
+    }
+  }
   return new Promise((resolve) => {
     pending = { resolve, timer: null };
-    form.dataset.waiting = lineReq ? "line" : charReqs.length ? "key" : "";
-    if (lineReq) input.maxLength = Math.max(1, lineReq.maxlen);
-    else input.removeAttribute("maxlength");
+    showTarget();
+    input.removeAttribute("maxlength"); // Glk counts code points; see "input"
+    // ms 0 (an overdue timer) still goes through setTimeout, a macrotask,
+    // so the page paints and takes input between timer events.
     if (ms >= 0) pending.timer = setTimeout(() => settle({ type: EV.Timer }), ms);
     if (!input.matches(":focus") && !savesDialog.open) input.focus({ preventScroll: true });
   });
 }
 
 function cancelLine(id) {
-  if (!lineReq || lineReq.id !== id) return "";
-  const t = input.value;
-  input.value = "";
-  lineReq = null;
+  const r = requests.get(id);
+  if (!r || r.kind !== 1) return "";
+  const t = target === id ? input.value : r.partial;
+  requests.delete(id);
+  if (target === id) {
+    target = null;
+    input.value = "";
+  }
   return t;
 }
 
 function cancelChar(id) {
-  charReqs = charReqs.filter((x) => x !== id);
+  const r = requests.get(id);
+  if (!r || r.kind !== 2) return;
+  requests.delete(id);
+  if (target === id) target = null;
 }
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
   if (ended) return;
-  if (pending && lineReq) {
+  if (pending && targetReq(1)) {
+    const win = target;
     const t = input.value;
-    input.value = "";
-    settle({ type: EV.LineInput, win: lineReq.id, text: t });
-  } else if (pending && charReqs.length) {
-    settle({ type: EV.CharInput, win: charReqs[0], val1: KEY.Return | 0 });
-  } else {
+    settle(finishTarget({ type: EV.LineInput, win, text: t }));
+  } else if (pending && targetReq(2)) {
+    const win = target;
+    settle(finishTarget({ type: EV.CharInput, win, val1: KEY.Return | 0 }));
+  } else if (!targetReq(2)) {
     typeAhead.push(input.value);
     input.value = "";
   }
@@ -285,20 +393,52 @@ input.addEventListener("keydown", (e) => {
   if (!pending || e.isComposing) return;
   const k = keyCode(e);
   if (k === null) return;
-  if (lineReq) {
-    if (lineReq.terms.includes(k)) {
+  const line = targetReq(1);
+  if (line) {
+    if (line.terms.includes(k)) {
       e.preventDefault();
+      const win = target;
       const t = input.value;
-      input.value = "";
-      settle({ type: EV.LineInput, win: lineReq.id, text: t, val2: k | 0 });
+      settle(finishTarget({ type: EV.LineInput, win, text: t, val2: k | 0 }));
     }
     return;
   }
-  if (charReqs.length && k !== KEY.Return) {
+  if (targetReq(2) && k !== KEY.Return) {
     // Return is left to the form's submit handler.
     e.preventDefault();
-    settle({ type: EV.CharInput, win: charReqs[0], val1: k | 0 });
+    const win = target;
+    settle(finishTarget({ type: EV.CharInput, win, val1: k | 0 }));
   }
+});
+
+// Text that arrives without a usable keydown: soft keyboards, dictation,
+// and input methods (the committed text of a composition). A char request
+// takes the first code point; a line is held to its maxlen in code points
+// (the HTML maxlength attribute counts UTF-16 units, so a supplementary
+// character would not fit in a maxlen of one).
+function onText(e) {
+  if (e.isComposing) return;
+  const line = targetReq(1);
+  if (line) {
+    if (cpLen(input.value) > line.maxlen) input.value = cpSlice(input.value, line.maxlen);
+    return;
+  }
+  if (pending && targetReq(2)) {
+    const c = takeChar();
+    if (c === null) return;
+    const win = target;
+    // The rest of the text stays in the bar for the next char request.
+    settle(finishTarget({ type: EV.CharInput, win, val1: c | 0 }, true));
+  }
+}
+input.addEventListener("input", onText);
+input.addEventListener("compositionend", onText);
+
+// A tap on a window with a pending request makes the command bar serve it.
+glkRoot.addEventListener("click", (e) => {
+  const el = e.target && e.target.closest ? e.target.closest(".glk-win") : null;
+  const id = el ? Number(el.dataset.win) : NaN;
+  if (requests.has(id)) setTarget(id);
 });
 
 // A tap anywhere on the story focuses the input (and shows the keyboard).
@@ -339,7 +479,7 @@ try {
 } catch (e) {
   console.warn("[glk] IndexedDB unavailable", e);
 }
-const deleted = new Set(); // files the game deleted this session
+const deleted = new Set(); // deleted by the game, but not in storage yet
 
 const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 
@@ -372,14 +512,21 @@ async function persistFile(path, report = notice) {
 }
 
 async function loadFile(path) {
-  if (deleted.has(baseName(path))) return;
+  if (deleted.has(baseName(path))) return; // its tombstone could not be written
   const r = await saves.load(path);
   if (r === "error") notice("Could not read browser storage; using this session's copy only.");
   else if (r === "local") notice(`Using this tab's own ${baseName(path)}, which is not in browser storage.`);
 }
 
-function deleteFile(path) {
-  deleted.add(baseName(path));
+// The tombstone in browser storage keeps the file deleted after a reload
+// (saves.js, remove). If it cannot be written, the file stays hidden from
+// the Saves dialog for this session, and the notice says it may come back.
+async function deleteFile(path) {
+  const name = baseName(path);
+  const r = await saves.remove(path);
+  if (r.outcome === "removed" || r.outcome === "none") deleted.delete(name);
+  else deleted.add(name);
+  if (r.message) notice(r.message);
 }
 
 let importMessage = "";

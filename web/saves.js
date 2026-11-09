@@ -15,6 +15,12 @@
 //   store "meta":  key = file name, value = { size, mtime, story, rev, sha256 }
 // put() writes both in the same transaction, so they always agree.
 //
+// Deletion (remove()) leaves a tombstone: the bytes record goes, and meta
+// keeps the name with { deleted: true } and the next rev. get() then finds
+// nothing, list() reports the tombstone (sessions leave it out of the
+// Saves dialog), and a stale tab that saves the old version afterwards gets
+// a conflict like any other, instead of bringing the file back unnoticed.
+//
 // Revisions, not timestamps, decide conflicts between tabs. Each file's
 // meta has `rev`, an integer that starts at 1 and goes up by one with every
 // write. A store remembers, per file, the rev it last saw: from list() the
@@ -256,6 +262,44 @@
         return seen.get(name) || 0;
       },
 
+      // remove(name, { story, expectedRev }) resolves
+      //   { outcome: "removed", rev, meta }   tombstone written
+      //   { outcome: "none" }                  nothing stored under name
+      //   { outcome: "conflict", theirs }      stored rev is not expectedRev
+      // and rejects like put(). One readwrite transaction: the bytes record
+      // is deleted and meta becomes a tombstone at rev + 1.
+      remove(name, opts) {
+        const o = opts || {};
+        return guarded(`put:${name}`, `Deleting ${name}`, async (ctx) => {
+          const db = await open(ctx);
+          return transact(ctx, db, [SAVES, META], "readwrite", (tx, set) => {
+            const meta = tx.objectStore(META);
+            const req = meta.get(name);
+            req.onsuccess = () => {
+              if (!ctx.live()) return;
+              const old = req.result || null;
+              if (!old || old.deleted) {
+                set({ outcome: "none" });
+                return;
+              }
+              const have = old.rev || 0;
+              const expected = o.expectedRev != null ? o.expectedRev : (seen.get(name) || 0);
+              if (have !== expected) {
+                set({ outcome: "conflict", theirs: old });
+                return;
+              }
+              const rev = have + 1;
+              const m = { size: 0, mtime: Date.now(), story: o.story || null, rev, sha256: null,
+                deleted: true };
+              tx.objectStore(SAVES).delete(name);
+              meta.put(m, name);
+              tx.addEventListener("complete", () => noteRev(name, rev));
+              set({ outcome: "removed", rev, meta: m });
+            };
+          });
+        });
+      },
+
       // put(name, bytes, { mtime, story, expectedRev }) resolves
       //   { outcome: "persisted", rev, meta }   written (or already equal)
       //   { outcome: "conflict", theirs }        stored rev is not expectedRev
@@ -384,6 +428,35 @@
       return { outcome: "conflict", message: conflictNotice(name) };
     }
 
+    // The game deleted path (already gone from MEMFS): delete it from
+    // storage too. Resolves { outcome, message? }: "removed", "none",
+    // "conflict" (another tab saved it since; the stored one is kept),
+    // "failed", "timeout" or "superseded". Never rejects.
+    async function remove(path) {
+      const name = baseName(path);
+      unpersisted.delete(name);
+      base.delete(name);
+      if (!store) { changed(); return { outcome: "none" }; }
+      let r;
+      try {
+        r = await store.remove(name, { story: opts.story() });
+      } catch (e) {
+        if (e instanceof Superseded) return { outcome: "superseded" };
+        const outcome = e instanceof StorageTimeout ? "timeout" : "failed";
+        log.warn(`could not delete ${path} from IndexedDB`, e);
+        changed();
+        return { outcome, message: `Could not delete ${name} from browser storage; ` +
+          "it may come back when the page is reloaded." };
+      }
+      if (r.outcome === "removed") noteStored(name, r.meta);
+      changed();
+      refresh();
+      if (r.outcome === "conflict")
+        return { outcome: "conflict", message: `Another tab saved ${name} more recently, ` +
+          "so the stored copy was not deleted." };
+      return { outcome: r.outcome };
+    }
+
     async function refresh() {
       if (!store) return;
       try {
@@ -401,6 +474,8 @@
       // "superseded" (a newer write of the same file took over). message
       // is the transcript notice, if any. Never rejects.
       persist: (path) => put(path),
+
+      remove,
 
       // Store this tab's copy of name over the stored version listed now
       // (the one the player saw in the dialog). Conflicts again if another
@@ -461,7 +536,7 @@
         const rows = [];
         const names = new Set();
         for (const s of stored) {
-          if (hidden(s.name)) continue;
+          if (s.deleted || hidden(s.name)) continue;
           names.add(s.name);
           rows.push({ name: s.name, where: "stored", mtime: s.mtime, size: s.size, rev: s.rev || 0 });
         }

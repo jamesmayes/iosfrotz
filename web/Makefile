@@ -9,6 +9,9 @@
 #   make git        -> dist/git.js + dist/git.wasm
 #   make bench      -> dist/bench/git-async.{js,wasm} and git-sync.{js,wasm},
 #                      Node builds of git for bench/run-bench.js
+#   make check      -> builds dist/bench/glk-check.{js,wasm} (bench/glk-check.c
+#                      on the browser Glk) and git-sync, then runs
+#                      bench/check-glk.js and bench/check-malformed.js
 #   make serve      -> python3 -m http.server on :8000 from web/
 #   make clean
 
@@ -58,6 +61,12 @@ GLK_COMMON := $(GIDISP_OBJ) $(OBJDIR)/glk/glk_unicode.o $(OBJDIR)/glk/glk_date.o
               $(OBJDIR)/glk/git_web.o
 GLK_ASYNC_OBJ := $(GLK_COMMON) $(OBJDIR)/glk/glk_web.o
 GLK_SYNC_OBJ  := $(GLK_COMMON) $(OBJDIR)/glk/glk_web_sync.o
+# The Glk checks: the library without git (bench/glk-check.c is the game).
+# Without git, nothing else pulls in the string helpers glk_web.c's EM_JS
+# bridge uses, so they are named here.
+CHECK_OBJ := $(GIDISP_OBJ) $(OBJDIR)/glk/glk_unicode.o $(OBJDIR)/glk/glk_date.o \
+             $(OBJDIR)/glk/glk_web_sync.o $(OBJDIR)/glk/glk-check.o
+CHECK_LIBS := '-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$$stringToUTF8,$$UTF8ToString'
 
 GIT_CFLAGS := -O2 -DUSE_INLINE -Iglk/shim -Iglk -I$(GLKIOS) -I$(GIT)
 GIT_HEADERS := $(wildcard $(GIT)/*.h) $(GIT)/labels.inc $(GLKIOS)/glk.h \
@@ -97,6 +106,10 @@ frotz: $(DIST)/frotz.js $(DIST)/frotz.wasm
 git: $(DIST)/git.js $(DIST)/git.wasm
 bench: $(BENCH)/git-async.js $(BENCH)/git-sync.js
 
+check: $(BENCH)/glk-check.js $(BENCH)/git-sync.js
+	node bench/check-glk.js
+	node bench/check-malformed.js
+
 $(OBJDIR) $(OBJDIR)/git $(OBJDIR)/glk $(DIST) $(BENCH):
 	mkdir -p $@
 
@@ -128,6 +141,9 @@ $(OBJDIR)/glk/glk_web_sync.o: glk/glk_web.c $(GIT_HEADERS) | $(OBJDIR)/glk
 $(OBJDIR)/glk/git_web.o: glk/git_web.c $(GIT_HEADERS) | $(OBJDIR)/glk
 	$(EMCC) $(GIT_CFLAGS) $(WEB_CFLAGS) -c $< -o $@
 
+$(OBJDIR)/glk/glk-check.o: bench/glk-check.c $(GIT_HEADERS) | $(OBJDIR)/glk
+	$(EMCC) $(GIT_CFLAGS) $(WEB_CFLAGS) -c $< -o $@
+
 # One link writes both files. A pattern rule with two targets is a single
 # recipe for both (in every GNU make), so a missing or stale .wasm relinks
 # too. Each rule's pattern only matches its own pair ("frotz%js" matches
@@ -146,9 +162,12 @@ $(BENCH)/git-async%js $(BENCH)/git-async%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) | $(B
 $(BENCH)/git-sync%js $(BENCH)/git-sync%wasm: $(GIT_OBJ) $(GLK_SYNC_OBJ) | $(BENCH)
 	$(EMCC) $(BENCH_LDFLAGS) $(GIT_OBJ) $(GLK_SYNC_OBJ) -o $(BENCH)/git-sync.js
 
+$(BENCH)/glk-check%js $(BENCH)/glk-check%wasm: $(CHECK_OBJ) | $(BENCH)
+	$(EMCC) $(BENCH_LDFLAGS) $(CHECK_LIBS) $(CHECK_OBJ) -o $(BENCH)/glk-check.js
+
 # Objects reached only through a pattern rule would count as intermediate
 # and be deleted after the link; keep them so rebuilds are incremental.
-.SECONDARY: $(CORE_OBJ) $(WEB_OBJ) $(GIT_OBJ) $(GLK_ASYNC_OBJ) $(GLK_SYNC_OBJ)
+.SECONDARY: $(CORE_OBJ) $(WEB_OBJ) $(GIT_OBJ) $(GLK_ASYNC_OBJ) $(GLK_SYNC_OBJ) $(CHECK_OBJ)
 
 serve: all
 	python3 -m http.server 8000
@@ -156,4 +175,4 @@ serve: all
 clean:
 	rm -rf $(DIST)
 
-.PHONY: all frotz git bench serve clean
+.PHONY: all frotz git bench check serve clean

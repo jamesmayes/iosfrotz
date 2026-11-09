@@ -104,9 +104,12 @@ EM_JS(void, js_inputs_begin, (void), {
     Module.glkWeb.inputsBegin();
 });
 
-/* kind 1 = line, 2 = char. initial: UTF-8 text the line starts with (only
-   on the first wait after the request), or NULL. terms: Glk keycodes that
-   end the line besides Enter. */
+/* One record per pending request, sent on every wait. kind 1 = line,
+   2 = char. initial: UTF-8 text the line starts with, sent only on the
+   first wait after the request (the page then creates its record for the
+   request); NULL on later waits (the page keeps what the player has typed
+   so far). maxlen: the most code points the line may hold. terms: Glk
+   keycodes that end the line besides Enter. */
 EM_JS(void, js_input, (int id, int kind, const char *initial, int maxlen,
                        const glui32 *terms, int nterms), {
     Module.glkWeb.input(id, kind, initial ? UTF8ToString(initial) : null, maxlen,
@@ -169,9 +172,20 @@ EM_ASYNC_JS(void, js_persist_file, (const char *path), {
 });
 #endif
 
+#ifdef GLK_WEB_SYNC
 EM_JS(void, js_delete_file, (const char *path), {
     Module.glkWeb.deleteFile(UTF8ToString(path));
 });
+#else
+/* Delete one /saves file from IndexedDB (a tombstone; see saves.js), so it
+   stays deleted after a reload. Awaited, so a save of the same name right
+   after cannot overtake it. A failure is reported by the page. */
+EM_ASYNC_JS(void, js_delete_file, (const char *path), {
+    await Module.glkWeb.deleteFile(UTF8ToString(path));
+    if (Module.glkWeb.asyncifyUsed && Asyncify.currData)
+        Module.glkWeb.asyncifyUsed(HEAPU32[Asyncify.currData >> 2] - Asyncify.currData - 12);
+});
+#endif
 
 EM_JS(void, js_set_story, (const char *stem, const char *save_name), {
     Module.glkWeb.setStory(UTF8ToString(stem), UTF8ToString(save_name));
@@ -202,7 +216,10 @@ struct glk_window_struct {
     /* Input */
     int line_req, line_uni, line_initial_pending;
     void *line_buf;
-    glui32 line_maxlen;
+    glui32 line_maxlen;        /* the game's buffer size */
+    glui32 line_limit;         /* code points accepted: maxlen, or what is
+                                  left of the grid row */
+    int line_echo;             /* echo_line when the request was made */
     char *line_initial;
     gidispatch_rock_t line_arrrock;
     int char_req, char_uni;
@@ -286,6 +303,10 @@ static char story_stem[64] = "story";
 
 static glui32 timer_interval = 0;
 static double timer_next = 0;
+/* Set when glk_select returned a timer event without waiting on the page;
+   cleared by every wait. While set, an overdue timer is only returned after
+   a wait (see glk_select). */
+static int timer_without_wait = 0;
 
 static gidispatch_rock_t (*reg_obj)(void *obj, glui32 objclass) = NULL;
 static void (*unreg_obj)(void *obj, glui32 objclass, gidispatch_rock_t rock) = NULL;
@@ -1258,9 +1279,16 @@ void glk_window_get_size(winid_t win, glui32 *widthptr, glui32 *heightptr)
     if (heightptr) *heightptr = ht;
 }
 
+/* As glkios/ipwindow.c does it: the split axis cannot change, and a change
+   between Above and Below (or Left and Right) swaps child1 and child2 along
+   with the direction, so the two children stay where they are on screen and
+   only the side that gets the size moves. */
 void glk_window_set_arrangement(winid_t win, glui32 method, glui32 size, winid_t keywin)
 {
     window_t *w;
+    glui32 dir = method & winmethod_DirMask;
+    int vertical = dir == winmethod_Left || dir == winmethod_Right;
+    int backward = dir == winmethod_Left || dir == winmethod_Above;
     if (!win || win->type != wintype_Pair)
         return;
     if (keywin) {
@@ -1270,8 +1298,20 @@ void glk_window_set_arrangement(winid_t win, glui32 method, glui32 size, winid_t
             ;
         if (!w)
             return; /* not a descendant */
-        win->key = keywin;
+    } else {
+        keywin = win->key;
     }
+    if (vertical != win->vertical)
+        return; /* a split stays horizontal or vertical */
+    if (keywin && keywin->type == wintype_Blank
+        && (method & winmethod_DivisionMask) == winmethod_Fixed)
+        return; /* a blank window has no size in units */
+    if (backward != win->backward) {
+        window_t *t = win->child1;
+        win->child1 = win->child2;
+        win->child2 = t;
+    }
+    win->key = keywin;
     set_method(win, method, size);
     rearrange_all();
 }
@@ -1438,8 +1478,10 @@ void glk_fileref_delete_file(frefid_t fref)
     if (!fref)
         return;
     unlink(fref->path);
-    if (under_saves(fref->path))
+    if (under_saves(fref->path)) {
+        flush_all(); /* a failure notice follows the game's text */
         js_delete_file(fref->path);
+    }
 }
 
 glui32 glk_fileref_does_file_exist(frefid_t fref)
@@ -1466,7 +1508,7 @@ static window_t *window_by_id(int id)
 static void echo_text(window_t *w, const glui32 *text, glui32 n)
 {
     glui32 old = w->style, i;
-    if (!w->echo_line || !w->str)
+    if (!w->line_echo || !w->str)
         return;
     w->style = style_Input;
     for (i = 0; i < n; i++)
@@ -1480,9 +1522,9 @@ static void echo_text(window_t *w, const glui32 *text, glui32 n)
 static void finish_line(window_t *w, const char *utf8, glui32 term, event_t *ev)
 {
     const unsigned char *p = (const unsigned char *) utf8;
-    glui32 *text = xalloc(sizeof(glui32) * (w->line_maxlen + 1));
+    glui32 *text = xalloc(sizeof(glui32) * (w->line_limit + 1));
     glui32 n = 0, i;
-    while (*p && n < w->line_maxlen)
+    while (*p && n < w->line_limit)
         text[n++] = utf8_decode(&p);
     for (i = 0; i < n; i++) {
         if (w->line_uni)
@@ -1503,17 +1545,27 @@ static void finish_line(window_t *w, const char *utf8, glui32 term, event_t *ev)
 
 static void request_line(window_t *w, void *buf, glui32 maxlen, glui32 initlen, int uni)
 {
-    glui32 i;
+    glui32 i, limit = maxlen;
     char *init;
     size_t k = 0;
     if (!w || w->line_req || w->char_req)
         return;
-    if (initlen > maxlen)
-        initlen = maxlen;
+    /* In a grid the line is typed at the cursor and cannot run past the
+       end of the row. */
+    if (w->type == wintype_TextGrid) {
+        glui32 left = (w->curx < w->cols && w->cury >= 0 && w->cury < w->rows)
+                      ? (glui32) (w->cols - w->curx) : 0;
+        if (limit > left)
+            limit = left;
+    }
+    if (initlen > limit)
+        initlen = limit;
     w->line_req = 1;
     w->line_uni = uni;
     w->line_buf = buf;
     w->line_maxlen = maxlen;
+    w->line_limit = limit;
+    w->line_echo = w->echo_line;
     init = xalloc((size_t) initlen * 4 + 1);
     for (i = 0; i < initlen; i++)
         k += (size_t) utf8_encode(uni ? ((glui32 *) buf)[i] : ((unsigned char *) buf)[i], init + k);
@@ -1561,9 +1613,14 @@ void glk_cancel_line_event(winid_t win, event_t *ev)
     }
     if (!win || !win->line_req)
         return;
-    cap = (size_t) win->line_maxlen * 4 + 8;
-    text = xalloc(cap);
-    js_cancel_line(win->id, text, (int) cap);
+    if (win->line_initial_pending) {
+        /* Never shown to the player: the line is what it started with. */
+        text = xstrdup(win->line_initial);
+    } else {
+        cap = (size_t) win->line_limit * 4 + 8;
+        text = xalloc(cap);
+        js_cancel_line(win->id, text, (int) cap);
+    }
     finish_line(win, text, 0, ev);
     free(text);
 }
@@ -1576,6 +1633,7 @@ void glk_cancel_char_event(winid_t win)
     }
 }
 
+/* Applies to line requests made after this call (Glk 0.7.4, 4.2). */
 void glk_set_echo_line_event(winid_t win, glui32 val)
 {
     if (win)
@@ -1606,6 +1664,8 @@ void glk_request_timer_events(glui32 millisecs)
     timer_next = millisecs ? emscripten_get_now() + millisecs : 0;
 }
 
+/* If the timer is due, fill in a timer event and start the next interval
+   from now: however many intervals were missed, they make one event. */
 static int timer_due(event_t *ev)
 {
     double now;
@@ -1643,18 +1703,25 @@ void glk_select(event_t *event)
         int timeout = -1;
         size_t need = 1024;
 
-        if (timer_due(ev))
+        /* A due timer is returned at once only if the last select did not
+           already return one without waiting: a game whose timer handler
+           takes longer than the interval would otherwise never let the
+           page paint, resize or deliver input. Otherwise it waits below
+           with a zero timeout, which is a browser macrotask. */
+        if (!timer_without_wait && timer_due(ev)) {
+            timer_without_wait = 1;
             return;
+        }
         flush_all();
 
         js_inputs_begin();
         for (w = winlist; w; w = w->next) {
             if (w->line_req) {
                 js_input(w->id, 1, w->line_initial_pending ? w->line_initial : NULL,
-                         (int) w->line_maxlen, w->terms, w->nterms);
+                         (int) w->line_limit, w->terms, w->nterms);
                 w->line_initial_pending = 0;
-                if ((size_t) w->line_maxlen * 4 + 8 > need)
-                    need = (size_t) w->line_maxlen * 4 + 8;
+                if ((size_t) w->line_limit * 4 + 8 > need)
+                    need = (size_t) w->line_limit * 4 + 8;
             } else if (w->char_req) {
                 js_input(w->id, 2, NULL, 0, w->terms, 0);
             }
@@ -1666,9 +1733,10 @@ void glk_select(event_t *event)
         }
         if (timer_interval) {
             double left = timer_next - emscripten_get_now();
-            timeout = left < 1 ? 1 : (int) ceil(left);
+            timeout = left <= 0 ? 0 : (int) ceil(left);
         }
         js_wait(timeout, e, text, (int) textcap);
+        timer_without_wait = 0;
 
         switch (e[0]) {
         case evtype_Timer:
