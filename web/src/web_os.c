@@ -43,12 +43,14 @@ extern char save_name[], auxilary_name[], script_name[], command_name[];
 
 /* ---- JavaScript bridge ---- */
 
-EM_JS(void, js_output, (const char *utf8, int style), {
-    Module.webFrotz.output(UTF8ToString(utf8), style);
+/* attr: style | fg << 8 | bg << 16, as for upper-window cells below. */
+EM_JS(void, js_output, (const char *utf8, int attr), {
+    Module.webFrotz.output(UTF8ToString(utf8), attr);
 });
 
-EM_JS(void, js_clear, (void), {
-    Module.webFrotz.clear();
+/* Erase the lower window to colour bg. */
+EM_JS(void, js_clear, (int bg), {
+    Module.webFrotz.clear(bg);
 });
 
 EM_JS(void, js_fatal, (const char *utf8), {
@@ -92,13 +94,27 @@ EM_ASYNC_JS(int, js_read_key, (int timeout_ms), {
 static char out_buf[OUT_CAP + 8];
 static int out_len = 0;
 static int cur_style = 0;
+static int cur_font = TEXT_FONT;
+static int cur_fg = DEFAULT_COLOUR, cur_bg = DEFAULT_COLOUR;
+
+/* The style in effect: font 4 (fixed pitch) counts as the fixed style. */
+static int effective_style(void)
+{
+    return cur_style | (cur_font == FIXED_WIDTH_FONT ? FIXED_WIDTH_STYLE : 0);
+}
+
+static unsigned int cur_attr(void)
+{
+    return (unsigned int) (effective_style() & 0xff) | ((unsigned int) cur_fg << 8)
+        | ((unsigned int) cur_bg << 16);
+}
 
 static void flush_output(void)
 {
     if (out_len == 0)
         return;
     out_buf[out_len] = '\0';
-    js_output(out_buf, cur_style);
+    js_output(out_buf, (int) cur_attr());
     out_len = 0;
 }
 
@@ -138,13 +154,6 @@ static unsigned int grid_attr[MAX_ROWS][MAX_COLS];
 static int grid_height = 0;     /* rows in the upper window (incl. V3 status) */
 static int cur_row = 0, cur_col = 0;
 static int grid_dirty = 1;
-static int cur_fg = DEFAULT_COLOUR, cur_bg = DEFAULT_COLOUR;
-
-static unsigned int cur_attr(void)
-{
-    return (unsigned int) (cur_style & 0xff) | ((unsigned int) cur_fg << 8)
-        | ((unsigned int) cur_bg << 16);
-}
 
 static unsigned int blank_attr(void)
 {
@@ -290,7 +299,7 @@ void os_erase_area(int top, int left, int bottom, int right, int windowNum)
        lower window clears the transcript. */
     if (windowNum == 0) {
         flush_output();
-        js_clear();
+        js_clear(cur_bg);
     }
     grid_clear(top, left, bottom, right);
 }
@@ -321,9 +330,27 @@ void os_set_text_style(int new_style)
     currTextStyle = new_style;
 }
 
-void os_set_font(int new_font) { (void) new_font; }
-void os_set_colour(int fg, int bg) { (void) fg; (void) bg; }
-int os_peek_colour(void) { return BLACK_COLOUR; }
+void os_set_font(int new_font)
+{
+    if (new_font != cur_font)
+        flush_output();
+    cur_font = new_font;
+}
+
+/* Colours are Z-machine colour numbers: 1 is the page's default (it follows
+   the light/dark scheme), 2-9 black, red, green, yellow, blue, magenta,
+   cyan, white, 10-12 the greys. app.js maps them to CSS variables. */
+void os_set_colour(int fg, int bg)
+{
+    if (fg < DEFAULT_COLOUR || fg > DARKGREY_COLOUR) fg = DEFAULT_COLOUR;
+    if (bg < DEFAULT_COLOUR || bg > DARKGREY_COLOUR) bg = DEFAULT_COLOUR;
+    if (fg != cur_fg || bg != cur_bg)
+        flush_output();
+    cur_fg = fg;
+    cur_bg = bg;
+}
+
+int os_peek_colour(void) { return cur_bg; }
 
 int os_font_data(int font, int *height, int *width)
 {
@@ -534,6 +561,8 @@ void os_init_screen(void)
     if (h_version >= V4)
         h_config |= CONFIG_BOLDFACE | CONFIG_EMPHASIS | CONFIG_FIXED | CONFIG_TIMEDINPUT;
     if (h_version >= V5)
+        h_config |= CONFIG_COLOUR;
+    if (h_version >= V5)
         h_flags &= ~(GRAPHICS_FLAG | MOUSE_FLAG | MENU_FLAG | SOUND_FLAG);
     if (h_version == V3)
         h_flags &= ~OLD_SOUND_FLAG;
@@ -547,9 +576,11 @@ void os_init_screen(void)
     h_interpreter_number = INTERP_DEC_20;
     h_interpreter_version = 'F';
 
-    h_default_foreground = BLACK_COLOUR;
-    h_default_background = WHITE_COLOUR;
-    h_flags &= ~COLOUR_FLAG;
+    /* As in frotz/ios/ui_init.c: report colour 1 as the defaults, so the
+       "default" colours are whatever the page's light or dark scheme uses.
+       COLOUR_FLAG (the game asks for colour) is left as the game set it. */
+    h_default_foreground = DEFAULT_COLOUR;
+    h_default_background = DEFAULT_COLOUR;
 
     os_erase_area(1, 1, h_screen_rows, h_screen_cols, 0);
 }

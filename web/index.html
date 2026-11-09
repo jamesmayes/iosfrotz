@@ -5,13 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Web Frotz</title>
   <style>
+    /* Page colours, and the Z-machine colour table (2 black, 3 red,
+       4 green, 5 yellow, 6 blue, 7 magenta, 8 cyan, 9 white, 10-12 greys)
+       tuned for each scheme. Colour 1 ("default") is --fg / --screen-bg. */
     :root {
+      color-scheme: light dark;
       --bg: #fbfaf7;
       --fg: #1d1d1f;
       --muted: #6e6e73;
       --rule: #d9d6cf;
-      --status-bg: #1d1d1f;
-      --status-fg: #fbfaf7;
+      --screen-bg: var(--bg);
+      --z2: #1d1d1f;
+      --z3: #c62828;
+      --z4: #2e7d32;
+      --z5: #a77b00;
+      --z6: #1f57c3;
+      --z7: #a0309a;
+      --z8: #00838f;
+      --z9: #ffffff;
+      --z10: #c7c7cc;
+      --z11: #8e8e93;
+      --z12: #48484a;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -19,14 +33,23 @@
         --fg: #e8e6e1;
         --muted: #98989d;
         --rule: #3a3a3c;
-        --status-bg: #e8e6e1;
-        --status-fg: #161617;
+        --z2: #000000;
+        --z3: #ff6b63;
+        --z4: #5fcf6a;
+        --z5: #ffd54a;
+        --z6: #6aa5ff;
+        --z7: #e27ddb;
+        --z8: #4fd3dc;
+        --z9: #f5f5f7;
+        --z10: #aeaeb2;
+        --z11: #7c7c80;
+        --z12: #3a3a3c;
       }
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body {
-      background: var(--bg);
+      background: var(--screen-bg);
       color: var(--fg);
       font: 17px/1.5 Georgia, "Iowan Old Style", serif;
       display: flex;
@@ -136,7 +159,7 @@
     .s-bold { font-weight: bold; }
     .s-emphasis { font-style: italic; }
     .s-fixed { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; }
-    .s-reverse { background: var(--fg); color: var(--bg); }
+    /* .s-reverse colours are set inline from the attribute (app.js). */
     #command-form {
       display: flex;
       gap: 8px;

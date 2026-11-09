@@ -52,6 +52,15 @@ Window 1 (and the V3 status line, which Frotz draws in window 7) is a grid of `h
 
 **Resize.** On a window resize the page refits the grid at once and passes the new column count to the core at its next read, both before the read and when the read returns, so the game's next status redraw uses it. `web_os.c` then sets `h_screen_cols`/`h_screen_width`, calls `resize_screen()` (the window sizes) and `restart_header()` (the header the game reads). Nothing is interrupted, so no `ZC_TIME_OUT` is sent. Only the width changes at runtime. The row count stays as sized at load, because shrinking it under a split upper window could leave the lower window with no rows. Most games redraw their status line every turn; an upper-window menu already on screen keeps its old layout (clipped) until the game redraws it.
 
+## Styles and colours
+
+`os_set_text_style` (reverse, bold, italic, fixed) and `os_set_colour` both feed one attribute word (`style | fg << 8 | bg << 16`) that goes with every span of lower-window text and every upper-window cell. Font 4 (fixed pitch) counts as the fixed style.
+
+- The header reports colour support (`CONFIG_COLOUR`, V5+) and, as `frotz/ios/ui_init.c` does, reports colour 1 as the default foreground and background. So "default" text follows the page's scheme.
+- Colours 2–12 (black, red, green, yellow, blue, magenta, cyan, white, then the three greys) map to the CSS variables `--z2` … `--z12` in `index.html`. Each has a light and a dark value under `prefers-color-scheme`, tuned so that the default text stays readable.
+- Reverse video swaps foreground and background, defaults included.
+- Erasing the screen (`erase_window`) fills it with the current background colour by setting `--screen-bg`, which is the page background. Erased upper-window cells keep the background colour too.
+
 ## Stories
 
 The start screen lists `games/stories.json`. Picking a story sets the URL hash, for example `#story=Balances` (the file name without its extension, case-insensitive), so a link opens that story directly. Changing story while one is running reloads the page, since a story is loaded once per WebAssembly instance.
@@ -80,14 +89,14 @@ Blorb-wrapped Z-code needs no extra code: `init_memory()` in `frotz/common/fastm
 
 - Z-code v3–v8 text games (tested with `Balances.z5`, v5).
 - Status line / upper window as a real fixed-pitch grid (see below).
-- Text styles (bold, italic, fixed, reverse) as CSS classes.
+- Text styles and colours in both windows (see below).
 - Timed input (`read` with a timeout).
 - `save`, `restore`, `undo`, `restart`, `quit`. Saves persist across reloads (see below).
 
 ## What does not work (yet)
 
 - There is no file-name prompt. Every save and restore uses `<story>.sav`.
-- No sound, no pictures (V6), no colours (colour is turned off in the header).
+- No sound, no pictures (V6). No true colour (`set_true_colour`): colours outside the standard table fall back to the default.
 - No `[MORE]` paging. The transcript just scrolls.
 - Games that position the cursor inside the lower window (window 0) still look wrong: window 0 is a reflowing stream, not a grid.
 - No visible cursor in the upper window, and no mouse/menu input.

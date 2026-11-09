@@ -1,8 +1,9 @@
 // web/app.js: plain-DOM front end for the WebAssembly Frotz spike.
 //
 // The C side (web/src/web_os.c) calls into Module.webFrotz:
-//   output(text, style)  append text from the main window
-//   clear()              erase the main window
+//   output(text, attr)   append text to the main window
+//   clear(bg)            erase the main window to colour bg
+// attr is style | fg << 8 | bg << 16 (see web_os.c).
 //   grid(ch, attr, rows, cols, stride)
 //                        redraw the upper window from the core's cell grid
 //   screenSize()         (rows << 8) | cols that fit the page, at start
@@ -86,10 +87,25 @@ function applyGridFont(f) {
   document.documentElement.style.setProperty("--grid-font", f.font.toFixed(2) + "px");
 }
 
-// Style bits 1 reverse, 2 bold, 4 emphasis, 8 fixed; see the attribute
-// layout in web_os.c (style | fg << 8 | bg << 16).
-function cellClass(a) {
-  return styleClass(a & 0xff);
+// Z-machine colour numbers 2-12 map to --z2 ... --z12 (index.html); 1 is the
+// page default, which follows the light/dark scheme.
+function colourVar(n, fallback) {
+  return n >= 2 && n <= 12 ? `var(--z${n})` : fallback;
+}
+
+// Apply an attribute word (style | fg << 8 | bg << 16) to a span.
+function applyAttr(span, a) {
+  const style = a & 0xff, fg = (a >> 8) & 0xff, bg = (a >> 16) & 0xff;
+  const cls = styleClass(style);
+  if (cls) span.className = cls;
+  if (style & 1) {
+    // Reverse video swaps the colours, defaults included.
+    span.style.color = colourVar(bg, "var(--screen-bg)");
+    span.style.background = colourVar(fg, "var(--fg)");
+  } else {
+    if (fg !== 1) span.style.color = colourVar(fg, "");
+    if (bg !== 1) span.style.background = colourVar(bg, "");
+  }
 }
 
 function renderGrid() {
@@ -113,10 +129,9 @@ function renderGrid() {
         text += ch ? String.fromCharCode(ch) : " ";
         c++;
       }
-      if (a & 0xff || text.trim()) anything = true;
+      if (a & 0xff || ((a >> 16) & 0xff) !== 1 || text.trim()) anything = true;
       const span = document.createElement("span");
-      const cls = cellClass(a);
-      if (cls) span.className = cls;
+      applyAttr(span, a);
       span.textContent = text;
       row.appendChild(span);
     }
@@ -166,16 +181,17 @@ function wait(kind, ms, timeoutValue) {
 }
 
 const webFrotz = {
-  output(text, style) {
+  output(text, attr) {
     const span = document.createElement("span");
-    const cls = styleClass(style);
-    if (cls) span.className = cls;
+    applyAttr(span, attr);
     span.textContent = text;
     transcriptEl.appendChild(span);
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   },
-  clear() {
+  clear(bg) {
     transcriptEl.textContent = "";
+    // Erasing the screen fills it with the current background colour.
+    document.documentElement.style.setProperty("--screen-bg", colourVar(bg, "var(--bg)"));
   },
   grid(ch, attr, rows, cols, stride) {
     gridState = { ch: ch.slice(), attr: attr.slice(), rows, cols, stride };
@@ -201,7 +217,7 @@ const webFrotz = {
   },
   fatal(msg) {
     document.body.dataset.mode = "game";
-    webFrotz.output("\n" + msg + "\n", 2);
+    webFrotz.output("\n" + msg + "\n", 2 | (1 << 8) | (1 << 16));
   },
   syncSaves() {
     return persistSaves();
