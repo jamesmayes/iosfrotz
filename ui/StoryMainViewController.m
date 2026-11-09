@@ -1924,7 +1924,9 @@ extern void gli_ios_set_focus(window_t *winNum);
             [m_keyboardController.keyboardView runOverlapSelfTestWithShift: labels[0] repeatKey: labels[1] letter: labels[2] backspace: labels[3]];
         } else if ([verb isEqualToString: @"a11y"]) {
         FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
-        NSLog(@"kbselftest %d a11y layer=%@ %@", (int)step, keyboard.keyLayer,
+        NSLog(@"kbselftest %d a11y container=\"%@\" type=%ld frame=%@ view=%@ elements=%lu layer=%@ %@", (int)step, keyboard.accessibilityLabel,
+              (long)keyboard.accessibilityContainerType, NSStringFromCGRect(keyboard.accessibilityFrame), NSStringFromCGRect([keyboard convertRect: keyboard.bounds toView: nil]),
+              (unsigned long)keyboard.accessibilityElements.count, keyboard.keyLayer,
               [[keyboard.accessibilityElements valueForKey: @"accessibilityLabel"] componentsJoinedByString: @" | "]);
     } else if ([verb isEqualToString: @"select"]) {
         UITextPosition *end = m_inputLine.endOfDocument;

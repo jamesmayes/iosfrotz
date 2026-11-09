@@ -121,8 +121,22 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     m_shiftLabel.font = m_sublabelFont;
 }
 
+// Legends are sized from the key, not Dynamic Type, but never past the line they are given.
+static void FitLegendToHeight(UILabel *label) {
+    CGFloat h = label.bounds.size.height;
+    if (label.font && h > 0 && label.font.lineHeight > h)
+        label.font = [label.font fontWithSize: MAX(1, floor(label.font.pointSize * h / label.font.lineHeight))];
+}
+
 -(void)layoutSubviews {
     [super layoutSubviews];
+    [self layoutLegends];
+    FitLegendToHeight(m_label);
+    FitLegendToHeight(m_sublabel);
+    FitLegendToHeight(m_shiftLabel);
+}
+
+-(void)layoutLegends {
     CGRect b = self.bounds;
     CGFloat edge = m_bevel && !_joinsBelow ? MAX(2, round(b.size.height * 0.08)) : 0;
     FrotzSublabelPosition position = m_skin.sublabelPosition;
@@ -247,6 +261,8 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     UITouch *m_layerTouch;      // a held key that used up a one-shot shift keeps its layer until it lets go,
     NSString *m_pendingLayer;   // so it can still repeat; this is the layer to show then
     BOOL m_inTouchDown;
+    NSString *m_announcement;   // for VoiceOver once a layer or shift change is on screen
+    CGRect m_keysFrame;         // the keys' extent, the keyboard's accessibility frame
 #if DEBUG
     NSMutableArray<NSString *> *m_heldActions;
 #endif
@@ -263,6 +279,8 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
         m_keyViews = [NSMutableArray array];
         m_touchKeys = [NSMapTable strongToStrongObjectsMapTable];
         m_feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle: UIImpactFeedbackStyleLight];
+        self.accessibilityLabel = layout.name;
+        self.accessibilityContainerType = UIAccessibilityContainerTypeSemanticGroup;
         [self rebuildKeys];
     }
     return self;
@@ -429,6 +447,7 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
     BOOL chiclet = _skin.profile == FrotzKeyProfileChiclet;
 
     NSMutableArray *elements = [NSMutableArray arrayWithCapacity: m_keyViews.count];
+    m_keysFrame = CGRectNull;
     NSMutableArray<FrotzKeyAccessibilityElement *> *aboveRow = [NSMutableArray array], *thisRow = [NSMutableArray array];
     NSUInteger i = 0;
     CGFloat y = rect.origin.y;
@@ -442,6 +461,7 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
             FrotzKeyView *kv = m_keyViews[i++];
             kv.frame = frame;
             [kv setFont: font];
+            m_keysFrame = CGRectUnion(m_keysFrame, frame);
 
             FrotzKeyAccessibilityElement *element = [[FrotzKeyAccessibilityElement alloc] initWithAccessibilityContainer: self];
             element.keyView = kv;
@@ -463,7 +483,39 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
     self.accessibilityElements = elements;
     if (m_keysRebuilt) {
         m_keysRebuilt = NO;
-        UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, nil);
+        UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, m_announcement);
+        m_announcement = nil;
+    }
+}
+
+// The keys, not the case around them or the fold band above them in a split.
+-(CGRect)accessibilityFrame {
+    CGRect keys = CGRectIsNull(m_keysFrame) ? self.bounds : m_keysFrame;
+    UIWindow *window = self.window;
+    if (!window)
+        return [super accessibilityFrame];
+    return [window convertRect: [self convertRect: keys toView: nil] toCoordinateSpace: window.screen.coordinateSpace];
+}
+
+// Says what a Shift, caps or layer key did: with the new keys' layout change when they were
+// rebuilt for it, otherwise (a skin with no shift layer) on its own.
+-(void)announceKeyboardState:(NSString *)announcement {
+#if DEBUG
+    NSLog(@"kba11y announce \"%@\" with %@", announcement, m_keysRebuilt ? @"layout change" : @"announcement");
+#endif
+    if (!UIAccessibilityIsVoiceOverRunning())
+        return;
+    if (m_keysRebuilt)
+        m_announcement = announcement;
+    else
+        UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, announcement);
+}
+
+-(NSString *)shiftAnnouncement {
+    switch (_shiftState) {
+        case FrotzKeyboardShiftOneShot: return NSLocalizedString(@"Shift on", nil);
+        case FrotzKeyboardShiftCapsLock: return NSLocalizedString(@"Caps lock on", nil);
+        default: return NSLocalizedString(@"Shift off", nil);
     }
 }
 
@@ -795,16 +847,20 @@ static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
                 self.shiftState = FrotzKeyboardShiftCapsLock;
             else
                 self.shiftState = FrotzKeyboardShiftOff;
+            [self announceKeyboardState: [self shiftAnnouncement]];
             break;
         }
         case FrotzKeyActionCaps:
             self.shiftState = _shiftState == FrotzKeyboardShiftCapsLock ? FrotzKeyboardShiftOff : FrotzKeyboardShiftCapsLock;
+            [self announceKeyboardState: [self shiftAnnouncement]];
             break;
         case FrotzKeyActionSymbols:
             self.keyLayer = FrotzKeyboardLayerSymbols;
+            [self announceKeyboardState: NSLocalizedString(@"Symbols", nil)];
             break;
         case FrotzKeyActionLetters:
             self.keyLayer = _shiftState == FrotzKeyboardShiftOff ? FrotzKeyboardLayerDefault : FrotzKeyboardLayerShift;
+            [self announceKeyboardState: NSLocalizedString(@"Letters", nil)];
             break;
         case FrotzKeyActionEscape:
             [delegate keyboardView: self didPressSpecialKey: FrotzKeyboardSpecialKeyEscape];
