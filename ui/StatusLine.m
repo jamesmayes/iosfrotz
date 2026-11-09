@@ -7,6 +7,7 @@
 //
 
 #import "StatusLine.h"
+#import "FrotzSceneDelegate.h"
 #include "iosfrotz.h"
 
 @implementation StatusLine
@@ -53,11 +54,15 @@
 
 - (void) touchesEnded:(NSSet*)touches withEvent:(UIEvent*)event
 {
+    if (FrotzUnconsumedTouches(touches).count == 0)
+        return; // consumed by handleTouch: (see FrotzView)
     [[self superview] setTransform: CGAffineTransformIdentity];
 }
 
 - (void) touchesCancelled:(NSSet*)touches withEvent:(UIEvent*)event
 {
+    if (FrotzUnconsumedTouches(touches).count == 0)
+        return;
     [[self superview] setTransform: CGAffineTransformIdentity];
 }
 @end

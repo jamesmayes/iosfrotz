@@ -7,6 +7,7 @@
 //
 
 #import "FrotzView.h"
+#import "FrotzSceneDelegate.h"
 #include "iosfrotz.h"
 
 @implementation SavedTouch
@@ -21,16 +22,21 @@
 }
 @end
 
+@interface FrotzView () <UIGestureRecognizerDelegate>
+@end
+
 @implementation FrotzView
 
 - (RichTextView*)initWithFrame: (CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
         UIPinchGestureRecognizer *pinch = [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(storyViewPinch:)];
+        pinch.delegate = self; // to refuse touches the window's routing consumed
         [self addGestureRecognizer:pinch];
         
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(storyViewTwoFingerTap:)];
         tap.numberOfTouchesRequired = 2;
+        tap.delegate = self;
         [self addGestureRecognizer:tap];
     }
     return self;
@@ -72,6 +78,48 @@
 
 
 -(BOOL)canBecomeFirstResponder { return NO; }
+
+// The story view and status line get every touch through UIKit, but a phase their handleTouch:
+// consumed in the window (a magnification drag, a status line multi-tap) goes no further: not to
+// the touch handlers, and not to this view's recognizers, its scrolling included.
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if ((touches = FrotzUnconsumedTouches(touches)).count)
+        [super touchesBegan: touches withEvent: event];
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if ((touches = FrotzUnconsumedTouches(touches)).count)
+        [super touchesMoved: touches withEvent: event];
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if ((touches = FrotzUnconsumedTouches(touches)).count)
+        [super touchesEnded: touches withEvent: event];
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if ((touches = FrotzUnconsumedTouches(touches)).count)
+        [super touchesCancelled: touches withEvent: event];
+}
+
+// For the pinch and two-finger tap above, and the scroll view's own recognizers (it is their delegate).
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    if (FrotzTouchIsConsumed(touch))
+        return NO;
+    if ([RichTextView instancesRespondToSelector: _cmd]) { // UIScrollView may answer it for its own
+        BOOL (*superImp)(id, SEL, UIGestureRecognizer *, UITouch *) = (void *)[RichTextView instanceMethodForSelector: _cmd];
+        return superImp(self, _cmd, gestureRecognizer, touch);
+    }
+    return YES;
+}
+
+// A touch consumed after its Began was already received, as a magnification drag is: the recognizer
+// can't start from it.
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+    if (FrotzViewHasConsumedTouch(self))
+        return NO;
+    return [super gestureRecognizerShouldBegin: gestureRecognizer];
+}
 
 -(BOOL)handleMagnifyTouchWithPhase:(UITouchPhase)phase atPoint:(CGPoint) pt {
     UIView *view = [self superview];

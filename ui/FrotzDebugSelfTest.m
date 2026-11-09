@@ -426,11 +426,11 @@ static NSMutableArray<NSString *> *sHeldActions;
 // story view's edge) or "note:<text>".
 // Not scriptable, so checked by hand: one finger on a key while another's touch is consumed by the
 // story or status line (a status line multi-tap, a story magnification phase) in the same event.
-// FrotzWindow must keep the consumed touch from UIKit and still deliver the key's touch; it logs
-// "kbtouch window direct" for each view it hands touches to in such an event.
+// FrotzWindow hands the whole event to UIKit; the story view or status line ignores the consumed
+// phase (FrotzTouchIsConsumed) and the key still types, with its "kbtouch" lines as usual.
 -(void)runKeyboardSelfTest {
     NSLog(@"kbselftest note: mixed-touch suppression (a key plus a consumed story/status touch in one event) "
-          @"needs two real fingers; check by hand for \"kbtouch window direct\" lines");
+          @"needs two real fingers; check by hand that the key types and the story doesn't scroll");
     for (NSString *skinID in [FrotzKeyboardSkin availableSkinIDs]) {
         FrotzKeyboardLayout *layout = [FrotzKeyboardLayout layoutWithID: skinID];
         if (layout && [FrotzKeyboardSkin skinWithID: skinID])
@@ -804,10 +804,6 @@ static NSString *PhaseName(UITouchPhase phase) {
         NSLog(@"kbtouch %@ %@ key=%@ inside=%d", PhaseName(phase), NSStringFromCGPoint(pt),
               keyView ? keyView.key.label : @"(none)", keyView ? [keyboard touch: touch isOnKey: keyView] : 0);
     }
-}
-
-+(void)window:(UIWindow *)window deliversTouches:(NSSet<UITouch *> *)touches phase:(UITouchPhase)phase toView:(UIView *)view {
-    NSLog(@"kbtouch window direct phase=%ld view=%@ touches=%lu", (long)phase, NSStringFromClass([view class]), (unsigned long)touches.count);
 }
 
 +(BOOL)fakeBounds:(CGSize *)size {

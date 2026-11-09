@@ -23,6 +23,37 @@
 - (void)sendEvent:(UIEvent *)event;                    // called by UIApplication to dispatch events to views inside the window
 @end
 
+// Touches whose current phase the story view, status line or input line consumed (handleTouch:
+// returned NO), mapped to the view they were routed to. The event itself still goes to UIKit, so
+// every touch keeps its whole lifecycle in UIKit and its gesture recognizers; the routed views
+// ignore a consumed phase instead (FrotzTouchIsConsumed). Other touches, such as the in-app
+// keyboard's, are never in it.
+static NSMapTable<UITouch *, UIView *> *ConsumedTouches(void) {
+    static NSMapTable<UITouch *, UIView *> *consumed;
+    if (!consumed)
+        consumed = [NSMapTable weakToWeakObjectsMapTable];
+    return consumed;
+}
+
+BOOL FrotzTouchIsConsumed(UITouch *touch) {
+    return [ConsumedTouches() objectForKey: touch] != nil;
+}
+
+NSSet<UITouch *> *FrotzUnconsumedTouches(NSSet<UITouch *> *touches) {
+    NSMapTable<UITouch *, UIView *> *consumed = ConsumedTouches();
+    if (consumed.count == 0)
+        return touches;
+    return [touches objectsPassingTest: ^BOOL(UITouch *touch, BOOL *stop) { return [consumed objectForKey: touch] == nil; }];
+}
+
+BOOL FrotzViewHasConsumedTouch(UIView *view) {
+    NSMapTable<UITouch *, UIView *> *consumed = ConsumedTouches();
+    for (UITouch *touch in consumed)
+        if ([[consumed objectForKey: touch] isDescendantOfView: view])
+            return YES;
+    return NO;
+}
+
 @implementation FrotzWindow
 - (void)sendEvent:(UIEvent *)event {
     // The view each touch's Began was routed to, for its later phases that arrive with no view.
@@ -32,9 +63,8 @@
 #if DEBUG
     [FrotzDebugSelfTest window: self willSendEvent: event];
 #endif
+    NSMapTable<UITouch *, UIView *> *consumed = ConsumedTouches();
     NSSet<UITouch *> *touches = [event allTouches];
-    NSMapTable<UITouch *, UIView *> *kept = [NSMapTable strongToStrongObjectsMapTable]; // touch -> its view, nil-view phases resolved
-    NSUInteger swallowed = 0;
     for (UITouch *touch in touches) {
         UIView *view = [touch view];
         UITouchPhase phase = [touch phase];
@@ -58,21 +88,10 @@
             [routedTouches setObject: view forKey: touch];
         else if (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled)
             [routedTouches removeObjectForKey: touch];
-        if (!keep)
-            swallowed++;
-        else if (view)
-            [kept setObject: view forKey: touch];
-    }
-    // A story view may eat its own touch, but not a key press that shares the event.
-    if (swallowed && swallowed == touches.count)
-        return;
-    if (swallowed) {
-        // A mixed event: UIKit can't be handed only some of its touches, so the ones nobody
-        // consumed go straight to their views and the consumed ones stay suppressed (a status
-        // line multi-tap, a story magnification phase, while another finger is on a key).
-        // Gesture recognizers don't see these touches; the in-app keyboard doesn't use any.
-        [self deliverTouchesDirectly: kept withEvent: event];
-        return;
+        if (keep)
+            [consumed removeObjectForKey: touch];
+        else
+            [consumed setObject: view forKey: touch]; // only a routed touch, so view is set
     }
     if ([event isKindOfClass: [UIPressesEvent class]]) {
         StoryMainViewController *smvc = [theStoryBrowser storyMainViewController];
@@ -84,39 +103,9 @@
         }
     }
     [super sendEvent: event];
-}
-
-// Sends each touch to the view it maps to, through touchesBegan/Moved/Ended/Cancelled:, grouped by
-// view and phase as UIKit would.
-- (void)deliverTouchesDirectly:(NSMapTable<UITouch *, UIView *> *)touches withEvent:(UIEvent *)event {
-    NSMapTable<UIView *, NSMutableSet<UITouch *> *> *byView[UITouchPhaseCancelled + 1];
-    for (NSInteger p = 0; p <= UITouchPhaseCancelled; p++)
-        byView[p] = [NSMapTable strongToStrongObjectsMapTable];
-    for (UITouch *touch in touches) {
-        UITouchPhase phase = touch.phase;
-        UIView *view = [touches objectForKey: touch];
-        if (phase == UITouchPhaseStationary || phase > UITouchPhaseCancelled)
-            continue;
-        NSMutableSet<UITouch *> *set = [byView[phase] objectForKey: view];
-        if (!set)
-            [byView[phase] setObject: (set = [NSMutableSet set]) forKey: view];
-        [set addObject: touch];
-    }
-    for (NSInteger p = 0; p <= UITouchPhaseCancelled; p++) {
-        for (UIView *view in byView[p]) {
-            NSSet<UITouch *> *set = [byView[p] objectForKey: view];
-#if DEBUG
-            [FrotzDebugSelfTest window: self deliversTouches: set phase: p toView: view];
-#endif
-            switch (p) {
-                case UITouchPhaseBegan: [view touchesBegan: set withEvent: event]; break;
-                case UITouchPhaseMoved: [view touchesMoved: set withEvent: event]; break;
-                case UITouchPhaseEnded: [view touchesEnded: set withEvent: event]; break;
-                case UITouchPhaseCancelled: [view touchesCancelled: set withEvent: event]; break;
-                default: break;
-            }
-        }
-    }
+    for (UITouch *touch in touches)
+        if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled)
+            [consumed removeObjectForKey: touch];
 }
 @end
 

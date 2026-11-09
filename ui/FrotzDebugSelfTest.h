@@ -32,7 +32,6 @@ NS_ASSUME_NONNULL_BEGIN
 +(BOOL)overridesKeyboardStyle;                                    // FROTZ_INAPP_KEYBOARD is set, so the pref mustn't replace it
 +(void)openStoryAtLaunchWithBrowser:(StoryBrowser *)browser;      // FROTZ_SELFTEST_STORY
 +(void)window:(UIWindow *)window willSendEvent:(UIEvent *)event;  // "kbtouch" lines for the keyboard's touches
-+(void)window:(UIWindow *)window deliversTouches:(NSSet<UITouch *> *)touches phase:(UITouchPhase)phase toView:(UIView *)view;
 +(BOOL)fakeBounds:(CGSize *)size;                                 // FROTZ_FAKE_BOUNDS
 +(void)postureDidChange:(FrotzPostureObserver *)observer;
 // FROTZ_FAKE_POSTURE: YES and the fake state (any pointer may be NULL) when it's set.

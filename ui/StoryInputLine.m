@@ -8,6 +8,7 @@
 //
 
 #import "StoryInputLine.h"
+#import "FrotzSceneDelegate.h"
 #import "StoryView.h"
 #import "StatusLine.h"
 
@@ -259,6 +260,35 @@
     } 
     m_lastTouchPhaseSeen = phase;
     return YES;
+}
+
+// As in FrotzView: UIKit delivers every touch, and a phase handleTouch: consumed in the window goes
+// no further here. (handleTouch: doesn't consume any today; this keeps the three routed views alike.)
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if ((touches = FrotzUnconsumedTouches(touches)).count)
+        [super touchesBegan: touches withEvent: event];
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if ((touches = FrotzUnconsumedTouches(touches)).count)
+        [super touchesMoved: touches withEvent: event];
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if ((touches = FrotzUnconsumedTouches(touches)).count)
+        [super touchesEnded: touches withEvent: event];
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if ((touches = FrotzUnconsumedTouches(touches)).count)
+        [super touchesCancelled: touches withEvent: event];
+}
+
+// The text field's own recognizers belong to UIKit, so they are stopped here rather than in a delegate.
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+    if (FrotzViewHasConsumedTouch(self))
+        return NO;
+    return [super gestureRecognizerShouldBegin: gestureRecognizer];
 }
 
 - (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
