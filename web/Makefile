@@ -20,9 +20,17 @@ WEB_OBJ  := $(OBJDIR)/web_os.o
 # fileZCodeOffset, ...) unconditionally, so it only compiles in iOS mode.
 # web/shim comes first so screen.c's #include "iosfrotz.h" finds the web
 # stand-in instead of include/iosfrotz.h (which pulls in CoreGraphics/Glk).
-CFLAGS  := -O2 -DFROTZ_IOS=1 -Ishim -I$(CORE) \
-           -Wno-implicit-function-declaration -Wno-int-conversion \
-           -Wno-incompatible-pointer-types -Wno-deprecated-non-prototype
+CFLAGS  := -O2 -DFROTZ_IOS=1 -Ishim -I$(CORE)
+
+# Diagnostics: the browser layer is built with -Wall -Wextra. The core
+# (frotz/common) gets the compiler's default diagnostics and, with
+# shim/iosfrotz.h, compiles without a warning, so it needs no -Wno-*
+# suppressions. If a legacy core file ever needs one, add it to
+# CORE_CFLAGS, which applies to frotz/common objects only.
+CORE_CFLAGS :=
+WEB_CFLAGS  := -Wall -Wextra
+
+HEADERS := $(wildcard $(CORE)/*.h) shim/iosfrotz.h
 
 LDFLAGS := -O2 \
            -sASYNCIFY \
@@ -35,19 +43,26 @@ LDFLAGS := -O2 \
            -sENVIRONMENT=web \
            -lidbfs.js
 
-all: $(DIST)/frotz.js
+all: $(DIST)/frotz.js $(DIST)/frotz.wasm
 
 $(OBJDIR) $(DIST):
 	mkdir -p $@
 
-$(OBJDIR)/%.o: $(CORE)/%.c | $(OBJDIR)
-	$(EMCC) $(CFLAGS) -c $< -o $@
+$(OBJDIR)/%.o: $(CORE)/%.c $(HEADERS) | $(OBJDIR)
+	$(EMCC) $(CFLAGS) $(CORE_CFLAGS) -c $< -o $@
 
-$(OBJDIR)/web_os.o: src/web_os.c shim/iosfrotz.h | $(OBJDIR)
-	$(EMCC) $(CFLAGS) -c $< -o $@
+$(OBJDIR)/web_os.o: src/web_os.c $(HEADERS) | $(OBJDIR)
+	$(EMCC) $(CFLAGS) $(WEB_CFLAGS) -c $< -o $@
 
-$(DIST)/frotz.js: $(CORE_OBJ) $(WEB_OBJ) | $(DIST)
-	$(EMCC) $(LDFLAGS) $^ -o $@
+# One link writes both files. A pattern rule with two targets is a single
+# recipe for both (in every GNU make), so a missing or stale frotz.wasm
+# relinks too.
+$(DIST)/%.js $(DIST)/%.wasm: $(CORE_OBJ) $(WEB_OBJ) | $(DIST)
+	$(EMCC) $(LDFLAGS) $(CORE_OBJ) $(WEB_OBJ) -o $(DIST)/$*.js
+
+# Objects reached only through a pattern rule would count as intermediate
+# and be deleted after the link; keep them so rebuilds are incremental.
+.SECONDARY: $(CORE_OBJ) $(WEB_OBJ)
 
 serve: all
 	python3 -m http.server 8000

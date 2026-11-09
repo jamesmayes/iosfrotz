@@ -8,7 +8,11 @@
 //                        redraw the upper window from the core's cell grid
 //   screenSize()         (rows << 8) | cols that fit the page, at start
 //   sizeChanged()        a new packed size after a resize, else 0
-//   readLine(ms)         Promise<string|null> (null = timed out)
+//   readLine(ms, initial, continued)
+//                        Promise<{line, timedOut}>; the field starts as
+//                        `initial` (the game's initial text, or the partial
+//                        line of a read continued after a timeout), and a
+//                        timeout returns what has been typed so far
 //   readKey(ms)          Promise<number>      (0 = timed out)
 //   fatal(msg)
 //   syncSaves()          Promise; flushes /saves (IDBFS) to IndexedDB
@@ -163,6 +167,8 @@ let pending = null; // { kind: "line"|"key", resolve, timer }
 // Lines submitted while the interpreter is busy (between resolving one read
 // and asking for the next) are queued instead of dropped.
 const typeAhead = [];
+// The partial line a timed-out read returned, until the next read.
+let timedOutLine = null;
 
 function settle(value) {
   if (!pending) return;
@@ -173,11 +179,12 @@ function settle(value) {
   p.resolve(value);
 }
 
-function wait(kind, ms, timeoutValue) {
+// onTimeout() gives the value a timed-out read resolves with.
+function wait(kind, ms, onTimeout) {
   return new Promise((resolve) => {
     pending = { kind, resolve, timer: null };
     form.dataset.waiting = kind;
-    if (ms > 0) pending.timer = setTimeout(() => settle(timeoutValue), ms);
+    if (ms > 0) pending.timer = setTimeout(() => settle(onTimeout()), ms);
     input.focus({ preventScroll: true });
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   });
@@ -211,12 +218,30 @@ const webFrotz = {
     pendingSize = 0;
     return p;
   },
-  readLine(ms) {
-    if (typeAhead.length) return Promise.resolve(typeAhead.shift());
-    return wait("line", ms, null);
+  readLine(ms, initial, continued) {
+    // A line typed ahead was typed without seeing the initial text, so it
+    // is taken as the whole line.
+    if (typeAhead.length) return Promise.resolve({ line: typeAhead.shift(), timedOut: false });
+    // A continued read gets back the partial line it returned on timeout
+    // (the field normally still holds it). A new read starts from the
+    // game's initial text; when there is none, the field keeps what the
+    // player has started typing, unless that is just the partial line of a
+    // read that the game's timeout routine ended.
+    let value = input.value;
+    if (continued || initial) value = initial;
+    else if (timedOutLine !== null && value === timedOutLine) value = "";
+    timedOutLine = null;
+    if (input.value !== value) {
+      input.value = value;
+      input.setSelectionRange(value.length, value.length);
+    }
+    return wait("line", ms, () => {
+      timedOutLine = input.value;
+      return { line: timedOutLine, timedOut: true };
+    });
   },
   readKey(ms) {
-    return wait("key", ms, 0);
+    return wait("key", ms, () => 0);
   },
   fatal(msg) {
     document.body.dataset.mode = "game";
@@ -367,7 +392,7 @@ form.addEventListener("submit", (e) => {
   if (!pending || pending.kind === "line") {
     const line = input.value;
     input.value = "";
-    if (pending) settle(line);
+    if (pending) settle({ line, timedOut: false });
     else typeAhead.push(line);
   } else {
     settle(13); // ZC_RETURN for "press any key"

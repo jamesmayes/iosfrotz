@@ -8,7 +8,7 @@ Requires emscripten (`emcc`, tested with 7.0.0 from Homebrew).
 
 ```sh
 cd web
-make            # -> dist/frotz.js (~62 KB) + dist/frotz.wasm (~142 KB)
+make            # -> dist/frotz.js (~70 KB) + dist/frotz.wasm (~144 KB)
 make clean
 ```
 
@@ -19,7 +19,9 @@ make clean
 - `-DFROTZ_IOS=1`: the core in this repo has iOS changes, and it references iOS-only globals (`do_autosave`, `fileZCodeOffset`, `AUTOSAVE_FILE`) even when `FROTZ_IOS` is not set, so it only compiles in iOS mode.
 - `-Ishim` comes before `-I../frotz/common`. `screen.c` includes `"iosfrotz.h"` unconditionally. `shim/iosfrotz.h` stands in for `include/iosfrotz.h` (which pulls in CoreGraphics and Glk) and declares only what the core needs.
 - `frotz/dumb/` is **not** used. It no longer compiles against this core: `zchar` is 16-bit because `USE_UTF8` is hard-wired in `frotz.h`, and it has conflicting `os_display_char` and `getline` signatures. `src/web_os.c` implements the `os_*` interface directly, modelled on `frotz/ios/ui_*.c`.
-- Link flags: `-sASYNCIFY -sASYNCIFY_STACK_SIZE=65536 -sALLOW_MEMORY_GROWTH -sINVOKE_RUN=0 -sEXIT_RUNTIME=1 -sMODULARIZE -sEXPORT_NAME=createFrotz -sEXPORTED_RUNTIME_METHODS=callMain,FS -sENVIRONMENT=web`.
+- Diagnostics: `src/web_os.c` is compiled with `-Wall -Wextra` and builds without warnings. The core gets the compiler's default diagnostics and also builds without warnings, so no `-Wno-*` suppressions are used. If a legacy core file ever needs one, `CORE_CFLAGS` in the Makefile applies to `frotz/common` objects only.
+- Every object depends on the core headers and `shim/iosfrotz.h`. One link rule writes both `dist/frotz.js` and `dist/frotz.wasm`, so a missing or stale file of either relinks.
+- Link flags: `-sASYNCIFY -sASYNCIFY_STACK_SIZE=65536 -sALLOW_MEMORY_GROWTH -sINVOKE_RUN=0 -sEXIT_RUNTIME=1 -sMODULARIZE -sEXPORT_NAME=createFrotz -sEXPORTED_RUNTIME_METHODS=callMain,FS,IDBFS -sENVIRONMENT=web -lidbfs.js`.
 
 ## Serve
 
@@ -43,6 +45,14 @@ Cross-Origin-Embedder-Policy: require-corp
 ## How input works
 
 `os_read_line` and `os_read_key` call `EM_ASYNC_JS` functions that `await` a Promise from `app.js`. ASYNCIFY unwinds the C stack at that point, so `callMain` returns to the browser. The stack is rewound when the player presses Enter, or when a timed-input timer resolves the Promise with a timeout. Lines submitted while the interpreter is still busy are queued (type-ahead), not dropped.
+
+**Line input state.** `os_read_line` passes the line so far to the page, and the input field is set to it:
+
+- On a new read, that is the game's initial text (V5+ `read` with a pre-filled buffer, usually empty). The game has already printed it, so `web_os.c` takes it back out of the output buffer. The player edits it in the field, and on Enter the whole line is echoed once. If the text had already reached the page (the buffer was flushed in between), it is left there and only the rest is echoed. With no initial text, the field keeps anything the player has started typing (but not submitted) while the game was busy, unless it is just the partial line of a read that a timeout ended. That stale line is cleared.
+- On a timeout, the page returns what has been typed so far, and `os_read_line` puts it in `buf` and returns `ZC_TIME_OUT`. Nothing is echoed. The core runs the game's timeout routine. If the routine continues the read, the core calls `os_read_line` again with `continued` set and the partial line in `buf`, and the field still holds it. Text the routine printed is flushed first, so it appears before the line's echo. If the routine ends the read, the game gets the partial line as typed, and the next read replaces the field.
+- A line typed ahead (submitted while no read was waiting) was typed without the initial text in view, so it is taken as the whole line.
+
+This was checked in Node with the same objects and a scripted front end, using a small hand-assembled V5 story: initial text `abc`, a 1-second timed `aread`, and a timeout routine that prints `*` and continues the first time, then ends the read. Ending on the second timeout stored `abcXY` (length 5). Pressing Enter after one timeout echoed `*` and then `abcXZ`, and stored `abcxz`. Editing the initial text to `aBc` stored `abc`. That harness replaces `app.js`, so the input-field handling in `app.js` itself has not been run. Nothing has been tried in a browser with a real timed game.
 
 ## Upper window
 
@@ -100,7 +110,7 @@ Blorb-wrapped Z-code needs no extra code: `init_memory()` in `frotz/common/fastm
 - Z-code v3–v8 text games (tested with `Balances.z5`, v5).
 - Status line / upper window as a real fixed-pitch grid (see below).
 - Text styles and colours in both windows (see below).
-- Timed input (`read` with a timeout).
+- Timed line input (`read` with a timeout and a timeout routine), with V5+ initial text (see "Line input state"). This was checked in Node, not in a browser. Timed `read_char` uses the same timer but has not been tested.
 - `save`, `restore`, `undo`, `restart`, `quit`. Saves persist across reloads (see below).
 
 ## What does not work (yet)
@@ -111,7 +121,10 @@ Blorb-wrapped Z-code needs no extra code: `init_memory()` in `frotz/common/fastm
 - Games that position the cursor inside the lower window (window 0) still look wrong: window 0 is a reflowing stream, not a grid.
 - No visible cursor in the upper window, and no mouse/menu input.
 - Transcripts (`script`) and command recording write to MEMFS only.
+- A backspace in the output stream (`ZC_BACKSPACE`, rare in games) removes one whole character from text still in `web_os.c`'s output buffer, but cannot remove text already handed to the page. Text is flushed when the interpreter waits for input, when the style, font or colour changes, and when the 8 KB buffer fills.
 
 ## Games
 
 Every file in `games/` is a byte-for-byte copy of a file in `resources/Games`, which the iOS app already redistributes. The list, with authors, is in `games/stories.json`.
+
+Redistribution terms are in [`games/LICENSES.md`](games/LICENSES.md). *Balances* is one of Graham Nelson's Inform 6 example games, and the Inform licence lets anyone distribute those freely if the copy is unchanged (ours is byte-identical to the IF Archive's), the copyright messages are kept and no profit is involved. That file quotes the permission and shows how each condition is met. The terms of the other 20 stories have not been checked yet. Each needs the same evidence, or should be removed, before the web client is published.

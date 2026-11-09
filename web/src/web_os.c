@@ -40,6 +40,7 @@ char AUTOSAVE_FILE[MAX_FILE_NAME + 1] = "/saves/autosave.sav";
 int currTextStyle = 0;
 
 extern char save_name[], auxilary_name[], script_name[], command_name[];
+extern void flush_buffer(void);
 
 /* ---- JavaScript bridge ---- */
 
@@ -57,11 +58,18 @@ EM_JS(void, js_fatal, (const char *utf8), {
     Module.webFrotz.fatal(UTF8ToString(utf8));
 });
 
-/* Resolves to the UTF-8 byte length written into buf, or -1 on timeout. */
-EM_ASYNC_JS(int, js_read_line, (char *buf, int maxbytes, int timeout_ms), {
-    const line = await Module.webFrotz.readLine(timeout_ms);
-    if (line === null) return -1;
-    return stringToUTF8(line, buf, maxbytes);
+/* Reads a line. `initial` (UTF-8) is the text the line starts with: the
+   game's initial text on a new read, or the partial line on a read continued
+   after a timeout; the input field is set to it for editing. Resolves to the
+   UTF-8 byte length n of the whole line written into buf, as n if the player
+   pressed Enter, or as -(n + 1) if the read timed out (buf then holds the
+   partially typed line). */
+EM_ASYNC_JS(int, js_read_line, (char *buf, int maxbytes, int timeout_ms,
+                                const char *initial, int continued), {
+    const r = await Module.webFrotz.readLine(timeout_ms, UTF8ToString(initial),
+                                             continued !== 0);
+    const n = stringToUTF8(r.line, buf, maxbytes);
+    return r.timedOut ? -(n + 1) : n;
 });
 
 /* Screen size in characters that fits the page: (rows << 8) | cols. */
@@ -118,20 +126,29 @@ static void flush_output(void)
     out_len = 0;
 }
 
+/* Encode one 16-bit character as UTF-8 into dst (room for 3 bytes). */
+static int utf8_encode(unsigned int c, char *dst)
+{
+    if (c < 0x80) {
+        dst[0] = (char) c;
+        return 1;
+    } else if (c < 0x800) {
+        dst[0] = (char) (0xc0 | (c >> 6));
+        dst[1] = (char) (0x80 | (c & 0x3f));
+        return 2;
+    }
+    dst[0] = (char) (0xe0 | (c >> 12));
+    dst[1] = (char) (0x80 | ((c >> 6) & 0x3f));
+    dst[2] = (char) (0x80 | (c & 0x3f));
+    return 3;
+}
+
+/* Text is also flushed whenever the buffer fills. */
 static void out_utf8(unsigned int c)
 {
     if (out_len >= OUT_CAP)
         flush_output();
-    if (c < 0x80) {
-        out_buf[out_len++] = (char) c;
-    } else if (c < 0x800) {
-        out_buf[out_len++] = (char) (0xc0 | (c >> 6));
-        out_buf[out_len++] = (char) (0x80 | (c & 0x3f));
-    } else {
-        out_buf[out_len++] = (char) (0xe0 | (c >> 12));
-        out_buf[out_len++] = (char) (0x80 | ((c >> 6) & 0x3f));
-        out_buf[out_len++] = (char) (0x80 | (c & 0x3f));
-    }
+    out_len += utf8_encode(c, out_buf + out_len);
 }
 
 /* ---- Output: upper window grid ----
@@ -246,6 +263,10 @@ void os_display_string(const zchar *s)
 void os_backspace(void)
 {
     if (cwin == 0) {
+        /* Drop one whole UTF-8 character. Text already handed to the page
+           (flushed at a read, a style change or a full buffer) stays. */
+        while (out_len > 0 && (out_buf[out_len - 1] & 0xc0) == 0x80)
+            out_len--;
         if (out_len > 0)
             out_len--;
     } else if (cur_col > 0) {
@@ -256,7 +277,15 @@ void os_backspace(void)
 }
 
 bool os_check_unicode(unsigned int c) { (void) c; return TRUE; }
-int os_char_width(zchar c) { (void) c; return 1; }
+/* Must match what os_display_char emits. */
+int os_char_width(zchar c)
+{
+    if (c == ZC_INDENT)
+        return 3;
+    if (c == ZC_GAP)
+        return 2;
+    return 1;
+}
 
 int os_string_width(const zchar *s)
 {
@@ -395,28 +424,72 @@ static void before_input(void)
     flush_status();
 }
 
+/* Encode a zchar string as UTF-8 into dst (dstsize bytes); returns bytes. */
+static int zchars_to_utf8(const zchar *src, char *dst, int dstsize)
+{
+    int n = 0;
+    while (*src != 0 && n + 3 < dstsize)
+        n += utf8_encode(*src++, dst + n);
+    dst[n] = '\0';
+    return n;
+}
+
+/* Part of the current input line that is already in the transcript: the
+   game's initial text when it was flushed before we could take it back.
+   It is not echoed a second time. Kept across reads continued after a
+   timeout. */
+static zchar line_shown[INPUT_BUFFER_SIZE];
+static int line_shown_len = 0;
+
+/*
+ * On entry buf holds the line so far: initial text supplied by a V5+ game
+ * on a new read (continued == 0), or the partial line this function
+ * returned with ZC_TIME_OUT when the core continues the same read after a
+ * timeout routine (continued != 0). On return buf holds the whole line,
+ * terminated by ZC_RETURN, or the partial line with ZC_TIME_OUT.
+ */
 zchar os_read_line(int max, zchar *buf, int timeout, int width, int continued)
 {
     char line[4 * INPUT_BUFFER_SIZE];
-    int nbytes, i, n;
+    char initial[4 * INPUT_BUFFER_SIZE];
+    int nbytes, ilen, i, n, timed_out, skip;
     const unsigned char *p;
     (void) width;
+
+    ilen = zchars_to_utf8(buf, initial, (int) sizeof initial);
+    if (continued) {
+        /* The core does not flush text the timeout routine printed before
+           it continues the read, so it would land after this line's echo. */
+        flush_buffer();
+    } else {
+        /* The game printed its initial text before the read. Take it back
+           out of the output buffer so it is edited in the input field and
+           echoed once, as typed. If it has already reached the page, leave
+           it there and do not echo it again. */
+        line_shown_len = 0;
+        if (ilen > 0) {
+            if (out_len >= ilen && memcmp(out_buf + out_len - ilen, initial, (size_t) ilen) == 0) {
+                out_len -= ilen;
+            } else {
+                for (n = 0; buf[n] != 0 && n < INPUT_BUFFER_SIZE - 1; n++)
+                    line_shown[n] = buf[n];
+                line_shown_len = n;
+            }
+        }
+    }
 
     before_input();
 
     /* `timeout` is in tenths of a second; 0 means wait forever. */
-    nbytes = js_read_line(line, (int) sizeof line, timeout * 100);
+    nbytes = js_read_line(line, (int) sizeof line, timeout * 100, initial, continued);
     apply_resize();     /* so this turn's status redraw uses the new width */
-    if (nbytes < 0)
-        return ZC_TIME_OUT;
+    timed_out = nbytes < 0;
+    if (timed_out)
+        nbytes = -nbytes - 1;
 
-    /* With `continued` the buffer already holds the partial line typed before
-       a timeout; append to it. Otherwise start fresh. */
+    /* The page returns the whole line (initial or partial text included),
+       so it replaces buf. */
     n = 0;
-    if (continued)
-        while (buf[n] != 0)
-            n++;
-
     p = (const unsigned char *) line;
     for (i = 0; i < nbytes && n < max; ) {
         unsigned int c = p[i];
@@ -432,10 +505,24 @@ zchar os_read_line(int max, zchar *buf, int timeout, int width, int continued)
     }
     buf[n] = 0;
 
-    /* Echo the command into the transcript; the core then calls
-       screen_new_line, which reaches us as os_new_line(FALSE). */
+    /* On a timeout the partial line stays in the input field and in buf;
+       nothing is echoed. */
+    if (timed_out)
+        return ZC_TIME_OUT;
+
+    /* Echo the command into the transcript, less any part already shown;
+       the core then calls screen_new_line, which reaches us as
+       os_new_line(FALSE). */
+    skip = 0;
+    if (line_shown_len > 0) {
+        for (i = 0; i < line_shown_len && buf[i] == line_shown[i]; i++)
+            ;
+        if (i == line_shown_len)
+            skip = line_shown_len;
+        line_shown_len = 0;
+    }
     os_set_text_style(BOLDFACE_STYLE);
-    for (i = 0; buf[i] != 0; i++)
+    for (i = skip; buf[i] != 0; i++)
         out_utf8(buf[i]);
     os_set_text_style(0);
     return ZC_RETURN;
