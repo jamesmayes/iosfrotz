@@ -44,6 +44,14 @@ Cross-Origin-Embedder-Policy: require-corp
 
 `os_read_line` and `os_read_key` call `EM_ASYNC_JS` functions that `await` a Promise from `app.js`. ASYNCIFY unwinds the C stack at that point, so `callMain` returns to the browser. The stack is rewound when the player presses Enter, or when a timed-input timer resolves the Promise with a timeout. Lines submitted while the interpreter is still busy are queued (type-ahead), not dropped.
 
+## Upper window
+
+Window 1 (and the V3 status line, which Frotz draws in window 7) is a grid of `h_screen_rows` × `h_screen_cols` cells in `web_os.c`. Each cell holds a character and an attribute word (style, foreground and background colour). `os_set_cursor` positions writes, and `os_erase_area` and `os_scroll_area` act on the cells. When the interpreter waits for input, the grid goes to `app.js` in one call (pointers into the wasm heap), and it is drawn as rows of styled spans in a monospace font. So status lines, boxes, quotation boxes and menus keep their layout.
+
+**Screen size.** At load, `app.js` measures the grid font and picks as many columns as fit the reading column (at most 48rem, so about 79 at 15px). On a narrow screen it keeps at least 52 columns by shrinking the grid font (not the input). Rows come from the window height. The core reads this in `os_init_screen`.
+
+**Resize.** On a window resize the page refits the grid at once and passes the new column count to the core at its next read, both before the read and when the read returns, so the game's next status redraw uses it. `web_os.c` then sets `h_screen_cols`/`h_screen_width`, calls `resize_screen()` (the window sizes) and `restart_header()` (the header the game reads). Nothing is interrupted, so no `ZC_TIME_OUT` is sent. Only the width changes at runtime. The row count stays as sized at load, because shrinking it under a split upper window could leave the lower window with no rows. Most games redraw their status line every turn; an upper-window menu already on screen keeps its old layout (clipped) until the game redraws it.
+
 ## Stories
 
 The start screen lists `games/stories.json`. Picking a story sets the URL hash, for example `#story=Balances` (the file name without its extension, case-insensitive), so a link opens that story directly. Changing story while one is running reloads the page, since a story is loaded once per WebAssembly instance.
@@ -71,7 +79,7 @@ Blorb-wrapped Z-code needs no extra code: `init_memory()` in `frotz/common/fastm
 ## What works
 
 - Z-code v3–v8 text games (tested with `Balances.z5`, v5).
-- Status line / upper window, drawn as a monospaced grid above the transcript.
+- Status line / upper window as a real fixed-pitch grid (see below).
 - Text styles (bold, italic, fixed, reverse) as CSS classes.
 - Timed input (`read` with a timeout).
 - `save`, `restore`, `undo`, `restart`, `quit`. Saves persist across reloads (see below).
@@ -81,7 +89,8 @@ Blorb-wrapped Z-code needs no extra code: `init_memory()` in `frotz/common/fastm
 - There is no file-name prompt. Every save and restore uses `<story>.sav`.
 - No sound, no pictures (V6), no colours (colour is turned off in the header).
 - No `[MORE]` paging. The transcript just scrolls.
-- Upper-window games that position the cursor in window 0 or rely on `os_scroll_area` (cursor-driven layouts) will look wrong.
+- Games that position the cursor inside the lower window (window 0) still look wrong: window 0 is a reflowing stream, not a grid.
+- No visible cursor in the upper window, and no mouse/menu input.
 - Transcripts (`script`) and command recording write to MEMFS only.
 
 ## Games

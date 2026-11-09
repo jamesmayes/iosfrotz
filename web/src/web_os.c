@@ -51,10 +51,6 @@ EM_JS(void, js_clear, (void), {
     Module.webFrotz.clear();
 });
 
-EM_JS(void, js_status, (const char *utf8, int rows), {
-    Module.webFrotz.status(UTF8ToString(utf8), rows);
-});
-
 EM_JS(void, js_fatal, (const char *utf8), {
     Module.webFrotz.fatal(UTF8ToString(utf8));
 });
@@ -64,6 +60,16 @@ EM_ASYNC_JS(int, js_read_line, (char *buf, int maxbytes, int timeout_ms), {
     const line = await Module.webFrotz.readLine(timeout_ms);
     if (line === null) return -1;
     return stringToUTF8(line, buf, maxbytes);
+});
+
+/* Screen size in characters that fits the page: (rows << 8) | cols. */
+EM_JS(int, js_screen_size, (void), {
+    return Module.webFrotz.screenSize();
+});
+
+/* Non-zero (a new packed size) if the page was resized since last asked. */
+EM_JS(int, js_size_changed, (void), {
+    return Module.webFrotz.sizeChanged();
 });
 
 /* Flush /saves (IDBFS) to IndexedDB. Awaited, so a quit cannot race it. */
@@ -112,46 +118,82 @@ static void out_utf8(unsigned int c)
     }
 }
 
-/* ---- Output: upper window grid ---- */
+/* ---- Output: upper window grid ----
+ *
+ * Window 1 (and the V3 status line, window 7) is a fixed-pitch grid of
+ * screen rows x columns in absolute screen coordinates, which is what the
+ * core passes to os_set_cursor / os_erase_area / os_scroll_area. Each cell
+ * holds a character and an attribute word:
+ *
+ *     bits 0-7  text style (REVERSE / BOLDFACE / EMPHASIS / FIXED)
+ *     bits 8-15 foreground colour (Z-machine colour number, 1 = default)
+ *     bits 16-23 background colour
+ *
+ * The grid is handed to JavaScript (one call, pointers into the heap)
+ * whenever the interpreter waits for input.
+ */
 
-static unsigned short grid[MAX_ROWS][MAX_COLS];
-static int grid_height = 0;     /* rows in the upper window */
+static unsigned short grid_ch[MAX_ROWS][MAX_COLS];
+static unsigned int grid_attr[MAX_ROWS][MAX_COLS];
+static int grid_height = 0;     /* rows in the upper window (incl. V3 status) */
 static int cur_row = 0, cur_col = 0;
 static int grid_dirty = 1;
+static int cur_fg = DEFAULT_COLOUR, cur_bg = DEFAULT_COLOUR;
+
+static unsigned int cur_attr(void)
+{
+    return (unsigned int) (cur_style & 0xff) | ((unsigned int) cur_fg << 8)
+        | ((unsigned int) cur_bg << 16);
+}
+
+static unsigned int blank_attr(void)
+{
+    /* Erasing fills with the current background colour (spec 8.7.3.3). */
+    return ((unsigned int) DEFAULT_COLOUR << 8) | ((unsigned int) cur_bg << 16);
+}
+
+EM_JS(void, js_grid, (const unsigned short *ch, const unsigned int *attr,
+                      int rows, int cols, int stride), {
+    Module.webFrotz.grid(HEAPU16.subarray(ch >> 1, (ch >> 1) + rows * stride),
+                         HEAPU32.subarray(attr >> 2, (attr >> 2) + rows * stride),
+                         rows, cols, stride);
+});
 
 static void grid_put(unsigned int c)
 {
     if (cur_row >= 0 && cur_row < MAX_ROWS && cur_col >= 0 && cur_col < MAX_COLS) {
-        grid[cur_row][cur_col] = (unsigned short) c;
+        grid_ch[cur_row][cur_col] = (unsigned short) c;
+        grid_attr[cur_row][cur_col] = cur_attr();
         grid_dirty = 1;
     }
     cur_col++;
 }
 
+static void grid_clear(int top, int left, int bottom, int right)
+{
+    int r, c;
+    unsigned int a = blank_attr();
+    if (top < 1) top = 1;
+    if (left < 1) left = 1;
+    if (bottom > MAX_ROWS) bottom = MAX_ROWS;
+    if (right > MAX_COLS) right = MAX_COLS;
+    for (r = top - 1; r <= bottom - 1; r++)
+        for (c = left - 1; c <= right - 1; c++) {
+            grid_ch[r][c] = ' ';
+            grid_attr[r][c] = a;
+        }
+    grid_dirty = 1;
+}
+
 static void flush_status(void)
 {
-    static char sbuf[MAX_ROWS * (MAX_COLS * 3 + 1) + 1];
-    int r, c, n = 0, cols = h_screen_cols < MAX_COLS ? h_screen_cols : MAX_COLS;
-
+    int rows = grid_height < h_screen_rows ? grid_height : h_screen_rows;
     if (!grid_dirty)
         return;
-    for (r = 0; r < grid_height && r < MAX_ROWS; r++) {
-        for (c = 0; c < cols; c++) {
-            unsigned int ch = grid[r][c] ? grid[r][c] : ' ';
-            if (ch < 0x80) sbuf[n++] = (char) ch;
-            else if (ch < 0x800) {
-                sbuf[n++] = (char) (0xc0 | (ch >> 6));
-                sbuf[n++] = (char) (0x80 | (ch & 0x3f));
-            } else {
-                sbuf[n++] = (char) (0xe0 | (ch >> 12));
-                sbuf[n++] = (char) (0x80 | ((ch >> 6) & 0x3f));
-                sbuf[n++] = (char) (0x80 | (ch & 0x3f));
-            }
-        }
-        sbuf[n++] = '\n';
-    }
-    sbuf[n] = '\0';
-    js_status(sbuf, grid_height);
+    if (rows > MAX_ROWS)
+        rows = MAX_ROWS;
+    js_grid(&grid_ch[0][0], &grid_attr[0][0], rows,
+            h_screen_cols < MAX_COLS ? h_screen_cols : MAX_COLS, MAX_COLS);
     grid_dirty = 0;
 }
 
@@ -243,26 +285,32 @@ void os_split_win(int height)
 
 void os_erase_area(int top, int left, int bottom, int right, int windowNum)
 {
-    int r, c;
-    if (top == 1 && bottom == h_screen_rows && left == 1 && right == h_screen_cols) {
-        flush_output();
-        js_clear();
-    } else if (windowNum == 0) {
+    /* windowNum is 0 for erase_window(0) / erase_screen, the window number
+       for erase_window(n), and -1 for erase_line. Only a real erase of the
+       lower window clears the transcript. */
+    if (windowNum == 0) {
         flush_output();
         js_clear();
     }
-    for (r = top - 1; r <= bottom - 1 && r < MAX_ROWS; r++)
-        for (c = left - 1; c <= right - 1 && c < MAX_COLS; c++)
-            if (r >= 0 && c >= 0)
-                grid[r][c] = ' ';
-    grid_dirty = 1;
+    grid_clear(top, left, bottom, right);
 }
 
 void os_scroll_area(int top, int left, int bottom, int right, int units)
 {
-    /* The main window scrolls in the browser; the upper window never scrolls
-       in practice. Nothing to do for the spike. */
-    (void) top; (void) left; (void) bottom; (void) right; (void) units;
+    /* The lower window scrolls in the browser. A scroll inside the upper
+       window (rare: only if a game prints past its last row with scrolling
+       on) moves its rows up. */
+    int r, c;
+    if (top > grid_height || units <= 0)
+        return;
+    if (bottom > MAX_ROWS) bottom = MAX_ROWS;
+    if (right > MAX_COLS) right = MAX_COLS;
+    for (r = top - 1; r <= bottom - 1 - units; r++)
+        for (c = left - 1; c <= right - 1; c++) {
+            grid_ch[r][c] = grid_ch[r + units][c];
+            grid_attr[r][c] = grid_attr[r + units][c];
+        }
+    grid_clear(bottom - units + 1, left, bottom, right);
 }
 
 void os_set_text_style(int new_style)
@@ -311,8 +359,11 @@ int os_speech_output(const zchar *s) { (void) s; return 0; }
 
 /* ---- Input ---- */
 
+static void apply_resize(void);
+
 static void before_input(void)
 {
+    apply_resize();
     flush_output();
     flush_status();
 }
@@ -328,6 +379,7 @@ zchar os_read_line(int max, zchar *buf, int timeout, int width, int continued)
 
     /* `timeout` is in tenths of a second; 0 means wait forever. */
     nbytes = js_read_line(line, (int) sizeof line, timeout * 100);
+    apply_resize();     /* so this turn's status redraw uses the new width */
     if (nbytes < 0)
         return ZC_TIME_OUT;
 
@@ -368,6 +420,7 @@ zchar os_read_key(int timeout, int cursor)
     (void) cursor;
     before_input();
     key = js_read_key(timeout * 100);
+    apply_resize();
     if (key <= 0)
         return ZC_TIME_OUT;
     return (zchar) key;
@@ -439,6 +492,41 @@ void os_init_setup(void)
     f_setup.err_report_mode = ERR_REPORT_NEVER;
 }
 
+static void set_screen_size(int packed)
+{
+    int rows = (packed >> 8) & 0xff, cols = packed & 0xff;
+    if (rows < 10) rows = 10;
+    if (rows > MAX_ROWS) rows = MAX_ROWS;
+    if (cols < 20) cols = 20;
+    if (cols > MAX_COLS) cols = MAX_COLS;
+    h_screen_rows = (zbyte) rows;
+    h_screen_cols = (zbyte) cols;
+    h_screen_width = h_screen_cols;
+    h_screen_height = h_screen_rows;
+}
+
+extern void restart_header(void);
+
+/* Called before and after each read. The page has been resized, so tell the core: the
+   window sizes (resize_screen) and the header the game reads
+   (restart_header). The game picks the new width up when it next redraws
+   its status line or upper window; nothing is interrupted, so no
+   ZC_TIME_OUT is needed. Only the width changes at runtime; rows stay as
+   sized at load, because shrinking them under a split upper window could
+   leave the lower window with no rows. */
+static void apply_resize(void)
+{
+    int packed = js_size_changed();
+    int rows = h_screen_rows;
+    if (packed == 0)
+        return;
+    set_screen_size((rows << 8) | (packed & 0xff));
+    if (h_version != V6)
+        resize_screen();
+    restart_header();
+    grid_dirty = 1;
+}
+
 void os_init_screen(void)
 {
     if (h_version == V3)
@@ -452,10 +540,7 @@ void os_init_screen(void)
     if (h_version >= V5 && (h_flags & UNDO_FLAG) && f_setup.undo_slots == 0)
         h_flags &= ~UNDO_FLAG;
 
-    h_screen_rows = 25;
-    h_screen_cols = 80;
-    h_screen_width = h_screen_cols;
-    h_screen_height = h_screen_rows;
+    set_screen_size(js_screen_size());
     h_font_width = 1;
     h_font_height = 1;
 

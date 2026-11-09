@@ -3,7 +3,10 @@
 // The C side (web/src/web_os.c) calls into Module.webFrotz:
 //   output(text, style)  append text from the main window
 //   clear()              erase the main window
-//   status(text, rows)   replace the upper window / status line
+//   grid(ch, attr, rows, cols, stride)
+//                        redraw the upper window from the core's cell grid
+//   screenSize()         (rows << 8) | cols that fit the page, at start
+//   sizeChanged()        a new packed size after a resize, else 0
 //   readLine(ms)         Promise<string|null> (null = timed out)
 //   readKey(ms)          Promise<number>      (0 = timed out)
 //   fatal(msg)
@@ -12,7 +15,7 @@
 // interpreter's C stack is suspended until the player presses Enter.
 
 const transcriptEl = document.getElementById("transcript");
-const statusEl = document.getElementById("status");
+const upperEl = document.getElementById("status");
 const form = document.getElementById("command-form");
 const input = document.getElementById("command");
 const savesBtn = document.getElementById("saves-button");
@@ -34,6 +37,109 @@ function styleClass(style) {
   if (style & 8) c.push("s-fixed");
   return c.join(" ");
 }
+
+// ---- Upper window: a fixed-pitch grid ----
+//
+// The page picks the screen size in characters from its own width: as many
+// columns of the grid font as fit (at least MIN_COLS, shrinking the grid
+// font on narrow screens), and rows from the window height. On resize the
+// new column count is handed to the core at its next read.
+
+const GRID_PX = 15;           // grid font size before fitting
+const GRID_LINE = 1.25;       // grid line height, in em
+const MIN_COLS = 52;          // below 55 V3 games use the brief status line
+const MAX_COLS = 100, MAX_ROWS = 100; // web/shim/iosfrotz.h
+const COLUMN_PX = 768;        // max width of the reading column (48rem)
+
+let gridState = null;         // last grid from the core
+let reported = null;          // size last reported to the core
+let pendingSize = 0;
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function charWidth(px) {
+  const probe = document.createElement("span");
+  probe.className = "grid-probe";
+  probe.style.fontSize = px + "px";
+  probe.textContent = "0".repeat(100);
+  document.body.appendChild(probe);
+  const w = probe.getBoundingClientRect().width / 100;
+  probe.remove();
+  return w || px * 0.6;
+}
+
+function fitScreen() {
+  const avail = Math.min(document.documentElement.clientWidth, COLUMN_PX) - 32;
+  const chw = charWidth(GRID_PX);
+  let font = GRID_PX;
+  let cols = Math.floor(avail / chw);
+  if (cols < MIN_COLS) {
+    font = Math.max(9, (GRID_PX * avail) / (MIN_COLS * chw));
+    cols = Math.floor(avail / ((chw * font) / GRID_PX));
+  }
+  cols = clamp(cols, 20, MAX_COLS);
+  const rows = clamp(Math.floor(window.innerHeight / (font * GRID_LINE)), 20, MAX_ROWS);
+  return { rows, cols, font };
+}
+
+function applyGridFont(f) {
+  document.documentElement.style.setProperty("--grid-font", f.font.toFixed(2) + "px");
+}
+
+// Style bits 1 reverse, 2 bold, 4 emphasis, 8 fixed; see the attribute
+// layout in web_os.c (style | fg << 8 | bg << 16).
+function cellClass(a) {
+  return styleClass(a & 0xff);
+}
+
+function renderGrid() {
+  const g = gridState;
+  upperEl.textContent = "";
+  if (!g || g.rows === 0) {
+    upperEl.hidden = true;
+    return;
+  }
+  const cols = Math.min(g.cols, reported ? reported.cols : g.cols);
+  let anything = false;
+  for (let r = 0; r < g.rows; r++) {
+    const row = document.createElement("div");
+    row.className = "grid-row";
+    let c = 0;
+    while (c < cols) {
+      const a = g.attr[r * g.stride + c];
+      let text = "";
+      while (c < cols && g.attr[r * g.stride + c] === a) {
+        const ch = g.ch[r * g.stride + c];
+        text += ch ? String.fromCharCode(ch) : " ";
+        c++;
+      }
+      if (a & 0xff || text.trim()) anything = true;
+      const span = document.createElement("span");
+      const cls = cellClass(a);
+      if (cls) span.className = cls;
+      span.textContent = text;
+      row.appendChild(span);
+    }
+    upperEl.appendChild(row);
+  }
+  upperEl.style.setProperty("--cols", cols);
+  upperEl.hidden = !anything;
+}
+
+let resizeTimer = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (!reported) return;
+    const f = fitScreen();
+    applyGridFont(f);
+    if (f.cols !== reported.cols) {
+      reported = { ...reported, cols: f.cols };
+      pendingSize = (reported.rows << 8) | f.cols;
+    }
+    renderGrid(); // clip or re-centre now; the core redraws at its next turn
+  }, 150);
+});
 
 let pending = null; // { kind: "line"|"key", resolve, timer }
 // Lines submitted while the interpreter is busy (between resolving one read
@@ -71,10 +177,20 @@ const webFrotz = {
   clear() {
     transcriptEl.textContent = "";
   },
-  status(text, rows) {
-    const lines = text.split("\n").slice(0, rows);
-    statusEl.textContent = lines.map((l) => l.replace(/\s+$/, "")).join("\n");
-    statusEl.hidden = rows === 0 || lines.every((l) => l.trim() === "");
+  grid(ch, attr, rows, cols, stride) {
+    gridState = { ch: ch.slice(), attr: attr.slice(), rows, cols, stride };
+    renderGrid();
+  },
+  screenSize() {
+    const f = fitScreen();
+    reported = f;
+    applyGridFont(f);
+    return (f.rows << 8) | f.cols;
+  },
+  sizeChanged() {
+    const p = pendingSize;
+    pendingSize = 0;
+    return p;
   },
   readLine(ms) {
     if (typeAhead.length) return Promise.resolve(typeAhead.shift());
