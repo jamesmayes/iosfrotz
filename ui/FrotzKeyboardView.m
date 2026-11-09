@@ -4,6 +4,7 @@
 //
 
 #import "FrotzKeyboardView.h"
+#import "FrotzDebugSelfTest.h"
 
 static const CGFloat kMinKeyHeight = 36, kMaxKeyHeight = 64, kMaxFillKeyHeight = 96, kMaxCompactKeyHeight = 40;
 static const NSTimeInterval kRepeatDelay = 0.4, kRepeatInterval = 0.08;
@@ -263,9 +264,6 @@ static void FitLegendToHeight(UILabel *label) {
     BOOL m_inTouchDown;
     NSString *m_announcement;   // for VoiceOver once a layer or shift change is on screen
     CGRect m_keysFrame;         // the keys' extent, the keyboard's accessibility frame
-#if DEBUG
-    NSMutableArray<NSString *> *m_heldActions;
-#endif
 }
 
 -(instancetype)initWithLayout:(FrotzKeyboardLayout *)layout skin:(FrotzKeyboardSkin *)skin {
@@ -511,7 +509,7 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
 // rebuilt for it, otherwise (a skin with no shift layer) on its own.
 -(void)announceKeyboardState:(NSString *)announcement {
 #if DEBUG
-    NSLog(@"kba11y announce \"%@\" with %@", announcement, m_keysRebuilt ? @"layout change" : @"announcement");
+    [FrotzDebugSelfTest keyboardView: self willAnnounce: announcement withLayoutChange: m_keysRebuilt];
 #endif
     if (!UIAccessibilityIsVoiceOverRunning())
         return;
@@ -590,33 +588,10 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
     return nil;
 }
 
-#if DEBUG
-static NSString *PhaseName(UITouchPhase phase) {
-    switch (phase) {
-        case UITouchPhaseBegan: return @"began";
-        case UITouchPhaseMoved: return @"moved";
-        case UITouchPhaseStationary: return @"stationary";
-        case UITouchPhaseEnded: return @"ended";
-        case UITouchPhaseCancelled: return @"cancelled";
-        default: return [NSString stringWithFormat: @"phase%ld", (long)phase];
-    }
-}
-
--(void)logTouch:(UITouch *)touch key:(nullable FrotzKeyView *)keyView {
-    CGPoint pt = [touch locationInView: self];
-    NSLog(@"kbtouch %@ %@ key=%@ inside=%d", PhaseName(touch.phase), NSStringFromCGPoint(pt),
-          keyView ? keyView.key.label : @"(none)", keyView ? [self touch: touch isOnKey: keyView] : 0);
-}
-#define LOG_TOUCH(t, kv) [self logTouch: (t) key: (kv)]
-#else
-#define LOG_TOUCH(t, kv)
-#endif
-
 -(void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [m_feedback prepare];
     for (UITouch *touch in touches) {
         FrotzKeyView *kv = [self keyViewAtPoint: [touch locationInView: self]];
-        LOG_TOUCH(touch, kv);
         if (kv)
             [self keyTouchDown: kv touch: touch];
     }
@@ -627,7 +602,6 @@ static NSString *PhaseName(UITouchPhase phase) {
     // and sliding off a repeating key stops it for good.
     for (UITouch *touch in touches) {
         FrotzKeyTouch *press = [m_touchKeys objectForKey: touch];
-        LOG_TOUCH(touch, press.keyView);
         if (!press)
             continue;
         if (press == m_repeatPress && ![self touch: touch isOnKey: press.keyView])
@@ -639,7 +613,6 @@ static NSString *PhaseName(UITouchPhase phase) {
 -(void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     for (UITouch *touch in touches) {
         FrotzKeyTouch *press = [m_touchKeys objectForKey: touch];
-        LOG_TOUCH(touch, press.keyView);
         if (!press)
             continue;
         BOOL inside = [self touch: touch isOnKey: press.keyView];
@@ -651,7 +624,6 @@ static NSString *PhaseName(UITouchPhase phase) {
 -(void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     for (UITouch *touch in touches) {
         FrotzKeyTouch *press = [m_touchKeys objectForKey: touch];
-        LOG_TOUCH(touch, press.keyView);
         if (!press)
             continue;
         [m_touchKeys removeObjectForKey: touch];
@@ -833,7 +805,7 @@ static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
 -(void)performKey:(FrotzKeyboardKey *)key fromLayer:(NSString *)layer repeat:(BOOL)repeat {
     id<FrotzKeyboardViewDelegate> delegate = self.delegate;
 #if DEBUG
-    [m_heldActions addObject: key.action == FrotzKeyActionText ? key.text : [key.accessibilityName lowercaseString]];
+    [FrotzDebugSelfTest keyboardView: self willPerformKey: key];
 #endif
     switch (key.action) {
         case FrotzKeyActionText:
@@ -889,216 +861,5 @@ static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
             break;
     }
 }
-
-#if DEBUG
--(CGPoint)centerOfKeyWithLabel:(NSString *)label {
-    FrotzKeyView *kv = [self keyViewWithLabel: label];
-    return kv ? CGPointMake(CGRectGetMidX(kv.frame), CGRectGetMidY(kv.frame)) : CGPointMake(NAN, NAN);
-}
-
--(nullable NSString *)labelOfKeyAtPoint:(CGPoint)pt {
-    return [self keyViewAtPoint: pt].key.label;
-}
-
--(CGFloat)lowestKeyHitY {
-    CGFloat y = 0;
-    for (FrotzKeyView *kv in m_keyViews)
-        y = MAX(y, CGRectGetMaxY([self hitRectForKey: kv]));
-    return y;
-}
-
--(BOOL)holdKeyWithLabel:(NSString *)label forSeconds:(NSTimeInterval)seconds {
-    FrotzKeyView *kv = [self keyViewWithLabel: label];
-    if (!kv)
-        return NO;
-    // A stand-in for a finger: it owns the press, and so the repeat, until it lets go.
-    UITouch *touch = [[UITouch alloc] init];
-    m_heldActions = [NSMutableArray array];
-    [self keyTouchDown: kv touch: touch];
-    __weak FrotzKeyboardView *weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [weakSelf releaseHeldTouch: touch label: label];
-    });
-    return YES;
-}
-
--(void)releaseHeldTouch:(UITouch *)touch label:(NSString *)label {
-    FrotzKeyTouch *press = [m_touchKeys objectForKey: touch];
-    [m_touchKeys removeObjectForKey: touch];
-    if (press)
-        [self keyTouchUp: press touch: touch inside: YES];
-    NSCountedSet *counts = [[NSCountedSet alloc] initWithArray: m_heldActions];
-    NSMutableArray *parts = [NSMutableArray array];
-    for (NSString *action in counts)
-        [parts addObject: [NSString stringWithFormat: @"%@ x%lu", action, (unsigned long)[counts countForObject: action]]];
-    NSLog(@"kbhold %@ released%@: %@; layer=%@ shift=%d", label, press ? @"" : @" (already let go)",
-          [parts componentsJoinedByString: @", "], _keyLayer, (int)_shiftState);
-    m_heldActions = nil;
-}
-
--(nullable FrotzKeyView *)keyViewWithAction:(FrotzKeyAction)action {
-    for (FrotzKeyView *kv in m_keyViews)
-        if (kv.key.action == action)
-            return kv;
-    return nil;
-}
-
--(BOOL)tapKeyWithLabel:(NSString *)label {
-    FrotzKeyView *kv = [self keyViewWithLabel: label];
-    if (!kv)
-        return NO;
-    FrotzKeyTouch *press = [self keyTouchDown: kv touch: nil];
-    [self keyTouchUp: press touch: nil inside: YES];
-    return YES;
-}
-
-// A finger's press and release on the key with this label in the shown layer, for the overlap test.
--(nullable FrotzKeyTouch *)finger:(UITouch *)touch downOn:(NSString *)label {
-    FrotzKeyView *kv = [self keyViewWithLabel: label];
-    if (!kv) {
-        NSLog(@"kboverlap no key \"%@\" in layer %@", label, _keyLayer);
-        return nil;
-    }
-    return [self keyTouchDown: kv touch: touch];
-}
-
--(void)fingerUp:(UITouch *)touch {
-    FrotzKeyTouch *press = [m_touchKeys objectForKey: touch];
-    [m_touchKeys removeObjectForKey: touch];
-    if (press)
-        [self keyTouchUp: press touch: touch inside: YES];
-}
-
--(void)overlapCheck:(NSString *)name ok:(BOOL)ok detail:(NSString *)detail {
-    NSLog(@"kboverlap %@ %@: %@; actions=%@", name, ok ? @"PASS" : @"FAIL", detail, [m_heldActions componentsJoinedByString: @","]);
-    [m_heldActions removeAllObjects];
-}
-
--(void)runOverlapSelfTestWithShift:(NSString *)shift repeatKey:(NSString *)repeatLabel letter:(NSString *)letter backspace:(NSString *)backspace {
-    // Two stand-in fingers driven through the real press records, with the repeat timer's tick
-    // called directly, so overlaps that the one-key-at-a-time script can't make happen in order.
-    UITouch *a = [[UITouch alloc] init], *b = [[UITouch alloc] init];
-    NSString *upper = [letter uppercaseString];
-    [self releaseAllKeys];
-    self.shiftState = FrotzKeyboardShiftOff;
-    m_heldActions = [NSMutableArray array];
-
-    if (repeatLabel.length) {
-        // 1a. Shift, hold a shifted repeating key (it uses the shift up), Shift again with another
-        // finger mid-repeat: the repeats replay the held key and leave the new shift alone.
-        [self tapKeyWithLabel: shift];
-        FrotzKeyTouch *hold = [self finger: a downOn: repeatLabel];
-        [self repeatOnce]; [self repeatOnce];
-        [self finger: b downOn: shift]; [self fingerUp: b];
-        [self repeatOnce]; [self repeatOnce]; [self repeatOnce];
-        FrotzKeyboardShiftState during = _shiftState;
-        [self fingerUp: a];
-        [self overlapCheck: @"1a-repeat-keeps-new-shift" ok: hold && during == FrotzKeyboardShiftOneShot && _shiftState == FrotzKeyboardShiftOneShot
-                    detail: [NSString stringWithFormat: @"held %@ from layer %@; shift during repeat=%d after release=%d layer=%@",
-                             hold.key.accessibilityName, hold.layer, (int)during, (int)_shiftState, _keyLayer]];
-        [self tapKeyWithLabel: upper];
-        NSString *typed = m_heldActions.lastObject;
-        [self overlapCheck: @"1a-next-letter-shifted" ok: [typed isEqualToString: upper] && _shiftState == FrotzKeyboardShiftOff
-                    detail: [NSString stringWithFormat: @"typed %@ then shift=%d", typed, (int)_shiftState]];
-
-        // 1b. The same hold, and Shift double-tapped by the other finger mid-repeat reaches caps lock.
-        [self tapKeyWithLabel: shift];
-        [self finger: a downOn: repeatLabel];
-        [self repeatOnce];
-        [self finger: b downOn: shift]; [self fingerUp: b];
-        [self repeatOnce];
-        [self finger: b downOn: shift]; [self fingerUp: b];
-        [self repeatOnce]; [self repeatOnce];
-        during = _shiftState;
-        [self fingerUp: a];
-        [self overlapCheck: @"1b-double-tap-reaches-caps" ok: during == FrotzKeyboardShiftCapsLock && _shiftState == FrotzKeyboardShiftCapsLock
-                    detail: [NSString stringWithFormat: @"shift during repeat=%d after release=%d layer=%@", (int)during, (int)_shiftState, _keyLayer]];
-        [self tapKeyWithLabel: upper];
-        typed = m_heldActions.lastObject;
-        [self overlapCheck: @"1b-caps-types-upper" ok: [typed isEqualToString: upper] && _shiftState == FrotzKeyboardShiftCapsLock
-                    detail: [NSString stringWithFormat: @"typed %@ then shift=%d", typed, (int)_shiftState]];
-        self.shiftState = FrotzKeyboardShiftOff;
-    }
-
-    // 2a. Shift, hold a letter (its layer change waits for it), hold backspace with another finger,
-    // let the letter go: the layer is rebuilt and backspace keeps its press, mapping and repeat.
-    [self tapKeyWithLabel: shift];
-    [self finger: a downOn: upper];
-    FrotzKeyTouch *bs = [self finger: b downOn: backspace];
-    [self repeatOnce];
-    NSString *pendingBefore = m_pendingLayer;
-    [self fingerUp: a];
-    BOOL kept = bs && m_repeatTimer.valid && m_repeatPress == bs && [m_touchKeys objectForKey: b] == bs
-        && [m_keyViews containsObject: bs.keyView] && bs.keyView.pressed;
-    [self overlapCheck: @"2a-rebuild-keeps-other-finger" ok: kept && [_keyLayer isEqualToString: FrotzKeyboardLayerDefault]
-                detail: [NSString stringWithFormat: @"pending before release=%@ layer now=%@ timer=%d owner=%d mapped=%d onNewView=%d lit=%d",
-                         pendingBefore, _keyLayer, m_repeatTimer.valid, m_repeatPress == bs, [m_touchKeys objectForKey: b] == bs,
-                         [m_keyViews containsObject: bs.keyView], bs.keyView.pressed]];
-    [self repeatOnce];
-    [self fingerUp: b];
-    [self overlapCheck: @"2a-repeat-then-release" ok: !m_repeatTimer && !m_repeatPress && !bs.keyView.pressed
-                detail: [NSString stringWithFormat: @"timer=%d lit=%d", m_repeatTimer != nil, bs.keyView.pressed]];
-
-    // 2b. Hold backspace, tap Shift with another finger: the layer changes at once and backspace
-    // still repeats on the new layer's key.
-    bs = [self finger: a downOn: backspace];
-    [self finger: b downOn: shift]; [self fingerUp: b];
-    kept = bs && m_repeatTimer.valid && m_repeatPress == bs && [m_keyViews containsObject: bs.keyView] && bs.keyView.pressed;
-    [self repeatOnce];
-    [self overlapCheck: @"2b-layer-change-keeps-held-key" ok: kept && [_keyLayer isEqualToString: FrotzKeyboardLayerShift]
-                detail: [NSString stringWithFormat: @"layer now=%@ timer=%d owner=%d onNewView=%d lit=%d", _keyLayer,
-                         m_repeatTimer.valid, m_repeatPress == bs, [m_keyViews containsObject: bs.keyView], bs.keyView.pressed]];
-    [self fingerUp: a];
-
-    [self releaseAllKeys];
-    self.shiftState = FrotzKeyboardShiftOff;
-
-    // 3. A joined key (the IBM's tall Return): a press on either half is still on the key at the
-    // far end of the other half, past the release slop of its own half.
-    [self layoutIfNeeded]; // the keys were rebuilt above; join them
-    for (FrotzKeyView *kv in m_keyViews) {
-        FrotzKeyView *other = kv.joinedKey;
-        if (!other || CGRectGetMinY(other.frame) < CGRectGetMinY(kv.frame))
-            continue; // each pair once, from its upper half
-        CGPoint farLower = CGPointMake(CGRectGetMidX(other.frame), CGRectGetMaxY(other.frame) - 2);
-        CGPoint farUpper = CGPointMake(CGRectGetMidX(kv.frame), CGRectGetMinY(kv.frame) + 2);
-        CGPoint outside = CGPointMake(CGRectGetMaxX(other.frame) + kReleaseSlop + 4, farLower.y);
-        BOOL ok = [self point: farLower isOnKey: kv] && [self point: farUpper isOnKey: other] && ![self point: outside isOnKey: kv];
-        [self overlapCheck: @"3-joined-key-one-region" ok: ok
-                    detail: [NSString stringWithFormat: @"%@ upper %@ lower %@: upper press at %@ on=%d, lower press at %@ on=%d, %@ beside on=%d",
-                             kv.key.label, NSStringFromCGRect(kv.frame), NSStringFromCGRect(other.frame),
-                             NSStringFromCGPoint(farLower), [self point: farLower isOnKey: kv], NSStringFromCGPoint(farUpper),
-                             [self point: farUpper isOnKey: other], NSStringFromCGPoint(outside), [self point: outside isOnKey: kv]]];
-    }
-
-    // 4. Hold Return and backspace, tap 123 (Classic): the symbols rows differ, so each held key
-    // must move to its own key there, not to whatever sits in its old place.
-    FrotzKeyView *returnView = [self keyViewWithAction: FrotzKeyActionReturn], *symbolsView = [self keyViewWithAction: FrotzKeyActionSymbols];
-    if (returnView && symbolsView && [self keyViewWithLabel: backspace] && m_rows.layers[FrotzKeyboardLayerSymbols]) {
-        FrotzKeyTouch *ret = [self finger: a downOn: returnView.key.label];
-        bs = [self finger: b downOn: backspace];
-        [self tapKeyWithLabel: symbolsView.key.label];
-        [self layoutIfNeeded];
-        BOOL retOK = ret.keyView.key.action == FrotzKeyActionReturn && [m_keyViews containsObject: ret.keyView] && ret.keyView.pressed;
-        BOOL bsOK = bs.keyView.key.action == FrotzKeyActionBackspace && [m_keyViews containsObject: bs.keyView] && bs.keyView.pressed
-            && m_repeatPress == bs;
-        [self overlapCheck: @"4-symbols-remaps-held-keys" ok: [_keyLayer isEqualToString: FrotzKeyboardLayerSymbols] && retOK && bsOK
-                    detail: [NSString stringWithFormat: @"layer=%@ return on \"%@\" onNewView=%d lit=%d; backspace on \"%@\" onNewView=%d lit=%d owner=%d",
-                             _keyLayer, ret.keyView.key.label, [m_keyViews containsObject: ret.keyView], ret.keyView.pressed,
-                             bs.keyView.key.label, [m_keyViews containsObject: bs.keyView], bs.keyView.pressed, m_repeatPress == bs]];
-        [self repeatOnce];
-        [self fingerUp: a];
-        [self fingerUp: b];
-        // The repeat sends backspace, Return's release sends return.
-        NSString *sent = [m_heldActions componentsJoinedByString: @","];
-        NSString *expected = [NSString stringWithFormat: @"%@,%@", [bs.key.accessibilityName lowercaseString], [ret.key.accessibilityName lowercaseString]];
-        [self overlapCheck: @"4-held-keys-act-as-pressed" ok: [sent isEqualToString: expected] && !ret.keyView.pressed && !bs.keyView.pressed
-                    detail: [NSString stringWithFormat: @"expected %@, lit after release=%d,%d", expected, ret.keyView.pressed, bs.keyView.pressed]];
-        [self tapKeyWithLabel: [self keyViewWithAction: FrotzKeyActionLetters].key.label];
-    }
-    m_heldActions = nil;
-    NSLog(@"kboverlap done");
-}
-#endif
 
 @end

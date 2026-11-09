@@ -19,23 +19,15 @@
 
 // The hinge state comes from UIHingeInteraction (UIHingeInteraction.h, UIHinge.h) and the fold from
 // the view's division reserved regions (UIViewReservedRegion.h, UIView (ReservedRegion)), all iOS 27.1.
-//
-// DEBUG builds only, so every layout can be tried on a simulator without a hinge to turn. Read once in
-// -start; when set they win over the real API:
-//   FROTZ_FAKE_POSTURE=closed|partial|open
-//   FROTZ_FAKE_FOLD_Y=<points>  centre of the fake fold from the top of the view (default: half the
-//                               view height). The fake fold is 24pt tall and full width; none when closed.
+// In DEBUG, FROTZ_FAKE_POSTURE can stand in for both (FrotzDebugSelfTest.m).
 
 #import "FrotzPostureObserver.h"
+#import "FrotzDebugSelfTest.h"
 
 #if defined(__IPHONE_27_1) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 270100
 #define FROTZ_HAS_HINGE_API 1
 #else
 #define FROTZ_HAS_HINGE_API 0
-#endif
-
-#if DEBUG
-static const CGFloat kFakeFoldHeight = 24.0;
 #endif
 
 @implementation FrotzPostureObserver {
@@ -46,11 +38,6 @@ static const CGFloat kFakeFoldHeight = 24.0;
     BOOL m_started;
     NSUInteger m_generation; // bumped on start and stop, so a hinge update queued before either is dropped
     NSObject *m_hingeInteraction; // a UIHingeInteraction; untyped so the ivar builds against older SDKs
-#if DEBUG
-    BOOL m_faking;
-    FrotzPosture m_fakePosture;
-    CGFloat m_fakeFoldY; // < 0: middle of the view
-#endif
 }
 
 -(instancetype)initWithView:(UIView *)view {
@@ -94,11 +81,7 @@ static const CGFloat kFakeFoldHeight = 24.0;
     m_started = YES;
     NSUInteger generation = ++m_generation;
 #if DEBUG
-    [self readFakePosture];
-    if (m_faking) {
-        [self refresh];
-        return;
-    }
+    if ([FrotzDebugSelfTest startFakePostureForObserver: self]) return; // FROTZ_FAKE_POSTURE replaces the hinge
 #endif
 #if FROTZ_HAS_HINGE_API
     if (@available(iOS 27.1, *)) {
@@ -140,13 +123,13 @@ static const CGFloat kFakeFoldHeight = 24.0;
     NSAssert([NSThread isMainThread], @"FrotzPostureObserver is main-thread only");
     if (!m_started)
         return;
+    FrotzPosture posture = m_posture;
+    CGFloat angle = m_hingeAngle;
+    CGRect fold = [self activeFoldFrame];
 #if DEBUG
-    if (m_faking) {
-        [self updatePosture:m_fakePosture angle:[self angleForFakePosture] fold:[self fakeFoldFrame]];
-        return;
-    }
+    [FrotzDebugSelfTest replacePosture: &posture angle: &angle fold: &fold inView: m_view];
 #endif
-    [self updatePosture:m_posture angle:m_hingeAngle fold:[self activeFoldFrame]];
+    [self updatePosture:posture angle:angle fold:fold];
 }
 
 #if FROTZ_HAS_HINGE_API
@@ -194,47 +177,5 @@ static const CGFloat kFakeFoldHeight = 24.0;
     m_foldFrame = fold;
     [self.delegate postureObserverDidChange: self];
 }
-
-#if DEBUG
--(void)readFakePosture {
-    NSDictionary<NSString *, NSString *> *env = [[NSProcessInfo processInfo] environment];
-    NSString *posture = [env[@"FROTZ_FAKE_POSTURE"] lowercaseString];
-    m_faking = YES;
-    if ([posture isEqualToString: @"closed"])
-        m_fakePosture = FrotzPostureClosed;
-    else if ([posture isEqualToString: @"partial"])
-        m_fakePosture = FrotzPosturePartiallyOpen;
-    else if ([posture isEqualToString: @"open"])
-        m_fakePosture = FrotzPostureFullyOpen;
-    else
-        m_faking = NO;
-    // The whole value must be a finite number; anything else falls back to the middle.
-    NSScanner *scanner = [NSScanner scannerWithString: env[@"FROTZ_FAKE_FOLD_Y"] ?: @""];
-    double foldY;
-    m_fakeFoldY = -1;
-    if ([scanner scanDouble: &foldY] && scanner.isAtEnd && isfinite(foldY) && foldY >= 0)
-        m_fakeFoldY = foldY;
-    else if (env[@"FROTZ_FAKE_FOLD_Y"])
-        NSLog(@"FROTZ_FAKE_FOLD_Y=\"%@\" is not a number of points; using the middle", env[@"FROTZ_FAKE_FOLD_Y"]);
-}
-
--(CGFloat)angleForFakePosture {
-    switch (m_fakePosture) {
-        case FrotzPostureClosed:        return 0;
-        case FrotzPosturePartiallyOpen: return 90;
-        case FrotzPostureFullyOpen:     return 180;
-        default:                        return 0;
-    }
-}
-
--(CGRect)fakeFoldFrame {
-    UIView *view = m_view;
-    if (!view || m_fakePosture == FrotzPostureClosed || m_fakePosture == FrotzPostureUnknown)
-        return CGRectNull;
-    CGRect bounds = view.bounds;
-    CGFloat centreY = m_fakeFoldY >= 0 ? m_fakeFoldY : bounds.size.height / 2;
-    return CGRectMake(bounds.origin.x, bounds.origin.y + centreY - kFakeFoldHeight / 2, bounds.size.width, kFakeFoldHeight);
-}
-#endif
 
 @end

@@ -74,9 +74,6 @@
 - (void)colorPicker:(ColorPicker*)picker selectedColor:(UIColor*)color;
 @property (nonatomic, readonly, copy) UIFont *fontForColorDemo;
 - (void)updateAccessibility;
-#if DEBUG
--(FrotzKeyboardStylePicker*)showKeyboardStylePicker;    // the Keyboard style row's tap, for the settings self-test
-#endif
 
 @end
 

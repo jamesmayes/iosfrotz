@@ -2094,12 +2094,6 @@ static const CGFloat kRTSplitSlop = 0.5; // line positions are fractional; a lin
     return pt;
 }
 
-#ifdef DEBUG
--(CGRect)selectionFrame {
-    return m_selectionView.superview == self ? m_selectionPresentedFrame : CGRectNull;
-}
-#endif
-
 -(void)scrollRectToVisible:(CGRect)rect animated:(BOOL)animated {
     // Text below the split shows lower than its position.
     rect.size.height += [self foldBandLoss];

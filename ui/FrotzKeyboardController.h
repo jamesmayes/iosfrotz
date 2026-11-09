@@ -44,10 +44,6 @@ NS_ASSUME_NONNULL_BEGIN
 // first responder from the input line; otherwise nothing should raise a keyboard.
 -(void)notesPageDidBecomeVisibleKeyboardFollows:(BOOL)keyboardFollows;
 -(void)inputLineDidBeginEditing;                                 // shows the keyboard unless locked or mid-restore
-#if DEBUG
-/// Applies FROTZ_INAPP_KEYBOARD (a skin id, or "system") the first time it is called; YES if that loaded a keyboard.
--(BOOL)applySkinFromEnvironment;
-#endif
 @end
 
 NS_ASSUME_NONNULL_END

@@ -31,9 +31,6 @@ NS_ASSUME_NONNULL_BEGIN
 -(instancetype)initWithCoder:(NSCoder *)coder NS_UNAVAILABLE;
 @property (nonatomic, weak, nullable) id<FrotzSettingsStoryDelegate> storyDelegate;
 +(NSString *)displayNameForStyle:(nullable NSString *)skinID;   // the settings row's detail text
-#if DEBUG
--(void)selectRow:(NSInteger)row;                                 // what a tap on that row does
-#endif
 @end
 
 NS_ASSUME_NONNULL_END

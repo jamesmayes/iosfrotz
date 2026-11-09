@@ -644,14 +644,5 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
     }
 }
 
-#if DEBUG
--(FrotzKeyboardStylePicker*)showKeyboardStylePicker {
-    NSIndexPath *indexPath = [self keyboardStyleIndexPath];
-    [m_tableView scrollToRowAtIndexPath: indexPath atScrollPosition: UITableViewScrollPositionMiddle animated: NO];
-    [self tableView: m_tableView didSelectRowAtIndexPath: indexPath];
-    return m_keyboardStylePicker;
-}
-#endif
-
 @end
 

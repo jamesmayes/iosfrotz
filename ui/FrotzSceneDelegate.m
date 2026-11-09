@@ -15,6 +15,7 @@
 #import "StoryDetailsController.h"
 #import "FrotzDB.h"
 #import "FrotzAlert.h"
+#import "FrotzDebugSelfTest.h"
 
 @interface FrotzWindow : UIWindow
 {
@@ -71,17 +72,7 @@ static void FrotzResetRecognizers(UITouch *touch, UIView *routedRoot) {
     if (!routedTouches)
         routedTouches = [NSMapTable weakToWeakObjectsMapTable];
 #if DEBUG
-    // Shows which view a touch on the in-app keyboard really reaches, for touches the keyboard never sees.
-    FrotzKeyboardView *keyboard = [[[theStoryBrowser storyMainViewController] valueForKey: @"m_keyboardController"] keyboardView];
-    if (keyboard && !keyboard.hidden && event.type == UIEventTypeTouches) {
-        for (UITouch *touch in [event allTouches]) {
-            CGPoint pt = [touch locationInView: keyboard];
-            if (touch.phase != UITouchPhaseMoved && touch.phase != UITouchPhaseStationary && [keyboard pointInside: pt withEvent: event])
-                NSLog(@"kbtouch window phase=%ld view=%@ at %@ tapCount=%lu", (long)touch.phase,
-                      touch.view == keyboard ? @"keyboard" : NSStringFromClass([touch.view class]), NSStringFromCGPoint(pt),
-                      (unsigned long)touch.tapCount);
-        }
-    }
+    [FrotzDebugSelfTest window: self willSendEvent: event];
 #endif
     NSMapTable<UITouch *, UIView *> *consumed = ConsumedTouches();
     NSSet<UITouch *> *touches = [event allTouches];
@@ -188,18 +179,7 @@ static void FrotzResetRecognizers(UITouch *touch, UIView *routedRoot) {
     for (UIOpenURLContext *context in connectionOptions.URLContexts)
         [self handleOpenURLContext: context];
 #if DEBUG
-    // FROTZ_SELFTEST_STORY=<story file> opens it as a file handed to Frotz would be, so the
-    // self-tests can reach the story screen on a fresh simulator that can't be tapped. A session
-    // waiting to be restored already gets there, and launching over it lands on the story list.
-    NSString *selfTestStory = [[NSProcessInfo processInfo] environment][@"FROTZ_SELFTEST_STORY"];
-    if (selfTestStory.length && ![[m_browser storyMainViewController] willAutoRestoreSession: YES]) {
-        [m_browser setLaunchPath: selfTestStory keepOriginal: YES];
-        NSString *launchPath = [m_browser launchPath];
-        if (launchPath) {
-            [m_browser setStoryDetails: [[StoryInfo alloc] initWithPath: launchPath browser: m_browser]];
-            [m_browser performSelector: @selector(launchStory:) withObject: launchPath afterDelay: 0.05];
-        }
-    }
+    [FrotzDebugSelfTest openStoryAtLaunchWithBrowser: m_browser];
 #endif
 
     [window makeKeyAndVisible];

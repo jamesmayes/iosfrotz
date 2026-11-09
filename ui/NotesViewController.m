@@ -8,6 +8,7 @@
 
 #import "iosfrotz.h"
 #import "NotesViewController.h"
+#import "FrotzDebugSelfTest.h"
 
 #define kNotesLandscapeInset 40
 
@@ -275,7 +276,7 @@ static const int kNotesTitleHeight = 24;
         return;
     m_notesPageShown = notesVisible;
 #if DEBUG
-    NSLog(@"kbpage %@ via %@", notesVisible ? @"notes" : @"story", site);
+    [FrotzDebugSelfTest notesPageDidChange: notesVisible via: site];
 #endif
     if ([m_delegate respondsToSelector: @selector(notesPageDidBecomeVisible:keyboardFollows:)])
         [m_delegate notesPageDidBecomeVisible: notesVisible keyboardFollows: keyboardFollows];
