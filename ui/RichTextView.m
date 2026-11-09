@@ -47,6 +47,7 @@ static BOOL hasAccessibility;
 @property(assign) NSInteger textIndex;
 @property(assign) NSInteger aeIndex;
 @property(assign) NSUInteger runCount;
+-(CGRect)textFrame;
 @end
 
 @implementation RichTextTile
@@ -59,9 +60,26 @@ static BOOL hasAccessibility;
 }
 @end
 
-@implementation RichTextView
+typedef NS_ENUM(NSInteger, RTFoldBandEdge) { RTFoldBandInside, RTFoldBandAtTop, RTFoldBandAtBottom };
+static NSString *const kRTTextFrameKey = @"frotzTextFrame"; // an inline picture's frame in text coordinates
+static const CGFloat kRTSplitSlop = 0.5; // line positions are fractional; a line ending at the split is above it
+
+@implementation RichTextView {
+    CGRect m_foldExclusionRect;
+    CGFloat m_bandTop, m_bandHeight;
+    CGFloat m_bandInset;              // what the band added to contentInset.bottom
+    UIView *m_lowerTileContainerView; // the text from the band down, drawn lower by m_lowerShift
+    CGFloat m_lowerShift;
+    CALayer *m_upperMask, *m_lowerMask;
+    RTFoldBandEdge m_bandEdge;        // where the band meets the view: inside it, or over its top or bottom edge
+    CGRect m_selectionTextFrame;      // the selection label in text coordinates, before the band offset
+    CGRect m_selectionPresentedFrame; // where it was put for that; once the controller animates it away, it's left alone
+    NSMutableArray<UIImageView *> *m_imageClones; // the lower parts of pictures the split cuts
+}
 
 @synthesize tileSize = m_tileSize;
+@synthesize foldBandTop = m_bandTop;
+@synthesize foldBandHeight = m_bandHeight;
 @synthesize textRuns = m_textRuns;
 @synthesize lastPt = m_lastPt;
 @synthesize controller = m_controller;
@@ -311,7 +329,7 @@ static BOOL hasAccessibility;
 -(CGRect)visibleRect {
     CGRect frame = self.frame;
     CGPoint ofst = self.contentOffset;
-    return CGRectMake(ofst.x, ofst.y, frame.size.width, frame.size.height);
+    return CGRectMake(ofst.x, ofst.y, frame.size.width, frame.size.height - [self foldBandLoss]);
 }
 
 @synthesize textColor=m_fgColor;
@@ -333,6 +351,7 @@ static BOOL hasAccessibility;
             m_currBgColor = m_bgColor;
         
         [m_tileContainerView setBackgroundColor: m_bgColor];
+        [m_lowerTileContainerView setBackgroundColor: m_bgColor];
     }
     [self reloadData];
 }
@@ -431,6 +450,7 @@ static BOOL hasAccessibility;
         m_reusableTiles = [[NSMutableSet alloc] init];
         m_tileContainerView = [[UIView alloc] initWithFrame:frame];
         [self addSubview: m_tileContainerView];
+        m_foldExclusionRect = CGRectNull;
         
         //	m_tileContainerView.opaque = NO;
         //	m_tileContainerView.clearsContextBeforeDrawing = YES;
@@ -612,6 +632,7 @@ static BOOL hasAccessibility;
         m_currBgColor = m_bgColor;
     [super setBackgroundColor: m_currBgColor];
     [m_tileContainerView setBackgroundColor: m_currBgColor];
+    [m_lowerTileContainerView setBackgroundColor: m_currBgColor];
     
     m_firstVisibleTextRunIndex = 0;
     m_prevPt = m_lastPt = CGPointMake(m_leftMargin, 0);
@@ -665,7 +686,10 @@ static BOOL hasAccessibility;
 }
 
 - (void) drawRect:(CGRect)rect inView:(RichTextTile*)view {
+    // Tiles below a fold band sit lower than the text they show.
+    CGFloat shift = view.superview == m_lowerTileContainerView ? m_lowerShift : 0;
     CGRect myRect = [view convertRect: rect toView: self];
+    myRect.origin.y -= shift;
     CGRect frame = self.frame;
     int curImageIndex = 0;
     myRect.size.width = frame.size.width;
@@ -766,6 +790,7 @@ static BOOL hasAccessibility;
         }
         //CGPoint opt = pt;
         pt = [self convertPoint:pt toView:view];
+        pt.y += shift;
         //NSLog(@"i=%d opt=(%f,%f) pt=(%f,%f), fg=%@ bg=%@ usebg=%d s=%x v=%@ t=[%@]", i, opt.x, opt.y, pt.x, pt.y, fgColor, bgColor, useBGColor, style, view, text);
         int lineNum = [m_textLineNum[i] intValue];
         [self wordWrapTextSize:text atPoint:&pt font:font style:style fgColor:fgColor bgColor:useBGColor ? bgColor:nil withRect:myRect 
@@ -801,7 +826,9 @@ static BOOL hasAccessibility;
             //NSLog(@"findhot:[%@]", [text substringToIndex:termRange.location]);
             if (prevRange.length)
                 ++prevRange.location;
-            [m_selectionView setFrame: CGRectMake(minXPos+pos.x+prevWidth, pos.y, textSize.width-prevWidth, fontHeight)];
+            m_selectionTextFrame = CGRectMake(minXPos+pos.x+prevWidth, pos.y, textSize.width-prevWidth, fontHeight);
+            m_selectionPresentedFrame = [self presentedRectForTextRect: m_selectionTextFrame]; // below the split, drawn lower
+            [m_selectionView setFrame: m_selectionPresentedFrame];
             [m_selectionView setFont: font];
             NSString *selectedText = [text substringWithRange: NSMakeRange(prevRange.location, termRange.location-prevRange.location)];
             m_selectedColumnRange = NSMakeRange(charsDone + prevRange.location, termRange.location-prevRange.location);
@@ -1571,8 +1598,12 @@ static BOOL hasAccessibility;
         totalLineHeight += size.height - textLineHeight;
     }
     if (imageView) {
-        imageView.frame = CGRectMake(ipt.x, m_topMargin+ipt.y, size.width, size.height);
+        CGRect textFrame = CGRectMake(ipt.x, m_topMargin+ipt.y, size.width, size.height);
+        [imageView.layer setValue: [NSValue valueWithCGRect: textFrame] forKey: kRTTextFrameKey];
+        imageView.frame = textFrame;
         [self addSubview: imageView];
+        if (m_bandHeight > 0)
+            [self setNeedsLayout]; // layoutFoldBandOverlays shows it where the text around it is drawn
     }
     if ((imageAlign & kFTInMargin))
         return NO;
@@ -1743,8 +1774,13 @@ static BOOL hasAccessibility;
     
     if (m_freezeDisplay)
         return;
+    [self syncFoldBandInset]; // a font or spacing change alters the line the band adds
     // recycle all tiles so that every tile will be replaced in the next layoutSubviews
     for (UIView *view in [m_tileContainerView subviews]) {
+        [m_reusableTiles addObject:view];
+        [view removeFromSuperview];
+    }
+    for (UIView *view in [m_lowerTileContainerView subviews]) {
         [m_reusableTiles addObject:view];
         [view removeFromSuperview];
     }
@@ -1780,20 +1816,292 @@ static BOOL hasAccessibility;
     if (!tile)
         tile = [self dequeueReusableTile];
     
-    if (!tile) {
-        // the scroll view will handle setting the tile's frame, so we don't have to worry about it
-        tile = [[RichTextTile alloc] initWithFrame:CGRectZero];
-        [tile setBackgroundColor: m_currBgColor ? m_currBgColor : m_bgColor];
-        [tile setTextView: self];
-        
-        // Some of the tiles won't be completely filled, because they're on the right or bottom edge.
-        // By default, the image would be stretched to fill the frame of the image view, but we don't
-        // want this. Setting the content mode to "top left" ensures that the images around the edge are
-        // positioned properly in their tiles. 
-        [tile setContentMode:UIViewContentModeTopLeft]; 
-    }
-    
+    if (!tile)
+        tile = [self newTile];
     return tile;
+}
+
+- (RichTextTile *)newTile {
+    // the scroll view will handle setting the tile's frame, so we don't have to worry about it
+    RichTextTile *tile = [[RichTextTile alloc] initWithFrame:CGRectZero];
+    [tile setBackgroundColor: m_currBgColor ? m_currBgColor : m_bgColor];
+    [tile setTextView: self];
+    
+    // Some of the tiles won't be completely filled, because they're on the right or bottom edge.
+    // By default, the image would be stretched to fill the frame of the image view, but we don't
+    // want this. Setting the content mode to "top left" ensures that the images around the edge are
+    // positioned properly in their tiles. 
+    [tile setContentMode:UIViewContentModeTopLeft]; 
+    return tile;
+}
+
+#pragma mark Fold band
+
+-(CGRect)foldExclusionRect {
+    return m_foldExclusionRect;
+}
+
+-(void)setFoldExclusionRect:(CGRect)rect {
+    m_foldExclusionRect = rect;
+    [self updateFoldBand];
+}
+
+// The band is the part of the fold over this view. A Glk buffer can start or end within the fold,
+// so it may cover the view's top edge (all the text goes below it) or its bottom edge (the view
+// ends at it). Inside the view, the text above it stays where it is and the rest goes below it.
+-(void)updateFoldBand {
+    CGRect frame = self.frame;
+    CGFloat top = 0, height = 0;
+    RTFoldBandEdge edge = RTFoldBandInside;
+    if (!CGRectIsNull(m_foldExclusionRect) && !CGRectIsEmpty(m_foldExclusionRect) && frame.size.height > 0) {
+        CGFloat bandTop = MAX(0, CGRectGetMinY(m_foldExclusionRect) - frame.origin.y);
+        CGFloat bandBottom = MIN(frame.size.height, CGRectGetMaxY(m_foldExclusionRect) - frame.origin.y);
+        if (bandBottom > bandTop) {
+            top = bandTop;
+            height = bandBottom - bandTop;
+            edge = bandBottom >= frame.size.height ? RTFoldBandAtBottom : bandTop <= 0 ? RTFoldBandAtTop : RTFoldBandInside;
+        }
+    }
+    if (top == m_bandTop && height == m_bandHeight && edge == m_bandEdge) {
+        [self syncFoldBandInset];
+        return;
+    }
+    // The view shows that much less, so the end of the text has to be able to scroll further up.
+    // A view showing the end (as the story controller scrolls to it) keeps showing it.
+    CGFloat endOffset = self.contentSize.height - [self visibleRect].size.height;
+    BOOL atEnd = endOffset > 0 && self.contentOffset.y >= endOffset - 1;
+    m_bandTop = top;
+    m_bandHeight = height;
+    m_bandEdge = edge;
+    [self syncFoldBandInset];
+    if (atEnd)
+        [self setContentOffset: CGPointMake(self.contentOffset.x, MAX(0, self.contentSize.height - [self visibleRect].size.height))];
+    if (height > 0 && !m_lowerTileContainerView) {
+        m_lowerTileContainerView = [[UIView alloc] initWithFrame: CGRectZero];
+        [m_lowerTileContainerView setBackgroundColor: m_currBgColor ? m_currBgColor : m_bgColor];
+        [self insertSubview: m_lowerTileContainerView aboveSubview: m_tileContainerView];
+        m_upperMask = [CALayer layer];
+        m_upperMask.backgroundColor = [UIColor blackColor].CGColor;
+        m_lowerMask = [CALayer layer];
+        m_lowerMask.backgroundColor = [UIColor blackColor].CGColor;
+        m_lowerTileContainerView.layer.mask = m_lowerMask;
+    }
+    m_lowerTileContainerView.hidden = height == 0;
+    m_tileContainerView.layer.mask = height > 0 ? m_upperMask : nil;
+    [self reloadData];
+}
+
+// Keeps the bottom content inset in step with the band and the line height (the font can change).
+-(void)syncFoldBandInset {
+    CGFloat loss = [self foldBandLoss];
+    if (loss == m_bandInset)
+        return;
+    UIEdgeInsets inset = self.contentInset;
+    inset.bottom = MAX(0, inset.bottom - m_bandInset + loss);
+    m_bandInset = loss;
+    self.contentInset = inset;
+}
+
+-(CGFloat)foldLineHeight {
+    return m_fontHeight + m_extraLineSpacing;
+}
+
+// How much lower the text below the split is drawn. Inside the view that is the band plus one line,
+// always: the line the band's top would cut goes below it whole, and the gap stays the same height
+// as the text scrolls. Over an edge nothing is split, so it is the band alone.
+-(CGFloat)foldLowerShift {
+    if (m_bandHeight <= 0)
+        return 0;
+    return m_bandEdge == RTFoldBandInside ? m_bandHeight + [self foldLineHeight] : m_bandHeight;
+}
+
+// How much less of the text the view shows. Because the shift is constant, the end of the text
+// scrolls to exactly the bottom of the view, with no gap under the last line.
+-(CGFloat)foldBandLoss {
+    return [self foldLowerShift];
+}
+
+// Where the text splits, in content coordinates, for the current scroll position: the start of the
+// line the band's top falls on (a straight split at the band for a picture taller than a line).
+// Over the top edge everything is below the split; over the bottom edge the view simply ends.
+-(CGFloat)foldSplitY {
+    CGRect bounds = self.bounds;
+    if (m_bandEdge == RTFoldBandAtTop)
+        return MIN(0, bounds.origin.y);
+    CGFloat bandY = bounds.origin.y + m_bandTop;
+    if (m_bandEdge == RTFoldBandAtBottom)
+        return bandY;
+    CGFloat splitY = [self lineTopAtY: bandY];
+    if (bandY - splitY > [self foldLineHeight]) // a picture, not a line of text
+        splitY = bandY;
+    return splitY;
+}
+
+// The top of the line at this height in the text, or y itself before the first line.
+-(CGFloat)lineTopAtY:(CGFloat)y {
+    NSUInteger lo = 0, hi = [m_lineYPos count];
+    while (lo < hi) { // the first line starting below y
+        NSUInteger mid = (lo + hi) / 2;
+        if ([m_lineYPos[mid] floatValue] + m_topMargin <= y)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    // The line being written (the prompt) may not be in the table yet.
+    CGFloat top = lo > 0 ? [m_lineYPos[lo-1] floatValue] + m_topMargin : -1;
+    CGFloat current = m_lastPt.y + m_topMargin;
+    if (current <= y && current > top)
+        top = current;
+    return top >= 0 ? top : y;
+}
+
+// The one mapping between the text and where it is drawn (both in content coordinates), used in
+// both directions so that drawing, overlays and hit testing agree. Text from the split down is
+// drawn lower by the shift. Drawn, that text starts at the split plus the shift (or at the band's
+// bottom, over the top edge), so everything from the split to there (the band, and the blank strip
+// either side of it) is the gap, which has no text: NAN y.
+-(CGFloat)foldMapY:(CGFloat)y toPresented:(BOOL)toPresented {
+    if (m_bandHeight <= 0 || isnan(y))
+        return y;
+    CGFloat splitY = [self foldSplitY], shift = [self foldLowerShift];
+    if (toPresented)
+        return y >= splitY - kRTSplitSlop ? y + shift : y;
+    CGFloat lowerTop = MAX(splitY + shift, self.bounds.origin.y + m_bandTop + m_bandHeight);
+    if (y >= lowerTop)
+        return y - shift;
+    return y >= splitY ? NAN : y;
+}
+
+// Where a rectangle of text (content coordinates) is drawn: lower by the shift from the split down.
+// A rectangle running across the split (a paragraph, for VoiceOver) grows by the shift.
+-(CGRect)presentedRectForTextRect:(CGRect)rect {
+    if (m_bandHeight <= 0 || CGRectIsNull(rect))
+        return rect;
+    CGFloat minY = CGRectGetMinY(rect), maxY = CGRectGetMaxY(rect) - 2 * kRTSplitSlop;
+    CGFloat moved = [self foldMapY: minY toPresented: YES] - minY;
+    if (moved > 0)
+        return CGRectOffset(rect, 0, moved);
+    rect.size.height += [self foldMapY: maxY toPresented: YES] - maxY;
+    return rect;
+}
+
+// Above the band the tiles sit where they always do. The text from the split down is drawn by a
+// second set of tiles below the band. Each set is masked to its side.
+-(void)layoutFoldBandTiles {
+    CGRect bounds = self.bounds;
+    CGFloat tileWidth = self.tileSize.width, tileHeight = self.tileSize.height;
+    CGFloat splitY = [self foldSplitY];
+    CGFloat shift = [self foldLowerShift];
+    CGFloat maxY = CGRectGetMaxY(bounds) - shift;
+    CGFloat width = MAX(bounds.size.width, self.contentSize.width);
+    m_lowerShift = shift; // the tiles draw relative to it, so moving them needs no redraw
+    m_lowerTileContainerView.frame = CGRectOffset(m_tileContainerView.frame, 0, shift);
+    [CATransaction begin];
+    [CATransaction setDisableActions: YES];
+    m_upperMask.frame = CGRectMake(0, MIN(0, bounds.origin.y), width, MAX(0, splitY - MIN(0, bounds.origin.y)));
+    m_lowerMask.frame = CGRectMake(0, splitY, width, MAX(0, maxY - splitY));
+    [CATransaction commit];
+
+    CGRect needed = CGRectMake(bounds.origin.x, splitY, bounds.size.width, MAX(0, maxY - splitY));
+    for (UIView *tile in [m_lowerTileContainerView subviews]) {
+        if (!CGRectIntersectsRect(CGRectInset(tile.frame, 0, -2), needed)) {
+            [m_reusableTiles addObject: tile];
+            [tile removeFromSuperview];
+        }
+    }
+    if (maxY <= splitY)
+        return;
+    CGSize contentSize = self.contentSize;
+    int maxRow = floorf((contentSize.height-1) / tileHeight), maxCol = floorf((contentSize.width-1) / tileWidth);
+    int firstRow = MAX(0, floorf(splitY / tileHeight)), lastRow = MIN(maxRow, floorf(maxY / tileHeight));
+    int firstCol = MAX(0, floorf(bounds.origin.x / tileWidth)), lastCol = MIN(maxCol, floorf(CGRectGetMaxX(bounds) / tileWidth));
+    for (int row = firstRow; row <= lastRow; row++) {
+        for (int col = firstCol; col <= lastCol; col++) {
+            CGPoint center = CGPointMake(tileWidth * (col+0.5), tileHeight * (row+0.5));
+            BOOL present = NO;
+            for (UIView *tile in [m_lowerTileContainerView subviews])
+                if (CGPointEqualToPoint(tile.center, center)) {
+                    present = YES;
+                    break;
+                }
+            if (present)
+                continue;
+            RichTextTile *tile = [self dequeueReusableTile] ?: [self newTile];
+            [tile setCenter: center];
+            [tile setBounds: CGRectMake(0, 0, tileWidth, tileHeight)];
+            [m_lowerTileContainerView addSubview: tile];
+            [tile setNeedsDisplay];
+        }
+    }
+}
+
+-(CALayer *)foldMaskWithFrame:(CGRect)frame {
+    CALayer *mask = [CALayer layer];
+    mask.backgroundColor = [UIColor blackColor].CGColor;
+    mask.frame = frame;
+    return mask;
+}
+
+// Pictures and the selection label are views over the tiles, placed in text coordinates. Show them
+// where the text around them is drawn. A picture the split runs through is shown in two parts,
+// each masked to its side, as the tiles are.
+-(void)layoutFoldBandOverlays {
+    NSUInteger clones = 0;
+    CGFloat splitY = m_bandHeight > 0 ? [self foldSplitY] : CGFLOAT_MAX, shift = [self foldLowerShift];
+    [CATransaction begin];
+    [CATransaction setDisableActions: YES];
+    for (UIImageView *imageView in m_imageviews) {
+        NSValue *value = [imageView.layer valueForKey: kRTTextFrameKey];
+        if (!value || imageView.superview != self)
+            continue;
+        CGRect rect = [value CGRectValue];
+        imageView.layer.mask = nil;
+        if (CGRectGetMaxY(rect) <= splitY + kRTSplitSlop)
+            imageView.frame = rect;
+        else if (CGRectGetMinY(rect) >= splitY - kRTSplitSlop)
+            imageView.frame = CGRectOffset(rect, 0, shift);
+        else {
+            CGFloat above = splitY - rect.origin.y;
+            imageView.frame = rect;
+            imageView.layer.mask = [self foldMaskWithFrame: CGRectMake(0, 0, rect.size.width, above)];
+            if (!m_imageClones)
+                m_imageClones = [NSMutableArray array];
+            if (clones == m_imageClones.count)
+                [m_imageClones addObject: [[UIImageView alloc] initWithFrame: CGRectZero]];
+            UIImageView *lower = m_imageClones[clones++];
+            lower.image = imageView.image;
+            lower.frame = CGRectOffset(rect, 0, shift);
+            lower.layer.mask = [self foldMaskWithFrame: CGRectMake(0, above, rect.size.width, rect.size.height - above)];
+            if (lower.superview != self)
+                [self insertSubview: lower aboveSubview: imageView];
+        }
+    }
+    for (NSUInteger i = clones; i < m_imageClones.count; i++)
+        [m_imageClones[i] removeFromSuperview];
+    if (m_selectionView.superview == self && CGRectEqualToRect(m_selectionView.frame, m_selectionPresentedFrame)) {
+        m_selectionPresentedFrame = [self presentedRectForTextRect: m_selectionTextFrame];
+        m_selectionView.frame = m_selectionPresentedFrame;
+    }
+    [CATransaction commit];
+}
+
+// Where a point in the view falls in the text: NAN y anywhere in the gap at the band, which shows
+// no text (the band, the blank strip under it, and the part above it that the split hides).
+-(CGPoint)textPointForPoint:(CGPoint)pt {
+    pt.y = [self foldMapY: pt.y toPresented: NO];
+    return pt;
+}
+
+#ifdef DEBUG
+-(CGRect)selectionFrame {
+    return m_selectionView.superview == self ? m_selectionPresentedFrame : CGRectNull;
+}
+#endif
+
+-(void)scrollRectToVisible:(CGRect)rect animated:(BOOL)animated {
+    // Text below the split shows lower than its position.
+    rect.size.height += [self foldBandLoss];
+    [super scrollRectToVisible: rect animated: animated];
 }
 
 - (void)layoutSubviews {
@@ -1804,6 +2112,11 @@ static BOOL hasAccessibility;
     CGRect visibleBounds = [self bounds];
     float scaledTileWidth  = [self tileSize].width;
     float scaledTileHeight = [self tileSize].height;
+    if (m_bandHeight > 0) {
+        [self layoutFoldBandTiles];
+        visibleBounds.size.height = m_bandTop; // the rest is the lower container's
+    }
+    [self layoutFoldBandOverlays];
 
     // first recycle all tiles that are no longer visible
     for (UIView *tile in [m_tileContainerView subviews]) {
@@ -1922,6 +2235,7 @@ static BOOL hasAccessibility;
         [super setFrame: frame];
         [self setNiceMargins:NO];
         [m_tileContainerView setFrame: CGRectMake(0, 0, frame.size.height, frame.size.width)];
+        [self updateFoldBand];
         if (oldFrame.size.width != frame.size.width) {
             [self reflowText];
             [self repositionAfterReflow];
@@ -2177,8 +2491,9 @@ static BOOL EndsWithSentenceBreak(NSString *text) {
     if (index < 0 || index >= [m_accessibilityElements count])
         return; // the elements were cleared since it was accessed
     RichTextAE *e = m_accessibilityElements[index];
-    CGRect frame = e.accessibilityFrame;
-    frame = [self.window convertRect: frame toView:self];
+    CGRect frame = [e textFrame]; // scrollRectToVisible: allows for the band itself
+    if (CGRectIsNull(frame))
+        return;
     [self scrollRectToVisible: frame animated:NO];
     //NSLog(@"accscrolltovis %d (%0.f,%0.f) (%0.f,%0.f,%0.f,%0.f)", index, self.contentOffset.x, self.contentOffset.y, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
 }
@@ -2201,6 +2516,9 @@ static BOOL EndsWithSentenceBreak(NSString *text) {
 }
 
 -(NSInteger) getTextRunAtPoint:(CGPoint)touchPoint {
+    touchPoint = [self textPointForPoint: touchPoint];
+    if (isnan(touchPoint.y))
+        return -1;
     NSUInteger i, l = MIN([m_textRuns count], MIN([m_textPos count], [m_textStyles count]));
     CGPoint lastUniqPt = CGPointMake(0,0), pt, nextPos;
     NSInteger lastUniqIndex = 0;
@@ -2316,20 +2634,16 @@ static BOOL EndsWithSentenceBreak(NSString *text) {
 @synthesize aeIndex = m_aeIndex;
 @synthesize runCount = m_runCount;
 
--(CGRect)accessibilityFrame {
-    //NSLog(@"accframe %d", m_aeIndex);
+// The element's text in the view's content coordinates, before the band offset; CGRectNull if gone.
+-(CGRect)textFrame {
     RichTextView *v = [self accessibilityContainer];
-    v.lastAEIndexAccessed = m_aeIndex;
-    
-    // update frame lazily when accessed, so we don't have to recalculate them all
-    // when you reorient the device
     NSInteger startIndex = m_textIndex;
     NSUInteger runCount = m_runCount;
     NSArray *textPos = [v getTextPos];
     NSUInteger count = [textPos count];
     NSInteger endIndex = startIndex + runCount-1;
     if (!count || startIndex >= count || endIndex >= count)
-        return CGRectZero;
+        return CGRectNull;
     CGPoint p = [textPos[startIndex] CGPointValue];
     CGPoint p2 = endIndex < count-1 ? [textPos[endIndex+1] CGPointValue] : [v lastPt];
     if (p.x <= [v leftMargin])
@@ -2342,7 +2656,20 @@ static BOOL EndsWithSentenceBreak(NSString *text) {
         p.x = 0;
         width = v.frame.size.width;
     }
-    CGRect r = CGRectMake(p.x, p.y + [v topMargin], width, height);
+    return CGRectMake(p.x, p.y + [v topMargin], width, height);
+}
+
+-(CGRect)accessibilityFrame {
+    //NSLog(@"accframe %d", m_aeIndex);
+    RichTextView *v = [self accessibilityContainer];
+    v.lastAEIndexAccessed = m_aeIndex;
+    
+    // update frame lazily when accessed, so we don't have to recalculate them all
+    // when you reorient the device
+    CGRect r = [self textFrame];
+    if (CGRectIsNull(r))
+        return CGRectZero;
+    r = [v presentedRectForTextRect: r]; // where it is drawn: lower from the fold band's split down
     
     UIWindow *window = [[self accessibilityContainer] window];
     r = [v convertRect:r toView:window];

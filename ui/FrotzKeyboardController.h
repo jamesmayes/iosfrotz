@@ -25,8 +25,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @class StoryMainViewController;
 
-// Owns the in-app keyboard and decides where it sits: below the fold on a half-open iPhone Duo,
-// docked at the bottom everywhere else. The story controller learns only the region it covers.
+// Owns the in-app keyboard and decides where it sits: below the fold on a half-open iPhone Duo
+// (or, in Flow, compact at the bottom with the story around the fold), docked at the bottom everywhere else. The story controller learns only the region it covers.
 @interface FrotzKeyboardController : NSObject <FrotzPostureObserverDelegate, FrotzKeyboardViewDelegate>
 -(instancetype)initWithStoryController:(StoryMainViewController *)smvc postureObserver:(FrotzPostureObserver *)observer NS_DESIGNATED_INITIALIZER;
 -(instancetype)init NS_UNAVAILABLE;
@@ -38,6 +38,7 @@ NS_ASSUME_NONNULL_BEGIN
 -(void)hideAnimated:(BOOL)animated;
 -(void)toggleAnimated:(BOOL)animated;
 -(void)layoutIfNeeded;                                           // after the story view's layout; re-docks only when the target frame changed
+-(void)layoutModeDidChange;                                      // the Duo layout mode pref changed (Classic split / Flow)
 -(void)storyPageDidBecomeVisible;                                // the notes page hands the keyboard back
 // The notes text view uses the system keyboard meanwhile. keyboardFollows: it is about to take
 // first responder from the input line; otherwise nothing should raise a keyboard.

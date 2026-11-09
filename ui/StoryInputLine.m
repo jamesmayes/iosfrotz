@@ -140,7 +140,42 @@
         ihpt = CGPointMake(100, ypos);
     // point is bottom-LEFT of helper view; 140 is height of helper
     if (ihpt.y < 140) ihpt.y = 140;
+    // Flow: keep the helper off the fold band. It stays under the band when it fits between the band and
+    // the input line; otherwise it goes to whichever side has more room, and the history list is sized to it.
+    m_inputHelper.maxHeight = 0;
+    CGRect band = [storyController foldExclusionInView: parentView];
+    if (!CGRectIsNull(band) && ihpt.y > CGRectGetMinY(band)) {
+        const CGFloat helperHeight = 140, historyRaise = 10; // the history list sits 10 higher; see handleTouch:
+        CGFloat below = ihpt.y - CGRectGetMaxY(band) - historyRaise, above = CGRectGetMinY(band) - historyRaise;
+        if (below < helperHeight && above > below) {
+            ihpt.y = CGRectGetMinY(band);
+            m_inputHelper.maxHeight = above;
+        } else
+            m_inputHelper.maxHeight = MAX(1, below);
+    }
     return ihpt;
+}
+
+// Flow: a completion label that would sit on the fold band (the lower half is short) goes just above
+// it, or just below it when there is no room above, kept within the view either way. When neither
+// side has room it is hidden rather than cover the band; its text still drives the completion.
+-(void)placeCompletionLabelAt:(CGPoint)origin inView:(UIView *)view {
+    CGFloat height = m_completionLabel.frame.size.height;
+    StoryMainViewController *storyController = (StoryMainViewController*)[m_storyView delegate];
+    CGRect band = [storyController foldExclusionInView: view];
+    BOOL fits = YES;
+    if (!CGRectIsNull(band) && origin.y < CGRectGetMaxY(band) && origin.y + height > CGRectGetMinY(band)) {
+        CGRect bounds = view.bounds;
+        CGFloat above = CGRectGetMinY(band) - height - 2, below = CGRectGetMaxY(band) + 2;
+        if (above >= CGRectGetMinY(bounds))
+            origin.y = above;
+        else if (below + height <= CGRectGetMaxY(bounds))
+            origin.y = below;
+        else
+            fits = NO;
+    }
+    [m_completionLabel setOrigin: origin];
+    m_completionLabel.hidden = !fits;
 }
 
 -(void)launchInputHelper:(id)unused {
@@ -336,7 +371,12 @@ BOOL cursorVisible = YES;
 #endif
         myFrame.origin.x = frame.origin.x + cursorPt.x - bounds.origin.x;
         myFrame.origin.y = frame.origin.y + cursorPt.y - bounds.origin.y;
-        if (myFrame.origin.y > frame.origin.y + frame.size.height - [controller fontSize])
+        // Flow layout: a cursor in or below the fold band would put the line under the hinge or off
+        // the bottom, so it docks just above the keyboard.
+        CGRect docked = [controller dockedInputFrameForTextView: curTextView];
+        if (!CGRectIsNull(docked) && cursorPt.y - bounds.origin.y + [[self font] lineHeight] > [curTextView foldBandTop])
+            myFrame.origin.y = docked.origin.y;
+        else if (myFrame.origin.y > frame.origin.y + frame.size.height - [controller fontSize])
             cursorVisible = NO;
     }
     
@@ -347,9 +387,9 @@ BOOL cursorVisible = YES;
 
     [self setFrame: myFrame];
     if (m_completionLabel) {
-        CGRect labelFrame = [m_completionLabel frame];
-        labelFrame.origin.y = myFrame.origin.y - myFrame.size.height-pad-4;
-        [m_completionLabel setOrigin: labelFrame.origin];
+        CGPoint labelOrigin = [m_completionLabel frame].origin;
+        labelOrigin.y = myFrame.origin.y - myFrame.size.height-pad-4;
+        [self placeCompletionLabelAt: labelOrigin inView: [self superview]];
     }
 
 
@@ -585,7 +625,7 @@ const int kCompletionViewTag = 21;
             frame.size = textSize;
             frame.origin.y = -frame.size.height-4;
             frame = [self convertRect:frame toView:parentView];
-            [m_completionLabel setOrigin: frame.origin];
+            [self placeCompletionLabelAt: frame.origin inView: parentView];
             [parentView addSubview: m_completionLabel];
         } else {
             [m_completionLabel removeFromSuperview];

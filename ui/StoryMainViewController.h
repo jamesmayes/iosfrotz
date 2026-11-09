@@ -123,6 +123,8 @@ extern StoryBrowser *theStoryBrowser;
     FrotzKeyboardController *m_keyboardController;
     NSString *m_keyboardStyle;      // the player's choice; nil = system keyboard
     NSString *m_duoLayoutMode;      // "classic" or "flow"
+    CGRect m_foldExclusionFrame;
+    CGRect m_keyboardRegionFrame;   // the reported keyboard region in self.view coordinates; CGRectNull when hidden
     NSTimeInterval m_animDuration;
     NSString *m_launchMessage;
 
@@ -224,6 +226,15 @@ extern StoryBrowser *theStoryBrowser;
 -(void)keyboardRegionWillChange:(CGRect)frameInView visible:(BOOL)visible source:(FrotzKeyboardSource)source animationDuration:(NSTimeInterval)duration;
 -(void)keyboardRegionDidChange:(CGRect)frameInView visible:(BOOL)visible source:(FrotzKeyboardSource)source;
 @property (nonatomic, readonly) FrotzKeyboardSource activeKeyboardSource;
+/// The fold band the story text flows around in the Flow layout, in self.view coordinates; CGRectNull
+/// otherwise. Applied to the story view and Glk text buffer windows (grid windows keep their geometry).
+@property (nonatomic) CGRect foldExclusionFrame;
+/// The fold band in another view's coordinates; CGRectNull when there is none.
+-(CGRect)foldExclusionInView:(UIView *)view;
+/// Where the input line docks when the cursor in this text view would fall in or below the fold band (or the
+/// band covers the view's edge): the line just above the keyboard region, in the input line's superview's
+/// coordinates. CGRectNull when the view has no band.
+-(CGRect)dockedInputFrameForTextView:(UIView *)textView;
 -(void)setInAppKeyboardActive:(BOOL)active;   // YES: suppress the system keyboard (empty inputView on the input line) while the input line stays first responder; NO: restore
 @property (nonatomic, readonly, strong) NotesViewController<FrotzFontDelegate> *notesController;
 @property (nonatomic, readonly) BOOL splashVisible;

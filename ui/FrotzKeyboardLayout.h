@@ -55,6 +55,8 @@ extern NSString *const FrotzKeyboardLayerSymbols;
 @property (nonatomic, readonly) NSUInteger maxRowCount;
 @property (nonatomic, readonly) CGFloat keyAspect;
 @property (nonatomic, readonly) CGFloat gap;
+/// The few-row keyboard for a Flow layout: the file's "compact" layers, else made from these.
+@property (nonatomic, readonly, strong, nullable) FrotzKeyboardLayout *compactLayout;
 -(NSUInteger)rowCountForLayer:(NSString *)layer;
 @end
 

@@ -165,6 +165,19 @@ typedef UIImage *__nonnull(*__nonnull RichDataGetImageCallback)(int imageNum);
 @property (nonatomic, getter=getSaveDataDict, readonly, copy) NSDictionary *saveDataDict;
 - (void)restoreFromSaveDataDict: (NSDictionary*)saveData;
 @property (nonatomic, readonly) CGPoint cursorPoint;
+// A band (a foldable's hinge) the text must not be drawn in, in the superview's coordinates; CGRectNull
+// for none. It stays put while the text scrolls: what would fall in it is drawn below it instead.
+@property (nonatomic, assign) CGRect foldExclusionRect;
+@property (nonatomic, readonly) CGFloat foldBandTop;    // from the top of the view; height 0 = no band
+@property (nonatomic, readonly) CGFloat foldBandHeight;
+// Where a rectangle of text (content coordinates) is drawn: lower from the band's split down.
+-(CGRect)presentedRectForTextRect:(CGRect)rect;
+#ifdef DEBUG
+@property (nonatomic, readonly) CGFloat foldSplitY;      // content coordinates, for the current scroll position
+@property (nonatomic, readonly) CGFloat foldLowerShift;
+-(CGPoint)textPointForPoint:(CGPoint)pt;                 // NAN y in the gap at the band
+@property (nonatomic, readonly) CGRect selectionFrame;   // where the selection label was put, CGRectNull if none
+#endif
 @end
 
 NS_ASSUME_NONNULL_END

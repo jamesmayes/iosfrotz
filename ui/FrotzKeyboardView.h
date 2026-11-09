@@ -38,6 +38,8 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardShiftState) {
 @property (nonatomic) CGFloat topInset;
 /// Keys grow to fill the view's height (up to 96 pt) rather than keep their natural height.
 @property (nonatomic) BOOL fillsHeight;
+/// The layout's compact rows at no more than 40 pt a key, for a Flow layout. Default NO.
+@property (nonatomic) BOOL compact;
 @property (nonatomic, copy) NSString *keyLayer;   // FrotzKeyboardLayerDefault / Shift / Symbols ("layer" is UIView's)
 @property (nonatomic) FrotzKeyboardShiftState shiftState;
 #if DEBUG

@@ -92,11 +92,13 @@ const CGFloat kHistoryLineHeight = 20.0;
     if (m_mode == FrotzInputHelperModeNone) {
         [self hideInputHelper];
     } else if (m_mode == FrotzInputHelperModeWords) {
-        CGRect wpFrame = [m_wordPicker frame];
-        wpFrame.origin = pt;
-        wpFrame.origin.y -= wpFrame.size.height;
+        // pt is the picker's bottom-left. Where the space to a fold band is shorter than the picker,
+        // it is drawn smaller to fit, rather than over the band or off the screen.
+        CGSize size = [m_wordPicker bounds].size;
+        CGFloat scale = self.maxHeight > 0 && size.height > self.maxHeight ? self.maxHeight / size.height : 1;
         [tableView removeFromSuperview];
-        [m_wordPicker setFrame: wpFrame];
+        [m_wordPicker setTransform: CGAffineTransformMakeScale(scale, scale)];
+        [m_wordPicker setCenter: CGPointMake(pt.x + size.width * scale / 2, pt.y - size.height * scale / 2)];
         float alpha = [m_wordPicker alpha];
         [m_wordPicker setAlpha: 0.0];
         [UIView beginAnimations:nil context:NULL];
@@ -122,6 +124,10 @@ const CGFloat kHistoryLineHeight = 20.0;
             if (nLines > maxLines)
                 nLines = maxLines;
         }
+        if (self.maxHeight > 0) // the space between the anchor and a fold band
+            nLines = MIN(nLines, (NSUInteger)MAX(1, floor((self.maxHeight - 2) / kHistoryLineHeight) - 1));
+        if (self.maxHeight > 0 && self.maxHeight < kHistoryLineHeight + 2)
+            nLines = 0; // not even one row fits there
         if (nLines > 0) {
             [tableView reloadData];
             
@@ -140,6 +146,8 @@ const CGFloat kHistoryLineHeight = 20.0;
             [UIView setAnimationDuration:0.1];
             
             frame.size.height = kHistoryLineHeight * (nLines+1) + 2;
+            if (self.maxHeight > 0 && frame.size.height > self.maxHeight)
+                frame.size.height = self.maxHeight; // a short space to a fold band: the list scrolls
             pt.y -= frame.size.height;
             frame.origin = pt;
             [tableView setFrame: frame];

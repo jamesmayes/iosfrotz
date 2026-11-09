@@ -254,10 +254,6 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
 - (void)duoLayoutAction:(UISegmentedControl*)sender
 {
     [m_storyDelegate setDuoLayoutMode: sender.selectedSegmentIndex == 1 ? @"flow" : @"classic"];
-    // the footer mentions Flow only while it's chosen
-    [UIView performWithoutAnimation:^{
-        [m_tableView reloadSections: [NSIndexSet indexSetWithIndex: kFrotzKeyboardSection] withRowAnimation: UITableViewRowAnimationNone];
-    }];
 }
 
 - (void)switchAction:(id)sender
@@ -430,10 +426,7 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
 {
     if (section != kFrotzKeyboardSection)
         return nil;
-    NSString *footer = NSLocalizedString(@"In-app keyboards are drawn by Frotz in place of the iOS keyboard; the half-open setting applies to foldables such as iPhone Duo.", @"");
-    if (m_duoLayoutCtl.selectedSegmentIndex == 1)
-        footer = [footer stringByAppendingFormat: @" %@", NSLocalizedString(@"Flow layout arrives in a later update.", @"")];
-    return footer;
+    return NSLocalizedString(@"In-app keyboards are drawn by Frotz in place of the iOS keyboard; the half-open setting applies to foldables such as iPhone Duo. Flow runs the story across both halves, around the fold, above a compact keyboard.", @"");
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
