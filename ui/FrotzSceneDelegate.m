@@ -42,6 +42,7 @@
     }
 #endif
     NSSet<UITouch *> *touches = [event allTouches];
+    NSMapTable<UITouch *, UIView *> *kept = [NSMapTable strongToStrongObjectsMapTable]; // touch -> its view, nil-view phases resolved
     NSUInteger swallowed = 0;
     for (UITouch *touch in touches) {
         UIView *view = [touch view];
@@ -68,10 +69,20 @@
             [routedTouches removeObjectForKey: touch];
         if (!keep)
             swallowed++;
+        else if (view)
+            [kept setObject: view forKey: touch];
     }
     // A story view may eat its own touch, but not a key press that shares the event.
     if (swallowed && swallowed == touches.count)
         return;
+    if (swallowed) {
+        // A mixed event: UIKit can't be handed only some of its touches, so the ones nobody
+        // consumed go straight to their views and the consumed ones stay suppressed (a status
+        // line multi-tap, a story magnification phase, while another finger is on a key).
+        // Gesture recognizers don't see these touches; the in-app keyboard doesn't use any.
+        [self deliverTouchesDirectly: kept withEvent: event];
+        return;
+    }
     if ([event isKindOfClass: [UIPressesEvent class]]) {
         StoryMainViewController *smvc = [theStoryBrowser storyMainViewController];
         if ([[smvc view] window]
@@ -82,6 +93,39 @@
         }
     }
     [super sendEvent: event];
+}
+
+// Sends each touch to the view it maps to, through touchesBegan/Moved/Ended/Cancelled:, grouped by
+// view and phase as UIKit would.
+- (void)deliverTouchesDirectly:(NSMapTable<UITouch *, UIView *> *)touches withEvent:(UIEvent *)event {
+    NSMapTable<UIView *, NSMutableSet<UITouch *> *> *byView[UITouchPhaseCancelled + 1];
+    for (NSInteger p = 0; p <= UITouchPhaseCancelled; p++)
+        byView[p] = [NSMapTable strongToStrongObjectsMapTable];
+    for (UITouch *touch in touches) {
+        UITouchPhase phase = touch.phase;
+        UIView *view = [touches objectForKey: touch];
+        if (phase == UITouchPhaseStationary || phase > UITouchPhaseCancelled)
+            continue;
+        NSMutableSet<UITouch *> *set = [byView[phase] objectForKey: view];
+        if (!set)
+            [byView[phase] setObject: (set = [NSMutableSet set]) forKey: view];
+        [set addObject: touch];
+    }
+    for (NSInteger p = 0; p <= UITouchPhaseCancelled; p++) {
+        for (UIView *view in byView[p]) {
+            NSSet<UITouch *> *set = [byView[p] objectForKey: view];
+#if DEBUG
+            NSLog(@"kbtouch window direct phase=%ld view=%@ touches=%lu", (long)p, NSStringFromClass([view class]), (unsigned long)set.count);
+#endif
+            switch (p) {
+                case UITouchPhaseBegan: [view touchesBegan: set withEvent: event]; break;
+                case UITouchPhaseMoved: [view touchesMoved: set withEvent: event]; break;
+                case UITouchPhaseEnded: [view touchesEnded: set withEvent: event]; break;
+                case UITouchPhaseCancelled: [view touchesCancelled: set withEvent: event]; break;
+                default: break;
+            }
+        }
+    }
 }
 @end
 

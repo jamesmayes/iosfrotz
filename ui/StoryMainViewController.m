@@ -1819,7 +1819,13 @@ extern void gli_ios_set_focus(window_t *winNum);
 // "flowend:" (Flow: the end of the story against the docked input line), "pick:lower|upper" (select a word
 // below/above the band), "helper:words|history" and "unhelper:" (the input helper against the band),
 // "edgeband:top|bottom|off" (a band over the story view's edge) or "note:<text>".
+// Not scriptable, so checked by hand: one finger on a key while another's touch is consumed by the
+// story or status line (a status line multi-tap, a story magnification phase) in the same event.
+// FrotzWindow must keep the consumed touch from UIKit and still deliver the key's touch; with
+// DEBUG it logs "kbtouch window direct" for each view it hands touches to in such an event.
 -(void)runKeyboardSelfTest {
+    NSLog(@"kbselftest note: mixed-touch suppression (a key plus a consumed story/status touch in one event) "
+          @"needs two real fingers; check by hand for \"kbtouch window direct\" lines");
     for (NSString *skinID in [FrotzKeyboardSkin availableSkinIDs]) {
         FrotzKeyboardLayout *layout = [FrotzKeyboardLayout layoutWithID: skinID];
         if (layout && [FrotzKeyboardSkin skinWithID: skinID])
