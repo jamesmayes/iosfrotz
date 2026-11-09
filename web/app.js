@@ -70,7 +70,10 @@ function charWidth(px) {
 }
 
 function fitScreen() {
-  const avail = Math.min(document.documentElement.clientWidth, COLUMN_PX) - 32;
+  // The transcript column (inside the safe-area padding, at most 48rem),
+  // less its 16px side padding.
+  const column = transcriptEl.clientWidth || Math.min(document.body.clientWidth, COLUMN_PX);
+  const avail = column - 32;
   const chw = charWidth(GRID_PX);
   let font = GRID_PX;
   let cols = Math.floor(avail / chw);
@@ -353,6 +356,30 @@ input.addEventListener("keydown", (e) => {
   if (e.key in arrows) return settle(arrows[e.key]);
   if (e.key.length === 1) settle(e.key.codePointAt(0));
 });
+
+// ---- Mobile Safari: keep the input above the software keyboard ----
+//
+// iOS does not shrink the layout viewport for the keyboard; it shrinks and
+// scrolls the visual viewport. Pinning the body to the visual viewport keeps
+// the input docked just above the keyboard and the transcript filling the
+// rest.
+
+function fitViewport() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const root = document.documentElement.style;
+  root.setProperty("--app-height", `${vv.height}px`);
+  root.setProperty("--app-top", `${vv.offsetTop}px`);
+  if (window.innerHeight - vv.height > 120) document.body.dataset.keyboard = "";
+  else delete document.body.dataset.keyboard;
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", fitViewport);
+  window.visualViewport.addEventListener("scroll", fitViewport);
+  fitViewport();
+}
 
 // ---- Story picker ----
 //

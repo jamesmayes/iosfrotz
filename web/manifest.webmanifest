@@ -1,0 +1,13 @@
+{
+  "name": "Web Frotz",
+  "short_name": "Frotz",
+  "description": "Play Z-machine interactive fiction in the browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fbfaf7",
+  "theme_color": "#fbfaf7",
+  "icons": [
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

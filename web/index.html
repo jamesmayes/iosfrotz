@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Web Frotz</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-512.png" type="image/png">
+  <link rel="apple-touch-icon" href="icon-512.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Frotz">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#161617" media="(prefers-color-scheme: dark)">
   <style>
     /* Page colours, and the Z-machine colour table (2 black, 3 red,
        4 green, 5 yellow, 6 blue, 7 magenta, 8 cyan, 9 white, 10-12 greys)
@@ -47,8 +56,20 @@
       }
     }
     * { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; }
+    html, body { margin: 0; }
+    html { height: 100%; -webkit-text-size-adjust: 100%; }
+    /* The body is pinned to the visual viewport (app.js sets --app-top and
+       --app-height from window.visualViewport), so on iOS the input stays
+       docked just above the software keyboard instead of under it. */
     body {
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: var(--app-top, 0px);
+      height: var(--app-height, 100%);
+      overflow: hidden;
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
       background: var(--screen-bg);
       color: var(--fg);
       font: 17px/1.5 Georgia, "Iowan Old Style", serif;
@@ -60,10 +81,13 @@
       align-items: center;
       gap: 8px;
       padding: 6px 16px;
+      padding-top: max(6px, env(safe-area-inset-top));
       border-bottom: 1px solid var(--rule);
       font: 14px/1.4 -apple-system, system-ui, sans-serif;
     }
     button, .file-button {
+      touch-action: manipulation;
+      min-height: 32px;
       font: 14px/1.4 -apple-system, system-ui, sans-serif;
       color: var(--fg);
       background: transparent;
@@ -108,7 +132,9 @@
     body[data-mode="picker"] #command-form { display: none; }
     #picker {
       flex: 1;
+      min-height: 0;
       overflow-y: auto;
+      padding-bottom: max(16px, env(safe-area-inset-bottom));
       padding: 16px;
       max-width: 48rem;
       width: 100%;
@@ -147,7 +173,9 @@
     }
     #transcript {
       flex: 1;
+      min-height: 0;
       overflow-y: auto;
+      overscroll-behavior: contain;
       margin: 0;
       padding: 16px;
       white-space: pre-wrap;
@@ -164,15 +192,19 @@
       display: flex;
       gap: 8px;
       padding: 12px 16px;
+      padding-bottom: max(12px, env(safe-area-inset-bottom));
       border-top: 1px solid var(--rule);
       max-width: 48rem;
       width: 100%;
       align-self: center;
     }
+    /* With the keyboard up it covers the home indicator, so drop the inset. */
+    body[data-keyboard] #command-form { padding-bottom: 8px; }
     #command {
       flex: 1;
       min-width: 0;
       font: inherit;
+      font-size: max(16px, 1em); /* under 16px iOS zooms the page on focus */
       color: inherit;
       background: transparent;
       border: none;

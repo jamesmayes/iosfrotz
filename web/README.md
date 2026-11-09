@@ -61,6 +61,16 @@ Window 1 (and the V3 status line, which Frotz draws in window 7) is a grid of `h
 - Reverse video swaps foreground and background, defaults included.
 - Erasing the screen (`erase_window`) fills it with the current background colour by setting `--screen-bg`, which is the page background. Erased upper-window cells keep the background colour too.
 
+## Mobile Safari
+
+- `viewport-fit=cover`, with `env(safe-area-inset-*)` padding on the toolbar (top), the page sides (landscape notch) and the input bar (bottom, the home indicator).
+- iOS does not shrink the layout viewport for the software keyboard; it shrinks and scrolls the *visual* viewport. `app.js` listens to `visualViewport` `resize`/`scroll` and pins the body to it (`--app-top`, `--app-height`). So the input stays docked just above the keyboard and the transcript fills the rest. With the keyboard up, the bottom inset is dropped.
+- The input is at least 16px (17px here), so iOS does not zoom the page when it gets focus. Only the upper-window grid font may shrink below that on narrow screens, and it is never focused.
+- `manifest.webmanifest` and `icon-512.png` (a copy of `resources/Frotz-512x512.png`) give "Add to Home Screen" a name and icon, plus `apple-touch-icon`, `apple-mobile-web-app-capable` and `theme-color` for each scheme. A Home Screen web app also escapes Safari's 7-day storage eviction.
+- `python3 -m http.server` serves `.webmanifest` as `application/octet-stream`. Browsers parse it from `<link rel=manifest>` anyway, but a real host should send `application/manifest+json`.
+
+Only desktop Safari has been tested. Untested on a real iPhone/iPad: the keyboard docking, the safe-area insets, Add to Home Screen, and iOS's handling of `<input type=file>` for saves and stories.
+
 ## Stories
 
 The start screen lists `games/stories.json`. Picking a story sets the URL hash, for example `#story=Balances` (the file name without its extension, case-insensitive), so a link opens that story directly. Changing story while one is running reloads the page, since a story is loaded once per WebAssembly instance.
