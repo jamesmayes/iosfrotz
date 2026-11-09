@@ -231,8 +231,13 @@ const webFrotz = {
   },
   readLine(ms, initial, continued) {
     // A line typed ahead was typed without seeing the initial text, so it
-    // is taken as the whole line.
-    if (typeAhead.length) return Promise.resolve({ line: typeAhead.shift(), timedOut: false });
+    // is taken as the whole line. It also ends any timed-out read, so the
+    // timeout marker is retired here too: otherwise a fresh line the player
+    // types later that happens to equal it would be erased below.
+    if (typeAhead.length) {
+      timedOutLine = null;
+      return Promise.resolve({ line: typeAhead.shift(), timedOut: false });
+    }
     // A continued read gets back the partial line it returned on timeout
     // (the field normally still holds it). A new read starts from the
     // game's initial text; when there is none, the field keeps what the

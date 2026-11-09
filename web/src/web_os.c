@@ -311,10 +311,16 @@ int os_string_width(const zchar *s)
     return width;
 }
 
+/* Set by a lower-window newline after a read timed out. That is when the
+   core sets input_redraw and redraws the partial line before continuing
+   the read (screen_new_line, console_read_input). */
+static int newline_since_timeout = 0;
+
 void os_new_line(bool wrapping)
 {
     if (cwin != 0)
         return;          /* upper-window line moves arrive via os_set_cursor */
+    newline_since_timeout = 1;
     out_utf8(wrapping ? ' ' : '\n');
 }
 
@@ -494,6 +500,20 @@ zchar os_read_line(int max, zchar *buf, int timeout, int width, int continued)
 
     ilen = zchars_to_utf8(buf, initial, (int) sizeof initial);
     if (continued) {
+        /* If the timeout routine moved to a new line, the core has just
+           redrawn the partial line (console_read_input calls
+           screen_write_input when input_redraw is set), and it is at the
+           tail of the output buffer. Take it back out, as for initial
+           text: the player edits it in the input field, and on Enter the
+           whole line is echoed once, on the new line. So nothing of it is
+           in the transcript any more. Without a redraw the partial line
+           was never shown (a timeout echoes nothing), and line_shown is
+           kept for initial text shown before the first read. */
+        if (newline_since_timeout && ilen > 0 && out_len >= ilen
+                && memcmp(out_buf + out_len - ilen, initial, (size_t) ilen) == 0) {
+            out_len -= ilen;
+            line_shown_len = 0;
+        }
         /* The core does not flush text the timeout routine printed before
            it continues the read, so it would land after this line's echo. */
         flush_buffer();
@@ -522,6 +542,7 @@ zchar os_read_line(int max, zchar *buf, int timeout, int width, int continued)
     timed_out = nbytes < 0;
     if (timed_out)
         nbytes = -nbytes - 1;
+    newline_since_timeout = 0;
 
     /* The page returns the whole line (initial or partial text included),
        so it replaces buf. */
