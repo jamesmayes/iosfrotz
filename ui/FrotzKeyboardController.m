@@ -22,6 +22,7 @@
 #import "StoryInputLine.h"
 #import "NotesViewController.h"
 #import "iosfrotz.h"
+#import "FrotzDebugSelfTest.h"
 
 static const NSTimeInterval kRedockDuration = 0.25;
 static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep some story
@@ -41,9 +42,6 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardPlacement) {
     BOOL m_showOnStoryPage;    // and it was showing when the notes page took over
     BOOL m_restoringStoryPage; // the input line's first-responder change is ours, not a request to show
     CGRect m_dockedFold;       // the fold band the split or Flow placement was made for
-#if DEBUG
-    BOOL m_envSkinApplied;
-#endif
 }
 
 -(instancetype)initWithStoryController:(StoryMainViewController *)smvc postureObserver:(FrotzPostureObserver *)observer {
@@ -148,13 +146,12 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardPlacement) {
     return CGRectMake(0, bounds.size.height - height, bounds.size.width, height);
 }
 
-// The view's size; in DEBUG, FROTZ_FAKE_BOUNDS=<w>x<h> stands in for it here only, to try a
-// landscape phone's docked height on a simulator that can't be rotated from a script.
+// The view's size; in DEBUG, FROTZ_FAKE_BOUNDS can stand in for it here only (FrotzDebugSelfTest.m).
 -(CGSize)sizeForHeightDecision {
 #if DEBUG
-    NSArray<NSString *> *fake = [[[NSProcessInfo processInfo] environment][@"FROTZ_FAKE_BOUNDS"] componentsSeparatedByString: @"x"];
-    if (fake.count == 2 && fake[0].doubleValue > 0 && fake[1].doubleValue > 0)
-        return CGSizeMake(fake[0].doubleValue, fake[1].doubleValue);
+    CGSize fake;
+    if ([FrotzDebugSelfTest fakeBounds: &fake])
+        return fake;
 #endif
     return m_smvc.view.bounds.size;
 }
@@ -219,8 +216,7 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardPlacement) {
 
 -(void)postureObserverDidChange:(FrotzPostureObserver *)observer {
 #if DEBUG
-    NSLog(@"posture=%ld angle=%.0f fold=%@ laptop=%d", (long)observer.posture, observer.hingeAngleDegrees,
-          NSStringFromCGRect(observer.foldFrameInView), observer.isLaptopPosture);
+    [FrotzDebugSelfTest postureDidChange: observer];
 #endif
     [self redockAnimated: YES];
 }
@@ -304,19 +300,6 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardPlacement) {
     m_restoringStoryPage = NO;
     [self updateFoldExclusion];
 }
-
-#if DEBUG
--(BOOL)applySkinFromEnvironment {
-    if (m_envSkinApplied)
-        return NO;
-    m_envSkinApplied = YES;
-    NSString *skinID = [[NSProcessInfo processInfo] environment][@"FROTZ_INAPP_KEYBOARD"];
-    if (skinID.length == 0)
-        return NO;
-    self.skinID = [skinID isEqualToString: @"system"] ? nil : skinID;
-    return _keyboardView != nil;
-}
-#endif
 
 #pragma mark FrotzKeyboardViewDelegate
 
