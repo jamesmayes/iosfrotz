@@ -11,7 +11,7 @@
 #   make tads2      -> dist/tads2.js + dist/tads2.wasm (TADS 2, tads/tads2 on
 #                      the browser Glk, through tads/osglk.c and web/tads/)
 #   make tads3      -> dist/tads3.js + dist/tads3.wasm (TADS 3, tads/tads3,
-#                      C++, with -fwasm-exceptions)
+#                      C++, longjmp through JS as for TADS 2)
 #   make bench-tads -> dist/bench/tads{2,3}-{async,sync}.{js,wasm}, Node
 #                      builds for bench/measure.js --tads
 #   make bench      -> dist/bench/git-async.{js,wasm} and git-sync.{js,wasm},
@@ -136,9 +136,14 @@ EMXX ?= em++
 # it, sha2.cpp takes its glibc branch: <endian.h> and <byteswap.h>).
 #
 # TADS 3 raises its errors with setjmp/longjmp (err_try, tads3/vmerr.h); it
-# throws no C++ exceptions. -fwasm-exceptions makes both wasm exception
-# handling (Safari 15.2+), and every TADS 3 object is built with it. The
-# Glk and plain C objects have no setjmp and are shared with TADS 2.
+# throws no C++ exceptions. TADS3_EH is empty, so longjmp is emscripten's
+# default JS invoke_ wrappers, as for TADS 2. -fwasm-exceptions also works
+# (README.md, "How TADS 3 is built") but is 4% larger, no faster, and emcc
+# warns that it does not mix with ASYNCIFY (an await inside a C++ catch
+# traps). Every TADS 3 object is compiled with TADS3_CXXFLAGS; when they
+# change (TADS3_EH=-fwasm-exceptions, an edit here), the stamp below
+# rebuilds them all. The Glk and plain C objects have no setjmp and are
+# shared with TADS 2.
 TADS3_SRC := charmap md5 osifcnet rcmain resload resnoexe sha2 std_dbg std \
              tccmdutl tcerr tcerrmsg tcgen tcglob tchostsi tclibprs tcmain \
              tcprs_rt tcprs tcprsnf tcprsnl tcprsstm tcsrc tct3_d tct3 tct3nl \
@@ -153,7 +158,7 @@ TADS3_SRC := charmap md5 osifcnet rcmain resload resnoexe sha2 std_dbg std \
              vmpool vmpoolim vmpreini vmrefcnt vmregex vmrun vmrunsym vmsa \
              vmsave vmsort vmsortv vmsrcf vmstack vmstr vmstrbuf vmstrcmp \
              vmtmpfil vmtobj vmtype vmtypedh vmtz vmtzobj vmundo vmvec vmwrtimg
-TADS3_EH := -fwasm-exceptions
+TADS3_EH :=
 TADS3_CXXFLAGS := $(TADS_CFLAGS) -I$(TADS)/tads3/unix -std=gnu++11 \
                   -DVMGLOB_STRUCT -DOS_DECLARATIVE_TLS -DTC_TARGET_T3 -DTADSNET \
                   $(TADS3_EH) -include sys/stat.h
@@ -196,7 +201,7 @@ TADS2_LDFLAGS := $(LDFLAGS_COMMON) \
            -sEXPORT_NAME=createTads2 \
            -sENVIRONMENT=web
 
-# TADS 3: the same again, linked with wasm exceptions.
+# TADS 3: the same again (TADS3_EH is empty: JS longjmp, as above).
 TADS3_LDFLAGS := $(LDFLAGS_COMMON) $(TADS3_EH) \
            -sASYNCIFY \
            -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK) \
@@ -274,6 +279,16 @@ stale_link = $(shell printf '%s\n' '$(LINK_$(1))' | cmp -s - $(OBJDIR)/$(1).ldfl
 $(foreach n,$(LINK_OUTPUTS),$(if $(call stale_link,$(n)),$(eval $(OUT_$(n)).js $(OUT_$(n)).wasm: FORCE)))
 # Recipe line: record the flags an output was just linked with.
 stamp_link = printf '%s\n' '$(LINK_$(1))' > $(OBJDIR)/$(1).ldflags
+# Compile flags of the TADS 3 objects, the same way: dist/obj/tads3.cxxflags
+# holds the flags they were last built with, and every link of a TADS 3
+# output writes it (after all its objects were compiled). If it differs,
+# every TADS 3 object is rebuilt, so objects built with and without
+# -fwasm-exceptions are never linked together. (The shared C objects in
+# dist/obj/tads and dist/obj/tads2 are built with TADS_CFLAGS, not these.)
+CXX_tads3 := $(TADS3_CXXFLAGS)
+stale_cxx = $(shell printf '%s\n' '$(CXX_$(1))' | cmp -s - $(OBJDIR)/$(1).cxxflags 2>/dev/null || echo stale)
+$(if $(call stale_cxx,tads3),$(eval $(filter $(OBJDIR)/tads3/%,$(TADS3_OBJ)): FORCE))
+stamp_cxx = printf '%s\n' '$(CXX_$(1))' > $(OBJDIR)/$(1).cxxflags
 FORCE:
 
 $(OBJDIR)/%.o: $(CORE)/%.c $(HEADERS) | $(OBJDIR)
@@ -385,14 +400,17 @@ $(BENCH)/tads2-sync%js $(BENCH)/tads2-sync%wasm: $(TADS2_OBJ) $(TADS_GLK_SYNC) |
 $(DIST)/tads3%js $(DIST)/tads3%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) | $(OBJDIR)
 	$(EMXX) $(LINK_tads3) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(DIST)/tads3.js
 	$(call stamp_link,tads3)
+	$(call stamp_cxx,tads3)
 
 $(BENCH)/tads3-async%js $(BENCH)/tads3-async%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) | $(BENCH)
 	$(EMXX) $(LINK_tads3-async) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads3-async.js
 	$(call stamp_link,tads3-async)
+	$(call stamp_cxx,tads3)
 
 $(BENCH)/tads3-sync%js $(BENCH)/tads3-sync%wasm: $(TADS3_OBJ) $(TADS_GLK_SYNC) | $(BENCH)
 	$(EMXX) $(LINK_tads3-sync) $(TADS3_OBJ) $(TADS_GLK_SYNC) -o $(BENCH)/tads3-sync.js
 	$(call stamp_link,tads3-sync)
+	$(call stamp_cxx,tads3)
 
 # Objects reached only through a pattern rule would count as intermediate
 # and be deleted after the link; keep them so rebuilds are incremental.
