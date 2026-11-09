@@ -51,6 +51,8 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardShiftState) {
 -(CGPoint)centerOfKeyWithLabel:(NSString *)label;
 /// The label of the key a touch at this point (keyboard coordinates) would press.
 -(nullable NSString *)labelOfKeyAtPoint:(CGPoint)pt;
+/// The lowest point any key's hit rect reaches, in the keyboard's coordinates.
+-(CGFloat)lowestKeyHitY;
 /// Two stand-in fingers on overlapping presses (a repeat while Shift is tapped, a layer rebuild under a
 /// held key); logs "kboverlap <case> PASS|FAIL". repeatLabel is a repeating key on the shift layer, or empty.
 -(void)runOverlapSelfTestWithShift:(NSString *)shift repeatKey:(NSString *)repeatLabel letter:(NSString *)letter backspace:(NSString *)backspace;

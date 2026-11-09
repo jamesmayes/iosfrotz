@@ -225,6 +225,7 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardPlacement) {
         [inputLine becomeFirstResponder];
     [self reportRegion: [self regionForKeyboardFrame: frame placement: placement] duration: animated ? kRedockDuration : 0];
     [self updateFoldExclusion];
+    [m_smvc setNeedsUpdateOfScreenEdgesDeferringSystemGestures];
 }
 
 -(void)hideAnimated:(BOOL)animated {
@@ -233,6 +234,7 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardPlacement) {
     _keyboardView.hidden = YES;
     [m_smvc keyboardRegionWillChange: CGRectZero visible: NO source: FrotzKeyboardSourceInApp animationDuration: animated ? kRedockDuration : 0];
     [m_smvc keyboardRegionDidChange: CGRectZero visible: NO source: FrotzKeyboardSourceInApp];
+    [m_smvc setNeedsUpdateOfScreenEdgesDeferringSystemGestures];
 }
 
 -(void)inputLineDidBeginEditing {

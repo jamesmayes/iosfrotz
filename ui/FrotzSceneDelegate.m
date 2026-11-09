@@ -24,7 +24,10 @@
 
 @implementation FrotzWindow
 - (void)sendEvent:(UIEvent *)event {
-    static UIView *prevView;
+    // The view each touch's Began was routed to, for its later phases that arrive with no view.
+    static NSMapTable<UITouch *, UIView *> *routedTouches;
+    if (!routedTouches)
+        routedTouches = [NSMapTable weakToWeakObjectsMapTable];
 #if DEBUG
     // Shows which view a touch on the in-app keyboard really reaches, for touches the keyboard never sees.
     FrotzKeyboardView *keyboard = [[[theStoryBrowser storyMainViewController] valueForKey: @"m_keyboardController"] keyboardView];
@@ -38,28 +41,37 @@
         }
     }
 #endif
-    for (UITouch *touch in [event allTouches]) {
+    NSSet<UITouch *> *touches = [event allTouches];
+    NSUInteger swallowed = 0;
+    for (UITouch *touch in touches) {
         UIView *view = [touch view];
         UITouchPhase phase = [touch phase];
 
         if (!view && phase != UITouchPhaseBegan)
-            view = prevView; // for some reason sometomes view is nil and we lose the phase ended event!
+            view = [routedTouches objectForKey: touch]; // for some reason sometimes view is nil and we lose the phase ended event!
+        BOOL routed = NO, keep = YES;
         if ([touch tapCount]>=1 || phase == UITouchPhaseEnded) {
             if ([view isDescendantOfView: theInputLine]) {
-                prevView = view;
-                if (![theInputLine handleTouch: touch withEvent: event])
-                    return;
+                routed = YES;
+                keep = [theInputLine handleTouch: touch withEvent: event];
             } else if ([view isDescendantOfView: theStoryView]) {
-                prevView = view;
-                if (![theStoryView handleTouch: touch withEvent: event])
-                    return;
-                } else if ([view isDescendantOfView: theStatusLine]) {
-                    prevView = view;
-                    if (![theStatusLine handleTouch: touch withEvent: event])
-                        return;
-                }
+                routed = YES;
+                keep = [theStoryView handleTouch: touch withEvent: event];
+            } else if ([view isDescendantOfView: theStatusLine]) {
+                routed = YES;
+                keep = [theStatusLine handleTouch: touch withEvent: event];
+            }
         }
+        if (routed && phase == UITouchPhaseBegan)
+            [routedTouches setObject: view forKey: touch];
+        else if (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled)
+            [routedTouches removeObjectForKey: touch];
+        if (!keep)
+            swallowed++;
     }
+    // A story view may eat its own touch, but not a key press that shares the event.
+    if (swallowed && swallowed == touches.count)
+        return;
     if ([event isKindOfClass: [UIPressesEvent class]]) {
         StoryMainViewController *smvc = [theStoryBrowser storyMainViewController];
         if ([[smvc view] window]
@@ -81,6 +93,10 @@
 
 @implementation FrotzNavigationController
 - (UIViewController *)childViewControllerForStatusBarStyle {
+    return self.topViewController;
+}
+
+- (UIViewController *)childViewControllerForScreenEdgesDeferringSystemGestures {
     return self.topViewController;
 }
 @end

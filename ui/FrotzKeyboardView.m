@@ -511,10 +511,14 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
 
 #pragma mark Touches
 
-// A key's frame plus half the gap around it, so a near miss still lands.
+// A key's frame plus half the gap around it, so a near miss still lands, but never into the
+// bottom safe area: a touch that starts at the screen's edge is the home gesture's.
 -(CGRect)hitRectForKey:(FrotzKeyView *)keyView {
     CGFloat slop = -m_rows.gap / 2 - 1;
-    return CGRectInset(keyView.frame, slop, slop);
+    CGRect rect = CGRectInset(keyView.frame, slop, slop);
+    CGFloat bottom = CGRectGetMaxY(self.bounds) - self.safeAreaInsets.bottom;
+    rect.size.height = MAX(0, MIN(CGRectGetMaxY(rect), bottom) - CGRectGetMinY(rect));
+    return rect;
 }
 
 -(nullable FrotzKeyView *)keyViewAtPoint:(CGPoint)pt {
@@ -828,6 +832,13 @@ static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
 
 -(nullable NSString *)labelOfKeyAtPoint:(CGPoint)pt {
     return [self keyViewAtPoint: pt].key.label;
+}
+
+-(CGFloat)lowestKeyHitY {
+    CGFloat y = 0;
+    for (FrotzKeyView *kv in m_keyViews)
+        y = MAX(y, CGRectGetMaxY([self hitRectForKey: kv]));
+    return y;
 }
 
 -(BOOL)holdKeyWithLabel:(NSString *)label forSeconds:(NSTimeInterval)seconds {

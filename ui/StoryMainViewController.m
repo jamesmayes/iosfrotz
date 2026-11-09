@@ -1823,6 +1823,12 @@ extern void gli_ios_set_focus(window_t *winNum);
         else
             NSLog(@"kbskin %@ failed (the loader logs why, once per launch)", skinID);
     }
+    // FROTZ_SELFTEST_SCRIPT="<step>|<step>|..." runs those steps instead of the skin's script.
+    NSString *custom = [[NSProcessInfo processInfo] environment][@"FROTZ_SELFTEST_SCRIPT"];
+    if (custom.length) {
+        [self keyboardSelfTestStep: 0 ofScript: [custom componentsSeparatedByString: @"|"]];
+        return;
+    }
     // The faithful skins have their own legends: backspace, return and shift, then a few keys of their own.
     NSDictionary<NSString *, NSArray *> *faithful = @{
         @"apple2plus": @[ @"←", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:Q", @"tap:1", @"tap:SHIFT", @"tap:1",
@@ -1965,6 +1971,22 @@ extern void gli_ios_set_focus(window_t *winNum);
         NSLog(@"kbselftest %d %@", (int)step, arg);
     else if ([verb isEqualToString: @"mode"])
         [self setDuoLayoutMode: arg];
+    else if ([verb isEqualToString: @"edges"]) {
+        // Which controller the system asks for deferred edges (the top full-screen presentation, then
+        // its children), and how low the keys take touches.
+        UIViewController *vc = self.view.window.rootViewController;
+        while (vc.presentedViewController)
+            vc = vc.presentedViewController;
+        NSMutableArray *chain = [NSMutableArray arrayWithObject: NSStringFromClass([vc class])];
+        while (vc.childViewControllerForScreenEdgesDeferringSystemGestures) {
+            vc = vc.childViewControllerForScreenEdgesDeferringSystemGestures;
+            [chain addObject: NSStringFromClass([vc class])];
+        }
+        FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
+        NSLog(@"kbselftest %d edges chain=%@ deferred=%lu inAppShowing=%d kbHeight=%g safeBottom=%g lowestHit=%g",
+              (int)step, [chain componentsJoinedByString: @" > "], (unsigned long)vc.preferredScreenEdgesDeferringSystemGestures,
+              m_keyboardController.isShowing, keyboard.bounds.size.height, keyboard.safeAreaInsets.bottom, [keyboard lowestKeyHitY]);
+    }
     else if ([verb isEqualToString: @"band"]) {
         // Put the cursor's line a few points into the band, as scrolling back would.
         CGPoint cursor = [m_storyView cursorPoint];
@@ -2749,6 +2771,11 @@ static const CGFloat kVerticalBarLiveActivityReserve = 90;
     if (@available(iOS 26.0, *))
         return UIStatusBarStyleDefault;
     return UIStatusBarStyleLightContent;
+}
+
+- (UIRectEdge)preferredScreenEdgesDeferringSystemGestures {
+    // The bottom row of an in-app keyboard sits by the home indicator; a press there is a key, not a swipe home.
+    return m_keyboardController.isShowing ? UIRectEdgeBottom : UIRectEdgeNone;
 }
 
 - (void)autosize {
