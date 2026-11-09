@@ -1809,7 +1809,8 @@ extern void gli_ios_set_focus(window_t *winNum);
 // the transcript), "select:last2", "type:<text>" (straight to typeText:, for what no Classic key types),
 // "clear:", "hit:<label>" (which view a real touch at that key's centre would reach), "hold:<label>:<seconds>"
 // (held as a finger would, so it repeats; logs "kbhold" on release), "a11y:" (the keys' VoiceOver names), "notes:show|hide"
-// (the notes page programmatically), "notes:edit" (raise the notes keyboard), "kb:show|hide", "state:" (keyboard source and region) or "note:<text>".
+// (the notes page programmatically), "notes:edit" (raise the notes keyboard), "kb:show|hide", "state:" (keyboard source and region),
+// "overlap:<shift>:<repeating shift-layer key or empty>:<letter>:<backspace>" (two stand-in fingers at once; logs "kboverlap") or "note:<text>".
 -(void)runKeyboardSelfTest {
     for (NSString *skinID in [FrotzKeyboardSkin availableSkinIDs]) {
         FrotzKeyboardLayout *layout = [FrotzKeyboardLayout layoutWithID: skinID];
@@ -1853,6 +1854,8 @@ extern void gli_ios_set_focus(window_t *winNum);
         [script addObject: @"a11y:"];
         [script addObjectsFromArray: [keys subarrayWithRange: NSMakeRange(3, keys.count - 3)]];
         [script addObject: @"clear:"];
+        [script addObject: [NSString stringWithFormat: @"overlap:%@:%@:q:%@", keys[2], [m_keyboardController.skinID isEqualToString: @"c64"] ? @"⇔" : @"", keys[0]]];
+        [script addObject: @"clear:"];
         [self keyboardSelfTestStep: 0 ofScript: script];
         return;
     }
@@ -1871,7 +1874,7 @@ extern void gli_ios_set_focus(window_t *winNum);
                          @"kb:hide", @"state:", @"notes:show", @"wait:0.5", @"state:", @"notes:hide", @"wait:0.5", @"state:",
                          @"notes:show", @"notes:edit", @"wait:1", @"state:", @"notes:hide", @"wait:1", @"state:",
                          @"kb:show", @"state:",
-                         @"note:two touches at once: not scriptable, tapKeyWithLabel: presses one key at a time" ];
+                         @"overlap:⇧::q:⌫", @"clear:" ];
     [self keyboardSelfTestStep: 0 ofScript: script];
 }
 
@@ -1894,7 +1897,11 @@ extern void gli_ios_set_focus(window_t *winNum);
         FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
         if (![keyboard holdKeyWithLabel: label forSeconds: [[arg substringFromIndex: NSMaxRange(last)] doubleValue]])
             NSLog(@"kbselftest %d no key \"%@\" in layer %@", (int)step, label, keyboard.keyLayer);
-    } else if ([verb isEqualToString: @"a11y"]) {
+    } else if ([verb isEqualToString: @"overlap"]) {
+        NSArray<NSString *> *labels = [arg componentsSeparatedByString: @":"];
+        if (labels.count == 4)
+            [m_keyboardController.keyboardView runOverlapSelfTestWithShift: labels[0] repeatKey: labels[1] letter: labels[2] backspace: labels[3]];
+        } else if ([verb isEqualToString: @"a11y"]) {
         FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
         NSLog(@"kbselftest %d a11y layer=%@ %@", (int)step, keyboard.keyLayer,
               [[keyboard.accessibilityElements valueForKey: @"accessibilityLabel"] componentsJoinedByString: @" | "]);
