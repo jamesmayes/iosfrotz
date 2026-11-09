@@ -59,9 +59,18 @@ static BOOL hasAccessibility;
 }
 @end
 
-@implementation RichTextView
+@implementation RichTextView {
+    CGRect m_foldExclusionRect;
+    CGFloat m_bandTop, m_bandHeight;
+    CGFloat m_bandInset;              // what the band added to contentInset.bottom
+    UIView *m_lowerTileContainerView; // the text from the band down, drawn lower by m_lowerShift
+    CGFloat m_lowerShift;
+    CALayer *m_upperMask, *m_lowerMask;
+}
 
 @synthesize tileSize = m_tileSize;
+@synthesize foldBandTop = m_bandTop;
+@synthesize foldBandHeight = m_bandHeight;
 @synthesize textRuns = m_textRuns;
 @synthesize lastPt = m_lastPt;
 @synthesize controller = m_controller;
@@ -311,7 +320,7 @@ static BOOL hasAccessibility;
 -(CGRect)visibleRect {
     CGRect frame = self.frame;
     CGPoint ofst = self.contentOffset;
-    return CGRectMake(ofst.x, ofst.y, frame.size.width, frame.size.height);
+    return CGRectMake(ofst.x, ofst.y, frame.size.width, frame.size.height - [self foldBandLoss]);
 }
 
 @synthesize textColor=m_fgColor;
@@ -333,6 +342,7 @@ static BOOL hasAccessibility;
             m_currBgColor = m_bgColor;
         
         [m_tileContainerView setBackgroundColor: m_bgColor];
+        [m_lowerTileContainerView setBackgroundColor: m_bgColor];
     }
     [self reloadData];
 }
@@ -431,6 +441,7 @@ static BOOL hasAccessibility;
         m_reusableTiles = [[NSMutableSet alloc] init];
         m_tileContainerView = [[UIView alloc] initWithFrame:frame];
         [self addSubview: m_tileContainerView];
+        m_foldExclusionRect = CGRectNull;
         
         //	m_tileContainerView.opaque = NO;
         //	m_tileContainerView.clearsContextBeforeDrawing = YES;
@@ -612,6 +623,7 @@ static BOOL hasAccessibility;
         m_currBgColor = m_bgColor;
     [super setBackgroundColor: m_currBgColor];
     [m_tileContainerView setBackgroundColor: m_currBgColor];
+    [m_lowerTileContainerView setBackgroundColor: m_currBgColor];
     
     m_firstVisibleTextRunIndex = 0;
     m_prevPt = m_lastPt = CGPointMake(m_leftMargin, 0);
@@ -665,7 +677,10 @@ static BOOL hasAccessibility;
 }
 
 - (void) drawRect:(CGRect)rect inView:(RichTextTile*)view {
+    // Tiles below a fold band sit lower than the text they show.
+    CGFloat shift = view.superview == m_lowerTileContainerView ? m_lowerShift : 0;
     CGRect myRect = [view convertRect: rect toView: self];
+    myRect.origin.y -= shift;
     CGRect frame = self.frame;
     int curImageIndex = 0;
     myRect.size.width = frame.size.width;
@@ -766,6 +781,7 @@ static BOOL hasAccessibility;
         }
         //CGPoint opt = pt;
         pt = [self convertPoint:pt toView:view];
+        pt.y += shift;
         //NSLog(@"i=%d opt=(%f,%f) pt=(%f,%f), fg=%@ bg=%@ usebg=%d s=%x v=%@ t=[%@]", i, opt.x, opt.y, pt.x, pt.y, fgColor, bgColor, useBGColor, style, view, text);
         int lineNum = [m_textLineNum[i] intValue];
         [self wordWrapTextSize:text atPoint:&pt font:font style:style fgColor:fgColor bgColor:useBGColor ? bgColor:nil withRect:myRect 
@@ -1748,6 +1764,10 @@ static BOOL hasAccessibility;
         [m_reusableTiles addObject:view];
         [view removeFromSuperview];
     }
+    for (UIView *view in [m_lowerTileContainerView subviews]) {
+        [m_reusableTiles addObject:view];
+        [view removeFromSuperview];
+    }
     
     // no rows or columns are now visible; note this by making the firsts very high and the lasts very low
     m_firstVisibleRow = m_firstVisibleColumn = NSIntegerMax;
@@ -1780,20 +1800,169 @@ static BOOL hasAccessibility;
     if (!tile)
         tile = [self dequeueReusableTile];
     
-    if (!tile) {
-        // the scroll view will handle setting the tile's frame, so we don't have to worry about it
-        tile = [[RichTextTile alloc] initWithFrame:CGRectZero];
-        [tile setBackgroundColor: m_currBgColor ? m_currBgColor : m_bgColor];
-        [tile setTextView: self];
-        
-        // Some of the tiles won't be completely filled, because they're on the right or bottom edge.
-        // By default, the image would be stretched to fill the frame of the image view, but we don't
-        // want this. Setting the content mode to "top left" ensures that the images around the edge are
-        // positioned properly in their tiles. 
-        [tile setContentMode:UIViewContentModeTopLeft]; 
-    }
-    
+    if (!tile)
+        tile = [self newTile];
     return tile;
+}
+
+- (RichTextTile *)newTile {
+    // the scroll view will handle setting the tile's frame, so we don't have to worry about it
+    RichTextTile *tile = [[RichTextTile alloc] initWithFrame:CGRectZero];
+    [tile setBackgroundColor: m_currBgColor ? m_currBgColor : m_bgColor];
+    [tile setTextView: self];
+    
+    // Some of the tiles won't be completely filled, because they're on the right or bottom edge.
+    // By default, the image would be stretched to fill the frame of the image view, but we don't
+    // want this. Setting the content mode to "top left" ensures that the images around the edge are
+    // positioned properly in their tiles. 
+    [tile setContentMode:UIViewContentModeTopLeft]; 
+    return tile;
+}
+
+#pragma mark Fold band
+
+-(CGRect)foldExclusionRect {
+    return m_foldExclusionRect;
+}
+
+-(void)setFoldExclusionRect:(CGRect)rect {
+    m_foldExclusionRect = rect;
+    [self updateFoldBand];
+}
+
+// The band only splits the view when there is text on both sides of it.
+-(void)updateFoldBand {
+    CGRect frame = self.frame;
+    CGFloat top = 0, height = 0;
+    if (!CGRectIsNull(m_foldExclusionRect) && !CGRectIsEmpty(m_foldExclusionRect)) {
+        CGFloat bandTop = CGRectGetMinY(m_foldExclusionRect) - frame.origin.y;
+        CGFloat bandBottom = CGRectGetMaxY(m_foldExclusionRect) - frame.origin.y;
+        if (bandTop > 0 && bandBottom < frame.size.height) {
+            top = bandTop;
+            height = bandBottom - bandTop;
+        }
+    }
+    if (top == m_bandTop && height == m_bandHeight)
+        return;
+    // The lower half shows that much less, so the end of the text has to be able to scroll further up.
+    // A view showing the end (as the story controller scrolls to it) keeps showing it.
+    UIEdgeInsets inset = self.contentInset;
+    CGFloat endOffset = self.contentSize.height - [self visibleRect].size.height;
+    BOOL atEnd = endOffset > 0 && self.contentOffset.y >= endOffset - 1;
+    m_bandTop = top;
+    m_bandHeight = height;
+    inset.bottom = MAX(0, inset.bottom - m_bandInset + [self foldBandLoss]);
+    m_bandInset = [self foldBandLoss];
+    self.contentInset = inset;
+    if (atEnd)
+        [self setContentOffset: CGPointMake(self.contentOffset.x, MAX(0, self.contentSize.height - [self visibleRect].size.height))];
+    if (height > 0 && !m_lowerTileContainerView) {
+        m_lowerTileContainerView = [[UIView alloc] initWithFrame: CGRectZero];
+        [m_lowerTileContainerView setBackgroundColor: m_currBgColor ? m_currBgColor : m_bgColor];
+        [self insertSubview: m_lowerTileContainerView aboveSubview: m_tileContainerView];
+        m_upperMask = [CALayer layer];
+        m_upperMask.backgroundColor = [UIColor blackColor].CGColor;
+        m_lowerMask = [CALayer layer];
+        m_lowerMask.backgroundColor = [UIColor blackColor].CGColor;
+        m_lowerTileContainerView.layer.mask = m_lowerMask;
+    }
+    m_lowerTileContainerView.hidden = height == 0;
+    m_tileContainerView.layer.mask = height > 0 ? m_upperMask : nil;
+    [self reloadData];
+}
+
+// Up to a line more than the band itself: a line the band's top would cut goes below the band whole.
+-(CGFloat)foldBandLoss {
+    return m_bandHeight > 0 ? m_bandHeight + m_fontHeight + m_extraLineSpacing : 0;
+}
+
+// The top of the line at this height in the text, or y itself before the first line.
+-(CGFloat)lineTopAtY:(CGFloat)y {
+    NSUInteger lo = 0, hi = [m_lineYPos count];
+    while (lo < hi) { // the first line starting below y
+        NSUInteger mid = (lo + hi) / 2;
+        if ([m_lineYPos[mid] floatValue] + m_topMargin <= y)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    // The line being written (the prompt) may not be in the table yet.
+    CGFloat top = lo > 0 ? [m_lineYPos[lo-1] floatValue] + m_topMargin : -1;
+    CGFloat current = m_lastPt.y + m_topMargin;
+    if (current <= y && current > top)
+        top = current;
+    return top >= 0 ? top : y;
+}
+
+// Above the band the tiles sit where they always do. The text from the start of the line the band's
+// top falls on is drawn by a second set of tiles below the band. Each set is masked to its side.
+-(void)layoutFoldBandTiles {
+    CGRect bounds = self.bounds;
+    CGFloat tileWidth = self.tileSize.width, tileHeight = self.tileSize.height;
+    CGFloat bandY = bounds.origin.y + m_bandTop;
+    CGFloat splitY = [self lineTopAtY: bandY];
+    if (bandY - splitY > m_fontHeight + m_extraLineSpacing) // a picture, not a line of text
+        splitY = bandY;
+    CGFloat shift = m_bandHeight + bandY - splitY;
+    CGFloat maxY = CGRectGetMaxY(bounds) - shift;
+    CGFloat width = MAX(bounds.size.width, self.contentSize.width);
+    m_lowerShift = shift; // the tiles draw relative to it, so moving them needs no redraw
+    m_lowerTileContainerView.frame = CGRectOffset(m_tileContainerView.frame, 0, shift);
+    [CATransaction begin];
+    [CATransaction setDisableActions: YES];
+    m_upperMask.frame = CGRectMake(0, MIN(0, bounds.origin.y), width, splitY - MIN(0, bounds.origin.y));
+    m_lowerMask.frame = CGRectMake(0, splitY, width, MAX(0, maxY - splitY));
+    [CATransaction commit];
+
+    CGRect needed = CGRectMake(bounds.origin.x, splitY, bounds.size.width, MAX(0, maxY - splitY));
+    for (UIView *tile in [m_lowerTileContainerView subviews]) {
+        if (!CGRectIntersectsRect(CGRectInset(tile.frame, 0, -2), needed)) {
+            [m_reusableTiles addObject: tile];
+            [tile removeFromSuperview];
+        }
+    }
+    if (maxY <= splitY)
+        return;
+    CGSize contentSize = self.contentSize;
+    int maxRow = floorf((contentSize.height-1) / tileHeight), maxCol = floorf((contentSize.width-1) / tileWidth);
+    int firstRow = MAX(0, floorf(splitY / tileHeight)), lastRow = MIN(maxRow, floorf(maxY / tileHeight));
+    int firstCol = MAX(0, floorf(bounds.origin.x / tileWidth)), lastCol = MIN(maxCol, floorf(CGRectGetMaxX(bounds) / tileWidth));
+    for (int row = firstRow; row <= lastRow; row++) {
+        for (int col = firstCol; col <= lastCol; col++) {
+            CGPoint center = CGPointMake(tileWidth * (col+0.5), tileHeight * (row+0.5));
+            BOOL present = NO;
+            for (UIView *tile in [m_lowerTileContainerView subviews])
+                if (CGPointEqualToPoint(tile.center, center)) {
+                    present = YES;
+                    break;
+                }
+            if (present)
+                continue;
+            RichTextTile *tile = [self dequeueReusableTile] ?: [self newTile];
+            [tile setCenter: center];
+            [tile setBounds: CGRectMake(0, 0, tileWidth, tileHeight)];
+            [m_lowerTileContainerView addSubview: tile];
+            [tile setNeedsDisplay];
+        }
+    }
+}
+
+// Where a point in the view falls in the text, skipping the band; NAN y inside the band itself.
+-(CGPoint)textPointForPoint:(CGPoint)pt {
+    if (m_bandHeight > 0) {
+        CGFloat y = pt.y - self.contentOffset.y;
+        if (y >= m_bandTop + m_bandHeight)
+            pt.y -= m_lowerShift;
+        else if (y >= m_bandTop)
+            pt.y = NAN;
+    }
+    return pt;
+}
+
+-(void)scrollRectToVisible:(CGRect)rect animated:(BOOL)animated {
+    // Text below the band shows lower than its position.
+    rect.size.height += [self foldBandLoss];
+    [super scrollRectToVisible: rect animated: animated];
 }
 
 - (void)layoutSubviews {
@@ -1804,6 +1973,10 @@ static BOOL hasAccessibility;
     CGRect visibleBounds = [self bounds];
     float scaledTileWidth  = [self tileSize].width;
     float scaledTileHeight = [self tileSize].height;
+    if (m_bandHeight > 0) {
+        [self layoutFoldBandTiles];
+        visibleBounds.size.height = m_bandTop; // the rest is the lower container's
+    }
 
     // first recycle all tiles that are no longer visible
     for (UIView *tile in [m_tileContainerView subviews]) {
@@ -1922,6 +2095,7 @@ static BOOL hasAccessibility;
         [super setFrame: frame];
         [self setNiceMargins:NO];
         [m_tileContainerView setFrame: CGRectMake(0, 0, frame.size.height, frame.size.width)];
+        [self updateFoldBand];
         if (oldFrame.size.width != frame.size.width) {
             [self reflowText];
             [self repositionAfterReflow];
@@ -2201,6 +2375,9 @@ static BOOL EndsWithSentenceBreak(NSString *text) {
 }
 
 -(NSInteger) getTextRunAtPoint:(CGPoint)touchPoint {
+    touchPoint = [self textPointForPoint: touchPoint];
+    if (isnan(touchPoint.y))
+        return -1;
     NSUInteger i, l = MIN([m_textRuns count], MIN([m_textPos count], [m_textStyles count]));
     CGPoint lastUniqPt = CGPointMake(0,0), pt, nextPos;
     NSInteger lastUniqIndex = 0;

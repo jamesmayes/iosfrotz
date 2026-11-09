@@ -336,7 +336,12 @@ BOOL cursorVisible = YES;
 #endif
         myFrame.origin.x = frame.origin.x + cursorPt.x - bounds.origin.x;
         myFrame.origin.y = frame.origin.y + cursorPt.y - bounds.origin.y;
-        if (myFrame.origin.y > frame.origin.y + frame.size.height - [controller fontSize])
+        // Flow layout: a cursor in or below the fold band would put the line under the hinge or off
+        // the bottom, so it docks just above the keyboard.
+        CGRect docked = [controller dockedInputFrameForTextView: curTextView];
+        if (!CGRectIsNull(docked) && cursorPt.y - bounds.origin.y + [[self font] lineHeight] > [curTextView foldBandTop])
+            myFrame.origin.y = docked.origin.y;
+        else if (myFrame.origin.y > frame.origin.y + frame.size.height - [controller fontSize])
             cursorVisible = NO;
     }
     

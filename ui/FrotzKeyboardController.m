@@ -26,15 +26,21 @@
 static const NSTimeInterval kRedockDuration = 0.25;
 static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep some story
 
+// Docked: at the bottom, natural height. Split (Classic): below the fold, the story above it.
+// Flow: a compact keyboard at the bottom, the story across both halves around the fold band.
+typedef NS_ENUM(NSInteger, FrotzKeyboardPlacement) {
+    FrotzKeyboardPlacementDocked, FrotzKeyboardPlacementSplit, FrotzKeyboardPlacementFlow
+};
+
 @implementation FrotzKeyboardController {
     __weak StoryMainViewController *m_smvc;
     FrotzPostureObserver *m_observer;
-    BOOL m_dockedForLaptop;
+    FrotzKeyboardPlacement m_placement;
     BOOL m_onNotesPage;
     BOOL m_handedToNotes;      // the in-app source is off while the notes page is up
     BOOL m_showOnStoryPage;    // and it was showing when the notes page took over
     BOOL m_restoringStoryPage; // the input line's first-responder change is ours, not a request to show
-    CGRect m_dockedFold;       // the fold band the laptop placement was made for
+    CGRect m_dockedFold;       // the fold band the split or Flow placement was made for
 #if DEBUG
     BOOL m_envSkinApplied;
 #endif
@@ -62,6 +68,11 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
 -(void)setSkinID:(NSString *)skinID {
     if ((skinID == _skinID) || [skinID isEqualToString: _skinID])
         return;
+    [self applySkinID: skinID];
+    [self updateFoldExclusion];
+}
+
+-(void)applySkinID:(NSString *)skinID {
     BOOL wasShowing = self.isShowing;
     if (_keyboardView) {
         [self hideAnimated: NO];
@@ -108,38 +119,54 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
     return CGRectGetMinY(fold) > m_smvc.view.safeAreaInsets.top && CGRectGetMaxY(fold) < CGRectGetMaxY(bounds) - m_smvc.view.safeAreaInsets.bottom;
 }
 
-// Laptop posture: from the top of the fold band to the bottom, the keys below the band.
-// Otherwise docked at the bottom at the keyboard's natural height.
--(CGRect)keyboardFrameForLaptop:(BOOL)laptop {
+-(FrotzKeyboardPlacement)placement {
+    if (![self laptopPostureInBounds: m_smvc.view.bounds])
+        return FrotzKeyboardPlacementDocked;
+    return [m_smvc.duoLayoutMode isEqualToString: @"flow"] ? FrotzKeyboardPlacementFlow : FrotzKeyboardPlacementSplit;
+}
+
+// Split: from the top of the fold band to the bottom, the keys below the band.
+// Otherwise docked at the bottom at the keyboard's natural (in Flow, compact) height.
+-(CGRect)keyboardFrameForPlacement:(FrotzKeyboardPlacement)placement {
     UIView *view = m_smvc.view;
     CGRect bounds = view.bounds;
     UIEdgeInsets safe = view.safeAreaInsets;
-    if (laptop) {
+    if (placement == FrotzKeyboardPlacementSplit) {
         // To the bottom edge, so the case colour runs under the home indicator; the keys stay above it.
         CGFloat top = CGRectGetMinY(m_observer.foldFrameInView);
         return CGRectMake(safe.left, top, bounds.size.width - safe.left - safe.right, bounds.size.height - top);
     }
     // The keyboard keeps its keys out of the home indicator's safe area itself.
+    _keyboardView.compact = placement == FrotzKeyboardPlacementFlow;
     CGFloat height = [_keyboardView preferredHeightForWidth: bounds.size.width] + safe.bottom;
     height = MIN(height, floor(bounds.size.height * kMaxDockedHeightFraction));
     return CGRectMake(0, bounds.size.height - height, bounds.size.width, height);
 }
 
-// What the story has to keep clear of: in laptop posture everything from the fold band down,
-// so the story and the input line stay in the upper half.
--(CGRect)regionForKeyboardFrame:(CGRect)frame laptop:(BOOL)laptop {
-    if (!laptop)
+// What the story has to keep clear of: when split everything from the fold band down, so the story
+// and the input line stay in the upper half.
+-(CGRect)regionForKeyboardFrame:(CGRect)frame placement:(FrotzKeyboardPlacement)placement {
+    if (placement != FrotzKeyboardPlacementSplit)
         return frame;
     CGRect bounds = m_smvc.view.bounds;
     return CGRectMake(0, frame.origin.y, bounds.size.width, CGRectGetMaxY(bounds) - frame.origin.y);
 }
 
--(void)applyPlacementForLaptop:(BOOL)laptop frame:(CGRect)frame {
-    m_dockedForLaptop = laptop;
-    m_dockedFold = laptop ? m_observer.foldFrameInView : CGRectNull;
-    _keyboardView.topInset = laptop ? CGRectGetHeight(m_observer.foldFrameInView) : 0;
-    _keyboardView.fillsHeight = laptop;
+-(void)applyPlacement:(FrotzKeyboardPlacement)placement frame:(CGRect)frame {
+    BOOL split = placement == FrotzKeyboardPlacementSplit;
+    m_placement = placement;
+    m_dockedFold = placement != FrotzKeyboardPlacementDocked ? m_observer.foldFrameInView : CGRectNull;
+    _keyboardView.compact = placement == FrotzKeyboardPlacementFlow;
+    _keyboardView.topInset = split ? CGRectGetHeight(m_observer.foldFrameInView) : 0;
+    _keyboardView.fillsHeight = split;
     _keyboardView.frame = frame;
+}
+
+// The story flows around the band whenever Flow applies, with the keyboard up or not.
+-(void)updateFoldExclusion {
+    CGRect band = self.isInAppKeyboardActive && [self placement] == FrotzKeyboardPlacementFlow ? m_observer.foldFrameInView : CGRectNull;
+    if (!CGRectEqualToRect(band, m_smvc.foldExclusionFrame))
+        m_smvc.foldExclusionFrame = band;
 }
 
 -(void)reportRegion:(CGRect)region duration:(NSTimeInterval)duration {
@@ -150,20 +177,25 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
 // Posture and fold changes, rotation and safe-area changes. Angle-only chatter from the hinge
 // lands here too and stops at the comparison.
 -(void)redockAnimated:(BOOL)animated {
+    [self updateFoldExclusion];
     if (!self.isInAppKeyboardActive || !self.isShowing)
         return;
-    BOOL laptop = [self laptopPostureInBounds: m_smvc.view.bounds];
-    CGRect frame = [self keyboardFrameForLaptop: laptop];
-    // The band can change height with the same top, which moves the keys but not the frame.
-    BOOL sameFold = !laptop || CGRectEqualToRect(m_observer.foldFrameInView, m_dockedFold);
-    if (laptop == m_dockedForLaptop && sameFold && CGRectEqualToRect(frame, _keyboardView.frame))
+    FrotzKeyboardPlacement placement = [self placement];
+    CGRect frame = [self keyboardFrameForPlacement: placement];
+    // The band can change height with the same top, which moves the keys (or the story's gap) but not the frame.
+    BOOL sameFold = placement == FrotzKeyboardPlacementDocked || CGRectEqualToRect(m_observer.foldFrameInView, m_dockedFold);
+    if (placement == m_placement && sameFold && CGRectEqualToRect(frame, _keyboardView.frame))
         return;
     NSTimeInterval duration = animated && !UIAccessibilityIsReduceMotionEnabled() ? kRedockDuration : 0;
     [UIView animateWithDuration: duration animations: ^{
-        [self applyPlacementForLaptop: laptop frame: frame];
+        [self applyPlacement: placement frame: frame];
         [self->_keyboardView layoutIfNeeded];
     }];
-    [self reportRegion: [self regionForKeyboardFrame: frame laptop: laptop] duration: kRedockDuration];
+    [self reportRegion: [self regionForKeyboardFrame: frame placement: placement] duration: kRedockDuration];
+}
+
+-(void)layoutModeDidChange {
+    [self redockAnimated: YES];
 }
 
 -(void)layoutIfNeeded {
@@ -184,14 +216,15 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
 -(void)showAnimated:(BOOL)animated {
     if (!self.isInAppKeyboardActive || self.isShowing)
         return;
-    BOOL laptop = [self laptopPostureInBounds: m_smvc.view.bounds];
-    CGRect frame = [self keyboardFrameForLaptop: laptop];
-    [self applyPlacementForLaptop: laptop frame: frame];
+    FrotzKeyboardPlacement placement = [self placement];
+    CGRect frame = [self keyboardFrameForPlacement: placement];
+    [self applyPlacement: placement frame: frame];
     _keyboardView.hidden = NO;
     StoryInputLine *inputLine = m_smvc.inputLine;
     if (![inputLine isFirstResponder])
         [inputLine becomeFirstResponder];
-    [self reportRegion: [self regionForKeyboardFrame: frame laptop: laptop] duration: animated ? kRedockDuration : 0];
+    [self reportRegion: [self regionForKeyboardFrame: frame placement: placement] duration: animated ? kRedockDuration : 0];
+    [self updateFoldExclusion];
 }
 
 -(void)hideAnimated:(BOOL)animated {
@@ -232,6 +265,7 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
     if (!(m_showOnStoryPage && keyboardFollows))
         [m_smvc.inputLine resignFirstResponder];
     [m_smvc setInAppKeyboardActive: NO];
+    [self updateFoldExclusion];
 }
 
 -(void)storyPageDidBecomeVisible {
@@ -251,6 +285,7 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
     if (m_showOnStoryPage && !m_smvc.KBLocked)
         [self showAnimated: NO];
     m_restoringStoryPage = NO;
+    [self updateFoldExclusion];
 }
 
 #if DEBUG

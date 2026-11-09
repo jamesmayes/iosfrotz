@@ -1377,8 +1377,10 @@ static void setColorTable(RichTextView *v) {
                 else
                     [v setNoMargins];
             }
+            v.foldExclusionRect = [self glkViewNumIsTextBuffer: viewNum] ? [self foldExclusionInBackground] : CGRectNull;
             [v setFrame: r];
         } else if (viewNum == 0) {
+            v.foldExclusionRect = [self glkViewNumIsTextBuffer: 0] ? [self foldExclusionInBackground] : CGRectNull;
             [v setFrame: r];
         }
     }
@@ -1810,7 +1812,9 @@ extern void gli_ios_set_focus(window_t *winNum);
 // "clear:", "hit:<label>" (which view a real touch at that key's centre would reach), "hold:<label>:<seconds>"
 // (held as a finger would, so it repeats; logs "kbhold" on release), "a11y:" (the keys' VoiceOver names), "notes:show|hide"
 // (the notes page programmatically), "notes:edit" (raise the notes keyboard), "kb:show|hide", "state:" (keyboard source and region),
-// "overlap:<shift>:<repeating shift-layer key or empty>:<letter>:<backspace>" (two stand-in fingers at once; logs "kboverlap") or "note:<text>".
+// "overlap:<shift>:<repeating shift-layer key or empty>:<letter>:<backspace>" (two stand-in fingers at once; logs "kboverlap"),
+// "band:" (Flow: scroll the cursor into the fold band and log the input line against its docked frame),
+// "mode:classic|flow" (the Duo layout pref, as Settings sets it) or "note:<text>".
 -(void)runKeyboardSelfTest {
     for (NSString *skinID in [FrotzKeyboardSkin availableSkinIDs]) {
         FrotzKeyboardLayout *layout = [FrotzKeyboardLayout layoutWithID: skinID];
@@ -1856,6 +1860,7 @@ extern void gli_ios_set_focus(window_t *winNum);
         [script addObject: @"clear:"];
         [script addObject: [NSString stringWithFormat: @"overlap:%@:%@:q:%@", keys[2], [m_keyboardController.skinID isEqualToString: @"c64"] ? @"⇔" : @"", keys[0]]];
         [script addObject: @"clear:"];
+        [script addObjectsFromArray: [self flowSelfTestSteps]];
         [self keyboardSelfTestStep: 0 ofScript: script];
         return;
     }
@@ -1875,7 +1880,17 @@ extern void gli_ios_set_focus(window_t *winNum);
                          @"notes:show", @"notes:edit", @"wait:1", @"state:", @"notes:hide", @"wait:1", @"state:",
                          @"kb:show", @"state:",
                          @"overlap:⇧::q:⌫", @"clear:" ];
-    [self keyboardSelfTestStep: 0 ofScript: script];
+    [self keyboardSelfTestStep: 0 ofScript: [script arrayByAddingObjectsFromArray: [self flowSelfTestSteps]]];
+}
+
+// In Flow, the docked input line; FROTZ_SELFTEST_TO_CLASSIC=1 then switches to Classic split.
+-(NSArray<NSString *> *)flowSelfTestSteps {
+    if (![m_duoLayoutMode isEqualToString: @"flow"])
+        return @[];
+    NSArray *steps = @[ @"state:", @"band:", @"wait:1" ];
+    if ([[[NSProcessInfo processInfo] environment][@"FROTZ_SELFTEST_TO_CLASSIC"] boolValue])
+        steps = [steps arrayByAddingObjectsFromArray: @[ @"mode:classic", @"wait:1", @"state:", @"band:", @"wait:2" ]];
+    return steps;
 }
 
 -(void)keyboardSelfTestStep:(NSUInteger)step ofScript:(NSArray<NSString *> *)script {
@@ -1923,10 +1938,12 @@ extern void gli_ios_set_focus(window_t *winNum);
         else
             [m_keyboardController hideAnimated: NO];
     } else if ([verb isEqualToString: @"state"])
-        NSLog(@"kbselftest %d state source=%@ inAppShowing=%d kbShown=%d kbdSize=%@ lineFirstResponder=%d notesVisible=%d notesEditing=%d",
+        NSLog(@"kbselftest %d state source=%@ inAppShowing=%d kbShown=%d kbdSize=%@ lineFirstResponder=%d notesVisible=%d notesEditing=%d mode=%@ compact=%d kbFrame=%@ storyFrame=%@ fold=%@",
               (int)step, m_keyboardSource == FrotzKeyboardSourceInApp ? @"InApp" : @"System", m_keyboardController.isShowing,
               m_kbShown, NSStringFromCGSize(m_kbdSize), [m_inputLine isFirstResponder], m_notesController.isVisible,
-              m_notesController.isEditingNotes);
+              m_notesController.isEditingNotes, m_duoLayoutMode, m_keyboardController.keyboardView.compact,
+              NSStringFromCGRect(m_keyboardController.keyboardView.frame), NSStringFromCGRect(m_storyView.frame),
+              NSStringFromCGRect(m_foldExclusionFrame));
     else if ([verb isEqualToString: @"clear"])
         [m_inputLine setText: @""];
     else if ([verb isEqualToString: @"hit"]) {
@@ -1946,6 +1963,22 @@ extern void gli_ios_set_focus(window_t *winNum);
         NSLog(@"kbselftest %d story tail=%@", (int)step, [story substringFromIndex: story.length > 160 ? story.length - 160 : 0]);
     } else if ([verb isEqualToString: @"note"])
         NSLog(@"kbselftest %d %@", (int)step, arg);
+    else if ([verb isEqualToString: @"mode"])
+        [self setDuoLayoutMode: arg];
+    else if ([verb isEqualToString: @"band"]) {
+        // Put the cursor's line a few points into the band, as scrolling back would.
+        CGPoint cursor = [m_storyView cursorPoint];
+        CGFloat bandTop = m_storyView.foldBandTop;
+        if (m_storyView.foldBandHeight > 0)
+            [m_storyView setContentOffset: CGPointMake(0, MAX(0, cursor.y - bandTop - 4)) animated: NO];
+        [m_inputLine updatePosition];
+        CGRect docked = [self dockedInputFrameForTextView: m_storyView];
+        NSLog(@"kbselftest %d band fold=%@ storyFrame=%@ bandTop=%g bandHeight=%g cursorY=%g offset=%g inputLine=%@ docked=%@ isDocked=%d",
+              (int)step, NSStringFromCGRect(m_foldExclusionFrame), NSStringFromCGRect(m_storyView.frame), bandTop,
+              m_storyView.foldBandHeight, cursor.y - m_storyView.contentOffset.y, m_storyView.contentOffset.y,
+              NSStringFromCGRect(m_inputLine.frame), NSStringFromCGRect(docked),
+              !CGRectIsNull(docked) && m_inputLine.frame.origin.y == docked.origin.y);
+    }
     NSLog(@"kbselftest %d %@", (int)step, entry);
     NSLog(@"kbselftest %d text=%@", (int)step, m_inputLine.text);
     if ([m_inputLine.text hasSuffix: @" "])
@@ -2180,6 +2213,7 @@ static UIImage *GlkGetImageCallback(int imageNum) {
     self.automaticallyAdjustsScrollViewInsets = NO;
     self.view = [[UIView alloc] initWithFrame:frame];
     m_postureObserver = [[FrotzPostureObserver alloc] initWithView: self.view];
+    m_foldExclusionFrame = CGRectNull;
     m_keyboardController = [[FrotzKeyboardController alloc] initWithStoryController: self postureObserver: m_postureObserver]; // takes the observer's delegate
     float navHeight = self.view.safeAreaInsets.top;
     frame.origin.y = navHeight;
@@ -2750,6 +2784,7 @@ static const CGFloat kVerticalBarLiveActivityReserve = 90;
     //NSLog(@"autosize bg frame=(%f,%f,%f,%f)", bgRect.origin.x, bgRect.origin.y, bgRect.size.width, bgRect.size.height);
 
     m_background.frame = bgRect;
+    [self applyFoldExclusion];
 
     // iOS 8 seems to be auto-restoring the first responder and bringing the keyboard back when you return to the story from the
     // story list, which we never had to deal with before.  Worse, sometimes keyboardDidShow notification happens after viewDidAppear,
@@ -3032,6 +3067,53 @@ static CGSize KeyboardOverlapInWindow(CGRect frameInView, UIView *view) {
     [self scrollStoryViewToEnd: YES];
 
     [m_inputLine updatePosition];
+}
+
+#pragma mark Fold band (Flow layout)
+
+-(CGRect)foldExclusionFrame {
+    return m_foldExclusionFrame;
+}
+
+-(void)setFoldExclusionFrame:(CGRect)frame {
+    m_foldExclusionFrame = frame;
+    [self applyFoldExclusion];
+    [m_inputLine updatePosition];
+}
+
+// The text views live in the paging background, so the band goes over in its coordinates.
+-(CGRect)foldExclusionInBackground {
+    return CGRectIsNull(m_foldExclusionFrame) ? CGRectNull : [self.view convertRect: m_foldExclusionFrame toView: m_background];
+}
+
+-(BOOL)glkViewNumIsTextBuffer:(NSUInteger)viewNum {
+    return glkGridArray[viewNum].win && glkGridArray[viewNum].win->type == wintype_TextBuffer;
+}
+
+-(void)applyFoldExclusion {
+    CGRect rect = [self foldExclusionInBackground];
+    if (gStoryInterp != kGlxStory || !m_glkViews) {
+        m_storyView.foldExclusionRect = rect;
+        return;
+    }
+    for (NSUInteger i = 0; i < m_glkViews.count; i++) {
+        RichTextView *v = m_glkViews[i];
+        if ([v isKindOfClass: [RichTextView class]])
+            v.foldExclusionRect = [self glkViewNumIsTextBuffer: i] ? rect : CGRectNull;
+    }
+}
+
+-(CGRect)dockedInputFrameForTextView:(UIView *)textView {
+    if (CGRectIsNull(m_foldExclusionFrame) || ![textView isKindOfClass: [RichTextView class]])
+        return CGRectNull;
+    RichTextView *v = (RichTextView *)textView;
+    if (v.foldBandHeight <= 0)
+        return CGRectNull;
+    CGRect frame = v.frame;
+    CGFloat height = [[m_inputLine font] lineHeight] + 2;
+    CGFloat bottom = MAX(4, v.bottomMargin);
+    return CGRectMake(frame.origin.x + v.leftMargin, CGRectGetMaxY(frame) - bottom - height,
+                      frame.size.width - v.leftMargin - v.rightMargin, height);
 }
 
 -(FrotzKeyboardSource) activeKeyboardSource {
@@ -4313,8 +4395,9 @@ static UIColor *scanColor(NSString *colorStr) {
 }
 
 -(void)setDuoLayoutMode:(NSString *)mode {
-    m_duoLayoutMode = [mode isEqualToString: @"flow"] ? @"flow" : @"classic"; // Flow has no effect yet
+    m_duoLayoutMode = [mode isEqualToString: @"flow"] ? @"flow" : @"classic";
     [self savePrefs];
+    [m_keyboardController layoutModeDidChange];
 }
 
 -(NSString *)duoLayoutMode {
