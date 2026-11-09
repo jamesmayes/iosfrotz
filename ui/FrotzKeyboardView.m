@@ -8,6 +8,7 @@
 static const CGFloat kMinKeyHeight = 36, kMaxKeyHeight = 64, kMaxFillKeyHeight = 96;
 static const NSTimeInterval kRepeatDelay = 0.4, kRepeatInterval = 0.08;
 static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
+static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down and up; only a real slide-off cancels
 
 #pragma mark - Key view
 
@@ -306,19 +307,46 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
 
 #pragma mark Touches
 
-// The key under a point, counting half the gap around each key so a near miss still lands.
--(nullable FrotzKeyView *)keyViewAtPoint:(CGPoint)pt {
+// A key's frame plus half the gap around it, so a near miss still lands.
+-(CGRect)hitRectForKey:(FrotzKeyView *)keyView {
     CGFloat slop = -_layout.gap / 2 - 1;
+    return CGRectInset(keyView.frame, slop, slop);
+}
+
+-(nullable FrotzKeyView *)keyViewAtPoint:(CGPoint)pt {
     for (FrotzKeyView *kv in m_keyViews)
-        if (CGRectContainsPoint(CGRectInset(kv.frame, slop, slop), pt))
+        if (CGRectContainsPoint([self hitRectForKey: kv], pt))
             return kv;
     return nil;
 }
+
+#if DEBUG
+static NSString *PhaseName(UITouchPhase phase) {
+    switch (phase) {
+        case UITouchPhaseBegan: return @"began";
+        case UITouchPhaseMoved: return @"moved";
+        case UITouchPhaseStationary: return @"stationary";
+        case UITouchPhaseEnded: return @"ended";
+        case UITouchPhaseCancelled: return @"cancelled";
+        default: return [NSString stringWithFormat: @"phase%ld", (long)phase];
+    }
+}
+
+-(void)logTouch:(UITouch *)touch key:(nullable FrotzKeyView *)keyView {
+    CGPoint pt = [touch locationInView: self];
+    NSLog(@"kbtouch %@ %@ key=%@ inside=%d", PhaseName(touch.phase), NSStringFromCGPoint(pt),
+          keyView ? keyView.key.label : @"(none)", keyView ? [self touch: touch isOnKey: keyView] : 0);
+}
+#define LOG_TOUCH(t, kv) [self logTouch: (t) key: (kv)]
+#else
+#define LOG_TOUCH(t, kv)
+#endif
 
 -(void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [m_feedback prepare];
     for (UITouch *touch in touches) {
         FrotzKeyView *kv = [self keyViewAtPoint: [touch locationInView: self]];
+        LOG_TOUCH(touch, kv);
         if (!kv)
             continue;
         [m_touchKeys setObject: kv forKey: touch];
@@ -331,6 +359,7 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
     // and sliding off a repeating key stops it for good.
     for (UITouch *touch in touches) {
         FrotzKeyView *kv = [m_touchKeys objectForKey: touch];
+        LOG_TOUCH(touch, kv);
         if (!kv)
             continue;
         if (touch == m_repeatTouch && ![self touch: touch isOnKey: kv])
@@ -342,6 +371,7 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
 -(void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     for (UITouch *touch in touches) {
         FrotzKeyView *kv = [m_touchKeys objectForKey: touch];
+        LOG_TOUCH(touch, kv);
         if (!kv)
             continue;
         BOOL inside = [self touch: touch isOnKey: kv];
@@ -353,6 +383,7 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
 -(void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     for (UITouch *touch in touches) {
         FrotzKeyView *kv = [m_touchKeys objectForKey: touch];
+        LOG_TOUCH(touch, kv);
         if (!kv)
             continue;
         [m_touchKeys removeObjectForKey: touch];
@@ -360,8 +391,11 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
     }
 }
 
+// Against this key's own rect, not the first key whose slop holds the point (that can be a
+// neighbour), and with room for the finger to roll.
 -(BOOL)touch:(UITouch *)touch isOnKey:(FrotzKeyView *)keyView {
-    return [self keyViewAtPoint: [touch locationInView: self]] == keyView;
+    CGFloat slop = -MAX(kReleaseSlop, _layout.gap / 2 + 1);
+    return CGRectContainsPoint(CGRectInset(keyView.frame, slop, slop), [touch locationInView: self]);
 }
 
 // Lit while any touch that went down on it is still over it, so two fingers on one key
@@ -515,6 +549,17 @@ static BOOL ActsOnTouchDown(FrotzKeyAction action) {
 }
 
 #if DEBUG
+-(CGPoint)centerOfKeyWithLabel:(NSString *)label {
+    for (FrotzKeyView *kv in m_keyViews)
+        if ([kv.key.label isEqualToString: label])
+            return CGPointMake(CGRectGetMidX(kv.frame), CGRectGetMidY(kv.frame));
+    return CGPointMake(NAN, NAN);
+}
+
+-(nullable NSString *)labelOfKeyAtPoint:(CGPoint)pt {
+    return [self keyViewAtPoint: pt].key.label;
+}
+
 -(BOOL)tapKeyWithLabel:(NSString *)label {
     for (FrotzKeyView *kv in [m_keyViews copy]) {
         if ([kv.key.label isEqualToString: label]) {

@@ -25,6 +25,19 @@
 @implementation FrotzWindow
 - (void)sendEvent:(UIEvent *)event {
     static UIView *prevView;
+#if DEBUG
+    // Shows which view a touch on the in-app keyboard really reaches, for touches the keyboard never sees.
+    FrotzKeyboardView *keyboard = [[[theStoryBrowser storyMainViewController] valueForKey: @"m_keyboardController"] keyboardView];
+    if (keyboard && !keyboard.hidden && event.type == UIEventTypeTouches) {
+        for (UITouch *touch in [event allTouches]) {
+            CGPoint pt = [touch locationInView: keyboard];
+            if (touch.phase != UITouchPhaseMoved && touch.phase != UITouchPhaseStationary && [keyboard pointInside: pt withEvent: event])
+                NSLog(@"kbtouch window phase=%ld view=%@ at %@ tapCount=%lu", (long)touch.phase,
+                      touch.view == keyboard ? @"keyboard" : NSStringFromClass([touch.view class]), NSStringFromCGPoint(pt),
+                      (unsigned long)touch.tapCount);
+        }
+    }
+#endif
     for (UITouch *touch in [event allTouches]) {
         UIView *view = [touch view];
         UITouchPhase phase = [touch phase];

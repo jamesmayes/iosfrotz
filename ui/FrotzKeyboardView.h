@@ -43,6 +43,10 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardShiftState) {
 #if DEBUG
 /// Presses and releases the key with this label in the current layer through the touch path. NO if there is none.
 -(BOOL)tapKeyWithLabel:(NSString *)label;
+/// The key's centre in the keyboard's coordinates; NAN if this layer has no such key.
+-(CGPoint)centerOfKeyWithLabel:(NSString *)label;
+/// The label of the key a touch at this point (keyboard coordinates) would press.
+-(nullable NSString *)labelOfKeyAtPoint:(CGPoint)pt;
 #endif
 @end
 

@@ -1773,8 +1773,8 @@ extern void gli_ios_set_focus(window_t *winNum);
 
 // Drives the keyboard's own key handling through the typing API, since the simulator can't be
 // tapped from a script. Each entry is "tap:<label>", "wait:<seconds>", "story:" (log the end of
-// the transcript), "select:last2", "type:<text>" (straight to typeText:, for what no Classic key types)
-// or "note:<text>".
+// the transcript), "select:last2", "type:<text>" (straight to typeText:, for what no Classic key types),
+// "clear:", "hit:<label>" (which view a real touch at that key's centre would reach) or "note:<text>".
 -(void)runKeyboardSelfTest {
     NSArray *script = @[ @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"tap:⌫", @"tap:⌫", @"tap:o", @"tap:k", @"tap:return", @"wait:2", @"story:",
                          @"tap:i", @"tap:n", @"tap:v", @"tap:space", @"tap:return", @"wait:2", @"story:",
@@ -1783,6 +1783,9 @@ extern void gli_ios_set_focus(window_t *winNum);
                          @"tap:ABC", @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"select:last2", @"tap:x",
                          @"tap:⌫", @"tap:⌫", @"tap:⌫",
                          @"type:é", @"tap:⌫", @"type:e\u0301", @"tap:⌫",
+                         @"hit:q", @"hit:⇧", @"hit:space", @"hit:return", @"hit:123",
+                         @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"tap:space", @"wait:0.5", @"tap:a", @"tap:t", @"wait:0.5", @"clear:",
+                         @"tap:x", @"tap:space", @"wait:0.5", @"clear:",
                          @"note:two touches at once: not scriptable, tapKeyWithLabel: presses one key at a time" ];
     [self keyboardSelfTestStep: 0 ofScript: script];
 }
@@ -1805,6 +1808,15 @@ extern void gli_ios_set_focus(window_t *winNum);
         UITextPosition *start = [m_inputLine positionFromPosition: end offset: -2];
         if (start)
             m_inputLine.selectedTextRange = [m_inputLine textRangeFromPosition: start toPosition: end];
+    } else if ([verb isEqualToString: @"clear"])
+        [m_inputLine setText: @""];
+    else if ([verb isEqualToString: @"hit"]) {
+        FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
+        CGPoint center = [keyboard centerOfKeyWithLabel: arg];
+        CGPoint pt = [keyboard convertPoint: center toView: nil];
+        UIView *hit = [keyboard.window hitTest: pt withEvent: nil];
+        NSLog(@"kbselftest %d hit %@ at %@ -> %@%@, key %@", (int)step, arg, NSStringFromCGPoint(pt), NSStringFromClass([hit class]),
+              hit == keyboard ? @" (keyboard)" : @" (NOT the keyboard)", [keyboard labelOfKeyAtPoint: center]);
     } else if ([verb isEqualToString: @"type"]) {
         [m_inputLine typeText: arg];
         NSLog(@"kbselftest %d utf16 length=%lu", (int)step, (unsigned long)m_inputLine.text.length);
@@ -1817,6 +1829,8 @@ extern void gli_ios_set_focus(window_t *winNum);
         NSLog(@"kbselftest %d %@", (int)step, arg);
     NSLog(@"kbselftest %d %@", (int)step, entry);
     NSLog(@"kbselftest %d text=%@", (int)step, m_inputLine.text);
+    if ([m_inputLine.text hasSuffix: @" "])
+        NSLog(@"kbselftest %d (text ends in a space; the log trims it)", (int)step);
     if ([arg isEqualToString: @"v"]) {
         CompletionLabel *completion = [m_inputLine valueForKey: @"m_completionLabel"]; // DEBUG only; no accessor for it
         NSLog(@"kbselftest %d completion=%@", (int)step, completion.superview ? completion.text : nil);
