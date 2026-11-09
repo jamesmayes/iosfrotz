@@ -44,6 +44,7 @@ static const CGFloat kFakeFoldHeight = 24.0;
     CGFloat m_hingeAngle; // degrees
     CGRect m_foldFrame;
     BOOL m_started;
+    NSUInteger m_generation; // bumped on start and stop, so a hinge update queued before either is dropped
     NSObject *m_hingeInteraction; // a UIHingeInteraction; untyped so the ivar builds against older SDKs
 #if DEBUG
     BOOL m_faking;
@@ -87,9 +88,11 @@ static const CGFloat kFakeFoldHeight = 24.0;
 }
 
 -(void)start {
+    NSAssert([NSThread isMainThread], @"FrotzPostureObserver is main-thread only");
     if (m_started)
         return;
     m_started = YES;
+    NSUInteger generation = ++m_generation;
 #if DEBUG
     [self readFakePosture];
     if (m_faking) {
@@ -105,7 +108,7 @@ static const CGFloat kFakeFoldHeight = 24.0;
         __weak FrotzPostureObserver *weakSelf = self;
         UIHingeInteraction *interaction = [[UIHingeInteraction alloc] initWithUpdateHandler:^(UIHingeInteraction *hingeInteraction, UIHingeInteractionUpdate *update) {
             UIHinge *hinge = update.hinge;
-            dispatch_block_t apply = ^{ [weakSelf hingeDidUpdate: hinge]; };
+            dispatch_block_t apply = ^{ [weakSelf hingeDidUpdate: hinge generation: generation]; };
             if ([NSThread isMainThread])
                 apply();
             else
@@ -118,9 +121,11 @@ static const CGFloat kFakeFoldHeight = 24.0;
 }
 
 -(void)stop {
+    NSAssert([NSThread isMainThread], @"FrotzPostureObserver is main-thread only");
     if (!m_started)
         return;
     m_started = NO;
+    m_generation++;
 #if FROTZ_HAS_HINGE_API
     if (@available(iOS 27.1, *)) {
         UIHingeInteraction *interaction = (UIHingeInteraction *)m_hingeInteraction;
@@ -132,6 +137,7 @@ static const CGFloat kFakeFoldHeight = 24.0;
 }
 
 -(void)refresh {
+    NSAssert([NSThread isMainThread], @"FrotzPostureObserver is main-thread only");
     if (!m_started)
         return;
 #if DEBUG
@@ -144,8 +150,8 @@ static const CGFloat kFakeFoldHeight = 24.0;
 }
 
 #if FROTZ_HAS_HINGE_API
--(void)hingeDidUpdate:(nullable UIHinge *)hinge API_AVAILABLE(ios(27.1)) {
-    if (!m_started)
+-(void)hingeDidUpdate:(nullable UIHinge *)hinge generation:(NSUInteger)generation API_AVAILABLE(ios(27.1)) {
+    if (!m_started || generation != m_generation)
         return;
     FrotzPosture posture = FrotzPostureUnknown;
     CGFloat angle = 0;
@@ -202,8 +208,14 @@ static const CGFloat kFakeFoldHeight = 24.0;
         m_fakePosture = FrotzPostureFullyOpen;
     else
         m_faking = NO;
-    NSString *foldY = env[@"FROTZ_FAKE_FOLD_Y"];
-    m_fakeFoldY = [foldY length] ? [foldY doubleValue] : -1;
+    // The whole value must be a finite number; anything else falls back to the middle.
+    NSScanner *scanner = [NSScanner scannerWithString: env[@"FROTZ_FAKE_FOLD_Y"] ?: @""];
+    double foldY;
+    m_fakeFoldY = -1;
+    if ([scanner scanDouble: &foldY] && scanner.isAtEnd && isfinite(foldY) && foldY >= 0)
+        m_fakeFoldY = foldY;
+    else if (env[@"FROTZ_FAKE_FOLD_Y"])
+        NSLog(@"FROTZ_FAKE_FOLD_Y=\"%@\" is not a number of points; using the middle", env[@"FROTZ_FAKE_FOLD_Y"]);
 }
 
 -(CGFloat)angleForFakePosture {

@@ -164,7 +164,7 @@ static const CGFloat kPreviewMargin = 6.0;
 #if DEBUG
 -(void)selectRow:(NSInteger)row {
     NSIndexPath *indexPath = [NSIndexPath indexPathForRow: row inSection: 0];
-    if (row < [self tableView: self.tableView numberOfRowsInSection: 0])
+    if (row >= 0 && row < [self tableView: self.tableView numberOfRowsInSection: 0])
         [self tableView: self.tableView didSelectRowAtIndexPath: indexPath];
 }
 #endif
