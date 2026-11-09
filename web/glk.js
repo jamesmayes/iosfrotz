@@ -511,16 +511,18 @@ const saves = WebFrotzSaves.createSaveSession({
   story: () => storyFile,
   hidden: (n) => deleted.has(n),
   locks: navigator.locks || null,
+  events: window,
   onChange: savesChanged,
   onMode: savesModeChanged,
   log: { warn: (...a) => console.warn("[glk]", ...a) },
 });
 
 // Only one tab writes to browser storage (saves.js). Say so once when this
-// one cannot, and again when it takes over; the dialog note and the badge
-// keep saying it meanwhile.
+// one cannot (because another tab owns it, or because this one lost it),
+// and again when it takes over; the dialog note and the badge keep saying
+// it meanwhile.
 function savesModeChanged(mode, previous) {
-  if (mode === "reader") notice(WebFrotzSaves.NOT_OWNER);
+  if (mode === "reader") notice(saves.notice());
   else if (mode === "writer" && previous === "reader") notice(WebFrotzSaves.NOW_OWNER);
 }
 

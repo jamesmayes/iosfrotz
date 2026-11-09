@@ -22,9 +22,13 @@
 // session-only mode: its saves stay in MEMFS, a notice says another Frotz
 // tab owns browser storage, RESTORE still reads stored files, and nothing
 // is ever written. It keeps waiting for the lock in the background; when the
-// owner closes, the waiting page takes it and starts persisting. Without
-// Web Locks (or if the request fails) every page writes, and the revision
-// checks below are all that stands between tabs ("unlocked" mode).
+// owner closes, the waiting page takes it and starts persisting. A writer
+// that loses the lock (stolen, or a conflict shows another page wrote)
+// becomes session-only at once; a page leaving for the back/forward cache
+// lets go of it and asks again when it comes back (createSaveSession has
+// the details). Without Web Locks, or if the very first request fails,
+// every page writes, and the revision checks below are all that stands
+// between tabs ("unlocked" mode).
 //
 // Revisions. Each file's meta has `rev`, an integer that starts at 1 and
 // goes up by one with every write. put() runs ONE readwrite transaction:
@@ -113,6 +117,15 @@
     constructor(what) {
       super(`${what} was superseded`);
       this.name = "Superseded";
+    }
+  }
+
+  // A write this page may no longer make: it lost (or let go of) the lock
+  // before the write reached storage. Nothing was written.
+  class Revoked extends Error {
+    constructor(what) {
+      super(`${what} was abandoned: this tab no longer writes to browser storage`);
+      this.name = "Revoked";
     }
   }
 
@@ -349,17 +362,21 @@
       //   { outcome: "removed", rev, meta }   tombstone written
       //   { outcome: "none" }                  nothing stored under name
       //   { outcome: "conflict", theirs }      stored rev is not expectedRev
-      // and rejects like put(). One readwrite transaction: the bytes record
+      // and rejects like put() (allowed() too). One readwrite transaction: the bytes record
       // is deleted and meta becomes a tombstone at rev + 1.
       remove(name, opts) {
         const o = opts || {};
         return guarded(`put:${name}`, `Deleting ${name}`, async (ctx) => {
+          const allowed = () => !o.allowed || o.allowed();
+          if (!allowed()) throw new Revoked(`Deleting ${name}`);
           const db = await open(ctx);
+          let revoked = false;
           return transact(ctx, db, [SAVES, META], "readwrite", (tx, set) => {
             const meta = tx.objectStore(META);
             const req = meta.get(name);
             req.onsuccess = () => {
               if (!ctx.live()) return;
+              if (!allowed()) { revoked = true; tx.abort(); return; }
               const old = req.result || null;
               if (!old || old.deleted) {
                 set({ outcome: "none" });
@@ -379,27 +396,36 @@
               tx.addEventListener("complete", () => noteRev(name, rev));
               set({ outcome: "removed", rev, meta: m });
             };
-          });
+          }).catch((e) => { throw revoked ? new Revoked(`Deleting ${name}`) : e; });
         });
       },
 
-      // put(name, bytes, { mtime, story, expectedRev }) resolves
+      // put(name, bytes, { mtime, story, expectedRev, allowed }) resolves
       //   { outcome: "persisted", rev, meta }   written (or already equal)
       //   { outcome: "conflict", theirs }        stored rev is not expectedRev
-      // and rejects on failure, timeout (StorageTimeout) or supersession.
+      // and rejects on failure, timeout (StorageTimeout), supersession, or
+      // Revoked when allowed() (optional) is false before the write or in
+      // the transaction's callback, which then writes nothing.
       // expectedRev defaults to the frozen baseline (0 if never set), read
       // when the transaction runs.
       put(name, bytes, opts) {
         const o = opts || {};
         const copy = new Uint8Array(bytes); // detached from the wasm heap
         return guarded(`put:${name}`, `Saving ${name}`, async (ctx) => {
+          const allowed = () => !o.allowed || o.allowed();
           const hash = await sha256(copy);
+          if (!allowed()) throw new Revoked(`Saving ${name}`);
           const db = await open(ctx);
+          let revoked = false;
           return transact(ctx, db, [SAVES, META], "readwrite", (tx, set) => {
             const meta = tx.objectStore(META);
             const req = meta.get(name);
             req.onsuccess = () => {
               if (!ctx.live()) return;
+              // Checked in the same callback that writes: once the session
+              // stops writing, no write is issued, even from an open
+              // transaction.
+              if (!allowed()) { revoked = true; tx.abort(); return; }
               const old = req.result || null;
               const have = old ? old.rev || 0 : 0;
               const expected = o.expectedRev != null ? o.expectedRev : (seen.get(name) || 0);
@@ -423,8 +449,16 @@
               tx.addEventListener("complete", () => noteRev(name, rev));
               set({ outcome: "persisted", rev, meta: m });
             };
-          });
+          }).catch((e) => { throw revoked ? new Revoked(`Saving ${name}`) : e; });
         });
+      },
+
+      // Cancel every write and delete still in progress: a transaction
+      // that has not committed is aborted, and each one rejects with
+      // Revoked. Used when the page stops being the writer.
+      abandon(why) {
+        for (const [key, cancel] of [...liveOps])
+          if (key.startsWith("put:")) cancel(new Revoked(why || "Saving"));
       },
     };
   }
@@ -484,6 +518,9 @@
   const SESSION_ONLY = "Saved for this session only, not to browser storage. Export it from Saves.";
   const NOT_OWNER = "Another Frotz tab owns browser storage; saves here are kept for this " +
     "session only. Export any you need.";
+  const LOST_OWNER = "This tab no longer owns browser storage: another Frotz tab took it over " +
+    "or wrote to it. Saves here are kept for this session only. Export any you need, or reload " +
+    "the page to try again.";
   const NOW_OWNER = "This tab now saves to browser storage. Saves made here earlier are still " +
     "for this session only: save again, or open Saves and choose Keep this one.";
   const conflictNotice = (name) =>
@@ -495,134 +532,260 @@
   //
   //   opts.store     a save store, or null without IndexedDB
   //   opts.locks     navigator.locks, or null without Web Locks
+  //   opts.events    window, for pagehide/pageshow (optional)
   //   opts.fs()      the Emscripten FS
   //   opts.dir       "/saves"
   //   opts.story()   the story file name recorded with each save
   //   opts.hidden(n) true for a name to leave out of entries() (optional)
   //   opts.onChange()  after anything entries() or attention() reports changes
-  //   opts.onMode(mode, previous)  after mode() changes (optional)
+  //   opts.onMode(mode, previous)  after mode() settles on a new value
+  //                  (previous is the last settled mode; "pending" is never
+  //                  reported) (optional)
   //   opts.log       console-like logger
   //
-  // mode() is "pending" (the lock request has not answered yet), "writer"
-  // (this page holds the lock and persists), "reader" (another page holds
-  // it: session-only), "unlocked" (no Web Locks: persists, revisions only)
-  // or "none" (no IndexedDB).
+  // mode() is "pending" (the lock request has not answered yet, or the page
+  // is hidden), "writer" (this page holds the lock and persists), "reader"
+  // (session-only: another page holds the lock, or this page lost it),
+  // "unlocked" (no Web Locks: persists, revisions only) or "none" (no
+  // IndexedDB).
+  //
+  // Pending local writes. Every local write of a file (a game save, an
+  // import, Keep this one, a game delete) gives that file a new local
+  // generation and marks it dirty, synchronously, in the same turn as the
+  // MEMFS change and before anything is awaited. A dirty file's MEMFS state
+  // is newer than anything this tab knows to be stored, so load() (RESTORE)
+  // never replaces it. Only the operation that still owns the file's
+  // current generation may settle it: a persisted write clears the dirty
+  // mark and sets the file's stored base revision; a failure, timeout,
+  // conflict or session-only outcome keeps the dirty mark and the local
+  // bytes and shows the reason. An operation overtaken by a newer local
+  // write changes nothing about the file and reports "superseded".
+  //
+  // Ownership. Writing needs the lock to be held now, not just once:
+  //   - the initial request failing, or no Web Locks at all, before any
+  //     grant: "unlocked" (every tab writes, revisions only);
+  //   - after a grant, losing it (the request rejects, e.g. another page
+  //     asked with steal: true), or a revision conflict proving another
+  //     page wrote: "reader" with LOST_OWNER, for the rest of the page's
+  //     life (a reload, or a return from the back/forward cache, asks
+  //     again). Writes still in progress are abandoned (aborted where not
+  //     committed) and their files keep the dirty mark and a "session"
+  //     badge; every write also re-checks ownership in the transaction
+  //     callback that would write;
+  //   - a queued request that rejects leaves the page a reader.
+  // pagehide revokes writing first, abandons writes in progress (dirty
+  // marks kept), aborts a queued request (AbortSignal) and then releases
+  // the lock. pageshow with persisted === true asks again, and a page that
+  // gets the lock takes a fresh snapshot before it writes.
   function createSaveSession(opts) {
     const store = opts.store;
     const log = opts.log || console;
     const dir = opts.dir;
     const unpersisted = new Map(); // name -> { reason: "conflict"|"failed"|"timeout"|"session" }
-    const base = new Map(); // name -> stored rev the MEMFS copy equals
-    const mutations = new Map(); // name -> count of this session's local writes
-    const inflight = new Map(); // name -> puts of this tab not yet answered
+    const base = new Map(); // name -> stored rev the MEMFS copy equals (when clean)
+    const dirty = new Map(); // name -> { g, del } local generation not known to be stored
+    const lastGen = new Map(); // name -> latest local generation (never cleared)
+    let genSeq = 0;
     let stored = []; // last list()
-    let mode = "none";
+    // "pending" from the start, so construction never calls back (the
+    // page's callbacks may refer to the session it is still creating).
+    let mode = store ? "pending" : "none";
+    let settled = "none"; // last mode reported to onMode
+    let lost = false; // lost the lock after a grant: the reader notice is LOST_OWNER
+    let epoch = 0; // bumped by every grant and every loss of writing rights
+    let release = null; // lets go of the held lock
+    let queued = null; // AbortController of the queued request
+    let hidden = false; // between pagehide and pageshow
     const changed = () => { if (opts.onChange) opts.onChange(); };
 
     const exists = (path) => {
       try { return opts.fs().isFile(opts.fs().stat(path).mode); } catch (e) { return false; }
     };
-    const mutated = (name) => mutations.set(name, (mutations.get(name) || 0) + 1);
+    // A local write of name (del: a delete): new generation, dirty.
+    // Synchronous.
+    const touch = (name, del) => {
+      const g = ++genSeq;
+      dirty.set(name, { g, del: !!del });
+      lastGen.set(name, g);
+      return g;
+    };
+    const owns = (name, g) => { const d = dirty.get(name); return !!d && d.g === g; };
+    // load() must keep MEMFS as it is: a dirty file that is there, or a
+    // dirty delete. (A dirty file that has vanished from MEMFS some other
+    // way has nothing left to protect.)
+    const holdsLocal = (name, path) => {
+      const d = dirty.get(name);
+      return !!d && (d.del || exists(path));
+    };
     const writes = () => mode === "writer" || mode === "unlocked";
+    const notice = () => (lost ? LOST_OWNER : NOT_OWNER);
 
     function setMode(m) {
-      const prev = mode;
-      if (prev === m) return;
+      if (mode === m) return;
       mode = m;
-      if (opts.onMode) opts.onMode(m, prev);
+      if (m !== "pending" && m !== settled) {
+        const prev = settled;
+        settled = m;
+        if (opts.onMode) opts.onMode(m, prev);
+      }
       changed();
     }
 
     // Becoming a writer: freeze the baseline first, so no write ever runs
     // against a guessed rev. A failed snapshot leaves every name at 0, so
     // a save of an existing stored file conflicts (safe) rather than
-    // overwriting it.
-    async function becomeWriter(m) {
+    // overwriting it. Does nothing if the grant was lost meanwhile.
+    async function becomeWriter(m, ep) {
+      let snap = null;
       try {
-        stored = await store.snapshot();
+        snap = await store.snapshot();
       } catch (e) {
         log.warn("could not read the saves in browser storage", e);
       }
+      if (ep !== epoch) return;
+      if (snap) stored = snap;
       setMode(m);
     }
 
-    // Resolves once mode() is no longer "pending". Writes wait for it.
-    const ready = (() => {
-      if (!store) return Promise.resolve();
+    // Stop writing at once: abandon writes in progress and let go of the
+    // lock. why: "lost" (stolen, or a conflict) or "hidden" (pagehide).
+    function revoke(why) {
+      epoch++;
+      if (why === "lost") lost = true;
+      setMode(why === "hidden" ? "pending" : "reader");
+      store.abandon(why === "lost" ? "Lost browser storage" : "Page hidden");
+      if (release) { const r = release; release = null; r(); }
+      if (queued) { const q = queued; queued = null; try { q.abort(); } catch (e) { /* done */ } }
+    }
+
+    // Hold the lock just granted (epoch ep) until release() or the page
+    // goes away.
+    function holdLock() {
+      return new Promise((resolve) => { release = resolve; });
+    }
+
+    // Ask for the lock. Resolves once mode() is no longer "pending".
+    function acquire() {
       const locks = opts.locks;
-      mode = "pending";
-      if (!locks || typeof locks.request !== "function") return becomeWriter("unlocked");
-      const hold = () => new Promise(() => { /* until the page closes */ });
+      setMode("pending"); // already "pending" at construction: no callback
+      if (!locks || typeof locks.request !== "function") return becomeWriter("unlocked", epoch);
+      lost = false;
       return new Promise((resolve) => {
         let answered = false;
+        let granted = false;
         const answer = () => { if (!answered) { answered = true; resolve(); } };
-        const unlocked = (e) => {
-          if (answered) return;
-          log.warn("Web Locks unavailable; every tab writes to browser storage", e);
-          becomeWriter("unlocked").then(answer);
-        };
         let req;
         try {
           req = locks.request(LOCK_NAME, { mode: "exclusive", ifAvailable: true }, async (lock) => {
             if (lock) {
-              await becomeWriter("writer");
+              if (hidden) return null; // hidden before the grant arrived: let go
+              granted = true;
+              const ep = ++epoch;
+              const held = holdLock();
+              await becomeWriter("writer", ep);
               answer();
-              return hold();
+              return held;
             }
             setMode("reader");
             answer();
-            // Wait in line; granted when the owner closes.
-            Promise.resolve()
-              .then(() => locks.request(LOCK_NAME, { mode: "exclusive" }, async () => {
-                await becomeWriter("writer");
-                return hold();
-              }))
-              .catch((e) => log.warn("waiting for browser storage failed", e));
+            wait();
             return null;
           });
         } catch (e) {
-          unlocked(e);
-          return;
+          req = Promise.reject(e);
         }
-        Promise.resolve(req).catch(unlocked);
+        Promise.resolve(req).then(() => answer(), (e) => {
+          if (!granted) {
+            // The API is there but the first request failed: no grant was
+            // ever made, so fall back to revisions only.
+            log.warn("Web Locks unavailable; every tab writes to browser storage", e);
+            becomeWriter("unlocked", epoch).then(answer);
+            return;
+          }
+          // Lost after the grant (stolen, perhaps during the snapshot).
+          log.warn("lost the browser storage lock", e);
+          if (writes() || mode === "pending") revoke("lost");
+          answer();
+        });
       });
-    })();
+    }
+
+    // A reader waits in line; granted when the owner lets go.
+    function wait() {
+      const locks = opts.locks;
+      const ac = typeof AbortController === "function" ? new AbortController() : null;
+      queued = ac;
+      let granted = false;
+      Promise.resolve()
+        .then(() => locks.request(LOCK_NAME, ac ? { mode: "exclusive", signal: ac.signal } :
+          { mode: "exclusive" }, async () => {
+          if (queued === ac) queued = null;
+          if (hidden || lost || mode !== "reader") return null;
+          granted = true;
+          const ep = ++epoch;
+          const held = holdLock();
+          await becomeWriter("writer", ep);
+          return held;
+        }))
+        .catch((e) => {
+          if (queued === ac) queued = null;
+          if (ac && ac.signal.aborted && !granted) return; // aborted by revoke()
+          if (granted) {
+            log.warn("lost the browser storage lock", e);
+            if (writes() || mode === "pending") revoke("lost");
+            return;
+          }
+          // The queued request failed: stay a reader, with the notice.
+          log.warn("waiting for browser storage failed; this tab stays session-only", e);
+        });
+    }
+
+    let ready = store ? acquire() : Promise.resolve();
+
+    if (store && opts.events && opts.locks && typeof opts.locks.request === "function") {
+      opts.events.addEventListener("pagehide", () => {
+        if (mode === "unlocked" || mode === "none") return; // no lock to give back
+        hidden = true;
+        revoke("hidden");
+      });
+      opts.events.addEventListener("pageshow", (ev) => {
+        if (!ev || !ev.persisted || !hidden) return;
+        hidden = false;
+        ready = acquire();
+      });
+    }
 
     function noteStored(name, meta) {
       stored = stored.filter((s) => s.name !== name);
       if (meta) stored.push({ name, ...meta });
     }
 
-    // put() with this tab's write counted as in flight until it answers:
-    // until then the MEMFS copy is newer than anything stored.
-    async function put(path, expectedRev) {
-      const name = baseName(path);
-      inflight.set(name, (inflight.get(name) || 0) + 1);
-      try {
-        return await putNow(path, expectedRev);
-      } finally {
-        const n = inflight.get(name) - 1;
-        if (n) inflight.set(name, n); else inflight.delete(name);
-      }
-    }
-
-    async function putNow(path, expectedRev) {
-      const name = baseName(path);
-      mutated(name);
+    // Store path, the local generation g of name. Never rejects.
+    async function put(path, name, g, expectedRev) {
       let r;
       try {
         if (!store) throw new Error("IndexedDB is not available");
         await ready;
+        if (!owns(name, g)) return { outcome: "superseded" };
         if (!writes()) {
           unpersisted.set(name, { reason: "session" });
           changed();
-          return { outcome: "session", message: NOT_OWNER };
+          return { outcome: "session", message: notice() };
         }
+        const epNow = epoch;
         const FS = opts.fs();
         const bytes = FS.readFile(path);
-        r = await store.put(name, bytes, { mtime: +FS.stat(path).mtime, story: opts.story(), expectedRev });
+        // Still the writer of the same grant, and still the latest local
+        // write of the file, at the moment the transaction would write.
+        r = await store.put(name, bytes, { mtime: +FS.stat(path).mtime, story: opts.story(),
+          expectedRev, allowed: () => writes() && epoch === epNow && owns(name, g) });
       } catch (e) {
-        if (e instanceof Superseded) return { outcome: "superseded" }; // the newer one reports
+        if (!owns(name, g)) return { outcome: "superseded" }; // the newer one reports
+        if (e instanceof Revoked || (e instanceof Superseded && !writes())) {
+          unpersisted.set(name, { reason: "session" });
+          changed();
+          return { outcome: "session", message: notice() };
+        }
         const outcome = e instanceof StorageTimeout ? "timeout" : "failed";
         log.warn(`could not write ${path} to IndexedDB`, e);
         unpersisted.set(name, { reason: outcome });
@@ -630,17 +793,22 @@
         return { outcome, message: SESSION_ONLY };
       }
       if (r.outcome === "persisted") {
+        noteStored(name, r.meta);
+        if (!owns(name, g)) { changed(); return { outcome: "superseded" }; }
+        dirty.delete(name);
         unpersisted.delete(name);
         base.set(name, r.rev);
-        noteStored(name, r.meta);
         changed();
         refresh();
         return { outcome: "persisted" };
       }
       log.warn(`${path}: browser storage has rev ${r.theirs && r.theirs.rev}, not the one this ` +
         "tab expected; kept this save in memory");
-      unpersisted.set(name, { reason: "conflict" });
       noteStored(name, r.theirs);
+      if (!owns(name, g)) { changed(); return { outcome: "superseded" }; }
+      unpersisted.set(name, { reason: "conflict" });
+      // Another page wrote: this one is not the only writer any more.
+      if (mode === "writer") revoke("lost");
       changed();
       refresh();
       return { outcome: "conflict", message: conflictNotice(name) };
@@ -650,24 +818,35 @@
     // storage too. Resolves { outcome, message? }: "removed", "none",
     // "conflict" (the stored one changed behind this tab; it is kept),
     // "session" (not the writer: deleted here only), "failed", "timeout" or
-    // "superseded". Never rejects.
+    // "superseded". Never rejects. Until it settles, and after a failure or
+    // a session-only delete, the name stays dirty, so a RESTORE does not
+    // bring the stored copy back. After a removal, "none" or a conflict it
+    // is clean again (a conflict leaves the other tab's copy to RESTORE).
     async function remove(path) {
       const name = baseName(path);
-      mutated(name);
+      const g = touch(name, true);
       unpersisted.delete(name);
       base.delete(name);
-      if (!store) { changed(); return { outcome: "none" }; }
+      changed();
+      if (!store) { dirty.delete(name); return { outcome: "none" }; }
       await ready;
+      if (!owns(name, g)) return { outcome: "superseded" };
       if (!writes()) {
-        changed();
         return { outcome: "session", message: `Deleted ${name} in this session only: another ` +
           "Frotz tab owns browser storage." };
       }
+      const epNow = epoch;
       let r;
       try {
-        r = await store.remove(name, { story: opts.story() });
+        r = await store.remove(name, { story: opts.story(),
+          allowed: () => writes() && epoch === epNow && owns(name, g) });
       } catch (e) {
-        if (e instanceof Superseded) return { outcome: "superseded" };
+        if (!owns(name, g)) return { outcome: "superseded" };
+        if (e instanceof Revoked || (e instanceof Superseded && !writes())) {
+          changed();
+          return { outcome: "session", message: `Deleted ${name} in this session only: this ` +
+            "tab no longer owns browser storage." };
+        }
         const outcome = e instanceof StorageTimeout ? "timeout" : "failed";
         log.warn(`could not delete ${path} from IndexedDB`, e);
         changed();
@@ -675,6 +854,9 @@
           "it may come back when the page is reloaded." };
       }
       if (r.outcome === "removed") noteStored(name, r.meta);
+      if (!owns(name, g)) { changed(); return { outcome: "superseded" }; }
+      dirty.delete(name);
+      if (r.outcome === "conflict" && mode === "writer") revoke("lost");
       changed();
       refresh();
       if (r.outcome === "conflict")
@@ -696,7 +878,7 @@
     }
 
     return {
-      ready,
+      get ready() { return ready; },
       mode: () => mode,
 
       // True while saves here cannot reach browser storage at all (another
@@ -706,12 +888,21 @@
       // True when Keep this one can store this tab's copy.
       canWrite: writes,
 
+      // The persistent session-only notice for a reader.
+      notice,
+
+      // True while a local write of name is not known to be in storage.
+      isDirty: (name) => dirty.has(name),
+
       // After the game wrote path: store it. Resolves { outcome, message? }
       // with outcome "persisted", "conflict", "session" (not the writer),
-      // "failed", "timeout" or "superseded" (a newer write of the same
-      // file took over). message is the transcript notice, if any. Never
-      // rejects.
-      persist: (path) => put(path),
+      // "failed", "timeout" or "superseded" (a newer local write of the
+      // same file took over). message is the transcript notice, if any.
+      // Never rejects. The file is marked dirty before this returns.
+      persist(path) {
+        const name = baseName(path);
+        return put(path, name, touch(name));
+      },
 
       remove,
 
@@ -721,16 +912,17 @@
       // Conflicts again if the store has changed since.
       keepLocal(name) {
         const s = stored.find((x) => x.name === name);
-        return put(`${dir}/${name}`, s ? s.rev || 0 : 0);
+        return put(`${dir}/${name}`, name, touch(name), s ? s.rev || 0 : 0);
       },
 
       // Before the game reads path (or asks whether it exists): bring the
       // stored copy into MEMFS if MEMFS lacks it or holds a different
-      // stored revision. A copy that is not in storage (a session-only,
-      // failed or conflicted save, or a save still being written) is this
-      // tab's own latest save and is kept. So is any local write (save,
-      // import, Keep this one, delete) that happens while storage is being
-      // read: the stored result is then discarded.
+      // stored revision. A dirty file (any local write, save, import, Keep
+      // this one or delete, not known to be stored: in progress, failed,
+      // conflicted or session-only) is this tab's own latest state and is
+      // never replaced, nor brought back if deleted. So is any local write
+      // that happens while storage is being read: the stored result is
+      // then discarded.
       //
       // If storage has nothing under the name (another tab deleted it,
       // leaving a tombstone, or the record is gone) and this tab's copy is
@@ -746,8 +938,8 @@
       async load(path) {
         const name = baseName(path);
         if (!store) return "none";
-        if ((unpersisted.has(name) || inflight.has(name)) && exists(path)) return "local";
-        const before = mutations.get(name) || 0;
+        if (holdsLocal(name, path)) return exists(path) ? "local" : "none";
+        const before = lastGen.get(name) || 0;
         let rec, meta;
         try {
           ({ rec, meta } = await store.lookup(name, "load"));
@@ -756,16 +948,15 @@
           return "error";
         }
         // No await from here on: nothing can change MEMFS in between.
-        if ((mutations.get(name) || 0) !== before ||
-            ((unpersisted.has(name) || inflight.has(name)) && exists(path))) {
+        if ((lastGen.get(name) || 0) !== before || holdsLocal(name, path)) {
           log.warn(`${path} changed in this tab while browser storage was read; ` +
             "kept this tab's copy");
           return exists(path) ? "local" : "none";
         }
         if (!rec) {
-          if (!exists(path) || !base.has(name)) return "none";
-          // Clean: not unpersisted or in flight (checked above, again
-          // after the read), and equal to stored revision base.get(name).
+          if (!exists(path) || !base.has(name) || dirty.has(name)) return "none";
+          // Clean: not dirty (checked above, again after the read), and
+          // equal to stored revision base.get(name).
           try {
             opts.fs().unlink(path);
           } catch (e) {
@@ -779,7 +970,7 @@
           return "deleted";
         }
         const rev = rec.rev || 0;
-        if (exists(path) && base.get(name) === rev) return "same";
+        if (exists(path) && base.get(name) === rev && !dirty.has(name)) return "same";
         try {
           writeAtomic(opts.fs(), path, rec.bytes, rec.mtime);
         } catch (e) {
@@ -788,18 +979,24 @@
         }
         base.set(name, rev);
         store.adopt(name, rev);
-        unpersisted.delete(name); // its local copy was gone: the stored one replaces it
+        dirty.delete(name); // its local copy was gone: the stored one replaces it
+        unpersisted.delete(name);
         changed();
         return "copied";
       },
 
       // Import: replace path with bytes (atomically; throws if MEMFS cannot
-      // take it, leaving the old file), then persist it like a save. A
-      // conflict is not possible to resolve silently here either.
-      async importBytes(path, bytes) {
-        mutated(baseName(path));
-        writeAtomic(opts.fs(), path, bytes);
-        return put(path);
+      // take it, leaving the old file and its state), then persist it like
+      // a save. The replacement and the dirty mark happen in the same
+      // synchronous step, before anything is awaited.
+      importBytes(path, bytes) {
+        const name = baseName(path);
+        try {
+          writeAtomic(opts.fs(), path, bytes);
+        } catch (e) {
+          return Promise.reject(e);
+        }
+        return put(path, name, touch(name));
       },
 
       refresh,
@@ -809,11 +1006,11 @@
       // conflicted or session-only, or not stored at all). For a conflict
       // both rows show. Temporary files are never listed.
       entries() {
-        const hidden = (n) => isTempName(n) || (opts.hidden ? opts.hidden(n) : false);
+        const hide = (n) => isTempName(n) || (opts.hidden ? opts.hidden(n) : false);
         const rows = [];
         const names = new Set();
         for (const s of stored) {
-          if (s.deleted || hidden(s.name)) continue;
+          if (s.deleted || hide(s.name)) continue;
           names.add(s.name);
           rows.push({ name: s.name, where: "stored", mtime: s.mtime, size: s.size, rev: s.rev || 0 });
         }
@@ -821,7 +1018,7 @@
         try { FS = opts.fs(); } catch (e) { /* no game yet */ }
         if (FS) {
           for (const n of FS.readdir(dir)) {
-            if (n === "." || n === ".." || hidden(n)) continue;
+            if (n === "." || n === ".." || hide(n)) continue;
             const st = FS.stat(`${dir}/${n}`);
             if (!FS.isFile(st.mode)) continue;
             const u = unpersisted.get(n);
@@ -907,7 +1104,7 @@
           const r = await session.keepLocal(f.name);
           onMessage(r.outcome === "persisted" ? `Stored this tab's ${f.name} in browser storage.` :
             r.outcome === "conflict" ? `Another tab saved ${f.name} again. Nothing was replaced.` :
-            r.outcome === "session" ? NOT_OWNER :
+            r.outcome === "session" ? r.message || session.notice() :
             `Could not write ${f.name} to browser storage.`);
         });
         li.append(keep);
@@ -920,7 +1117,7 @@
   function attentionText(session, hasStore) {
     const a = session.attention();
     const parts = [];
-    if (session.mode() === "reader") parts.push(NOT_OWNER);
+    if (session.mode() === "reader") parts.push(session.notice());
     const conflicts = a.filter((x) => x.reason === "conflict").map((x) => x.name);
     if (session.mode() !== "reader" && a.some((x) => x.reason === "session"))
       parts.push("Saves made while another tab owned browser storage are still in this tab " +
@@ -936,7 +1133,8 @@
 
   const api = {
     createSaveStore, createSaveSession, writeAtomic, renderSaveList, attentionText,
-    StorageTimeout, Superseded, SESSION_ONLY, NOT_OWNER, NOW_OWNER, conflictNotice,
+    StorageTimeout, Superseded, Revoked, SESSION_ONLY, NOT_OWNER, LOST_OWNER, NOW_OWNER,
+    conflictNotice,
     LOCK_NAME, TMP_PREFIX, isTempName,
   };
   if (typeof module === "object" && module.exports) module.exports = api;
