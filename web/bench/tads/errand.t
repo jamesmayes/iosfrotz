@@ -1,9 +1,15 @@
 /*
  *   The Keeper's Errand: a small TADS 2 test game for the web interpreter
- *   (web/README.md, "TADS"). Written for this repo; no other author's
- *   material except adv.t and std.t, which this repo ships in tads/tads2
- *   and whose notice says "You may modify and use this file in any way you
- *   want". This file is placed in the public domain.
+ *   (web/README.md, "TADS"). Written for this repo and distributed under
+ *   the repo's licence, the GNU General Public License, version 2 (COPYING
+ *   at the top of the repo). No other author's material is in it; it
+ *   includes adv.t and std.t, which this repo ships in tads/tads2 and which
+ *   keep their own notice (Copyright (c) 1988-2000 and 1989-2000 by Michael
+ *   J. Roberts: "You may modify and use this file in any way you want,
+ *   provided that if you redistribute modified copies of this file in
+ *   source form, the copies must include the original copyright notice
+ *   (including this paragraph), and must be clearly marked as modified from
+ *   the original version"). They are used unmodified.
  *
  *   It exercises what a TADS 2 game asks of the Glk port: the status line
  *   (room name, score and turns), a fuse and a daemon, a dark room and a
@@ -28,7 +34,9 @@ modify global
 
 modify version
     sdesc = "\b\(The Keeper's Errand\)\nA small TADS 2 test game for the
-             web interpreter. Public domain.\n"
+             web interpreter. GNU General Public License, version 2;
+             adv.t and std.t copyright (c) 1988-2000 by Michael J.
+             Roberts.\n"
 ;
 
 replace init: function

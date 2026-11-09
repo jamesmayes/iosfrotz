@@ -2,7 +2,9 @@
 
 /*
  *   ASYNCIFY stress game for TADS 3 (web/README.md, "ASYNCIFY for TADS").
- *   Written for this repo and placed in the public domain. Like belfry.t it
+ *   Written for this repo and distributed under the repo's licence, the GNU
+ *   General Public License, version 2 (COPYING at the top of the repo).
+ *   Like belfry.t it
  *   uses no library and declares the intrinsics itself, in the order of the
  *   VM's tables (tads/tads3 vmbift3.h, vmbiftad.h, vmbiftio.h, vmlst.cpp).
  *

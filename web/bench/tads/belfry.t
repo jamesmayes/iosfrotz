@@ -2,8 +2,9 @@
 
 /*
  *   The Silent Belfry: a small TADS 3 test game for the web interpreter
- *   (web/README.md, "TADS"). Written for this repo and placed in the public
- *   domain.
+ *   (web/README.md, "TADS"). Written for this repo and distributed under
+ *   the repo's licence, the GNU General Public License, version 2 (COPYING
+ *   at the top of the repo).
  *
  *   It uses no library: this repo has neither adv3 nor the TADS 3 system
  *   headers, so the intrinsic function sets and metaclasses are declared
@@ -533,7 +534,7 @@ _main(args)
 {
     t3SetSay(say);
     "\b\b\bThe Silent Belfry\nA small TADS 3 test game for the web
-    interpreter. Public domain.\b";
+    interpreter. GNU General Public License, version 2.\b";
     "The bell has been silent since the clapper went missing. Tonight it
     should ring.\b";
     look();

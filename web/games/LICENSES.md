@@ -34,6 +34,13 @@ The start page (`../index.html`) catalogues this file through `stories.json`, wi
 - **Notices.** None are required for a public-domain work. The author and source are recorded here anyway.
 - **One thing to know.** Under the benchmark harness (which pins the clock git seeds its random-number generator from), `all` reports "2 tests failed overall: random (2)". These are the statistical checks on git's random-number generator (bit balance of `random 0`); the test itself says such checks "may, very occasionally, fail through sheer bad luck". Every other test passes under the web Glk. In Safari, with a real clock, `all` ended "All tests passed." (2026-11-08).
 
+## Test games (`../bench/tads`, not shipped)
+
+The TADS test games are for `make check`, `make asyncify-check` and the measurement only; none is in `stories.json` or the deployed site.
+
+- **Licence.** *The Keeper's Errand* (`errand.t`), *The Silent Belfry* (`belfry.t`), `stress2.t`, `stress3.t`, `utf8.t`, `cp1252.t` and `files3.t` were written for this repo and are distributed under the repo's licence, the GNU General Public License, version 2 (`../../COPYING`). Each source file says so in its header, and *Errand* and *Belfry* also say so in the banner they print. Their compiled forms (`.gam`, `.t3`) were built from those sources with the TADS 2 and TADS 3 compilers built natively from `tads/` in a scratch directory (`../README.md`, "How TADS 2 is built", "How TADS 3 is built"). They were described as public domain until task 5 round 2; they are not.
+- **Third-party material.** `errand.t` and `stress2.t` include `adv.t` and `std.t` from `tads/tads2`, unmodified, and those keep their own notices: "Copyright (c) 1988-2000 by Michael J. Roberts. All Rights Reserved." (`adv.t`) and "Copyright (c) 1989-2000 by Michael J. Roberts. All Rights Reserved." (`std.t`), each with: "You may modify and use this file in any way you want, provided that if you redistribute modified copies of this file in source form, the copies must include the original copyright notice (including this paragraph), and must be clearly marked as modified from the original version." Both also refer to the TADS licence, `LICENSE.TAD`, for copying TADS itself. The TADS 3 games use no library.
+
 ## Available after clearance
 
 These Glulx stories are not shipped in `web/`. Each needs a recorded decision before it is added to `stories.json`.

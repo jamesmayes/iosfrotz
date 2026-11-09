@@ -1,8 +1,10 @@
 /*
  *   ASYNCIFY stress game for TADS 2 (web/README.md, "ASYNCIFY for TADS").
- *   Written for this repo and placed in the public domain; uses adv.t and
- *   std.t from tads/tads2 ("You may modify and use this file in any way you
- *   want").
+ *   Written for this repo and distributed under the repo's licence, the GNU
+ *   General Public License, version 2 (COPYING at the top of the repo);
+ *   includes adv.t and std.t from tads/tads2, which keep their own notice
+ *   (Copyright (c) 1988-2000 and 1989-2000 by Michael J. Roberts: "You may
+ *   modify and use this file in any way you want").
  *
  *   Every verb waits for the player, or opens a /saves file, from a
  *   different kind of frame: a builtin (input, inputkey, inputevent with a

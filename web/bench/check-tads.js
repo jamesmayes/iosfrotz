@@ -172,6 +172,8 @@ async function checkGame(engine, file, sig, setup, label) {
   ok(!atRestore.some((c) => c[0] === "persist"), `${label}: RESTORE stores nothing`);
   ok(/Restored/.test(r.text), `${label}: RESTORE succeeds`);
   ok(r.saves.includes(`${stem}.glksave`), `${label}: the save is in MEMFS /saves`);
+  ok(r.text.includes("GNU General Public License, version 2"),
+    `${label}: the game's banner names its licence, the repo's (GPL v2)`);
 }
 
 // After QUIT: the game ended (exit()), its last words reached a window
