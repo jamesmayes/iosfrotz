@@ -140,7 +140,29 @@
         ihpt = CGPointMake(100, ypos);
     // point is bottom-LEFT of helper view; 140 is height of helper
     if (ihpt.y < 140) ihpt.y = 140;
+    // Flow: keep the helper off the fold band. It stays under the band when it fits between the band and
+    // the input line; otherwise it goes to whichever side has more room, and the history list is sized to it.
+    m_inputHelper.maxHeight = 0;
+    CGRect band = [storyController foldExclusionInView: parentView];
+    if (!CGRectIsNull(band) && ihpt.y > CGRectGetMinY(band)) {
+        const CGFloat helperHeight = 140, historyRaise = 10; // the history list sits 10 higher; see handleTouch:
+        CGFloat below = ihpt.y - CGRectGetMaxY(band) - historyRaise, above = CGRectGetMinY(band) - historyRaise;
+        if (below < helperHeight && above > below) {
+            ihpt.y = CGRectGetMinY(band);
+            m_inputHelper.maxHeight = above;
+        } else
+            m_inputHelper.maxHeight = MAX(1, below);
+    }
     return ihpt;
+}
+
+// Flow: a completion label that would sit on the fold band (the lower half is short) goes just above it.
+-(CGFloat)completionLabelY:(CGFloat)y height:(CGFloat)height inView:(UIView *)view {
+    StoryMainViewController *storyController = (StoryMainViewController*)[m_storyView delegate];
+    CGRect band = [storyController foldExclusionInView: view];
+    if (!CGRectIsNull(band) && y < CGRectGetMaxY(band) && y + height > CGRectGetMinY(band))
+        return CGRectGetMinY(band) - height - 2;
+    return y;
 }
 
 -(void)launchInputHelper:(id)unused {
@@ -353,7 +375,8 @@ BOOL cursorVisible = YES;
     [self setFrame: myFrame];
     if (m_completionLabel) {
         CGRect labelFrame = [m_completionLabel frame];
-        labelFrame.origin.y = myFrame.origin.y - myFrame.size.height-pad-4;
+        labelFrame.origin.y = [self completionLabelY: myFrame.origin.y - myFrame.size.height-pad-4
+                                              height: labelFrame.size.height inView: [self superview]];
         [m_completionLabel setOrigin: labelFrame.origin];
     }
 
@@ -590,6 +613,7 @@ const int kCompletionViewTag = 21;
             frame.size = textSize;
             frame.origin.y = -frame.size.height-4;
             frame = [self convertRect:frame toView:parentView];
+            frame.origin.y = [self completionLabelY: frame.origin.y height: frame.size.height inView: parentView];
             [m_completionLabel setOrigin: frame.origin];
             [parentView addSubview: m_completionLabel];
         } else {

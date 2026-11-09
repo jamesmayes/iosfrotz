@@ -32,6 +32,8 @@ typedef NS_ENUM(unsigned int, FrotzInputHelperMode) {
 }
 - (instancetype)init;
 @property (nonatomic, weak) id<FrotzInputDelegate> delegate;
+/// The tallest the history list may be above its anchor point (0 = no limit), so it keeps clear of a fold band.
+@property (nonatomic) CGFloat maxHeight;
 - (void)clearHistory;
 @property (nonatomic, readonly) NSUInteger historyCount;
 @property (nonatomic, readonly) NSUInteger menuCount;

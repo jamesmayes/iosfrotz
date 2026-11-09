@@ -25,6 +25,7 @@
 
 #import "StatusLine.h"
 #import "StoryInputLine.h"
+#import "InputHelper.h"
 #import "StoryView.h"
 #import "StoryDetailsController.h"
 #import "GlkView.h"
@@ -1814,7 +1815,10 @@ extern void gli_ios_set_focus(window_t *winNum);
 // (the notes page programmatically), "notes:edit" (raise the notes keyboard), "kb:show|hide", "state:" (keyboard source and region),
 // "overlap:<shift>:<repeating shift-layer key or empty>:<letter>:<backspace>" (two stand-in fingers at once; logs "kboverlap"),
 // "band:" (Flow: scroll the cursor into the fold band and log the input line against its docked frame),
-// "mode:classic|flow" (the Duo layout pref, as Settings sets it) or "note:<text>".
+// "mode:classic|flow" (the Duo layout pref, as Settings sets it), "enter:<text>" (type it and return),
+// "flowend:" (Flow: the end of the story against the docked input line), "pick:lower|upper" (select a word
+// below/above the band), "helper:words|history" and "unhelper:" (the input helper against the band),
+// "edgeband:top|bottom|off" (a band over the story view's edge) or "note:<text>".
 -(void)runKeyboardSelfTest {
     for (NSString *skinID in [FrotzKeyboardSkin availableSkinIDs]) {
         FrotzKeyboardLayout *layout = [FrotzKeyboardLayout layoutWithID: skinID];
@@ -1893,7 +1897,10 @@ extern void gli_ios_set_focus(window_t *winNum);
 -(NSArray<NSString *> *)flowSelfTestSteps {
     if (![m_duoLayoutMode isEqualToString: @"flow"])
         return @[];
-    NSArray *steps = @[ @"state:", @"band:", @"wait:1" ];
+    NSArray *steps = @[ @"state:", @"band:", @"wait:1",
+                        @"enter:look", @"wait:2.5", @"flowend:", @"pick:lower", @"wait:1", @"clear:", @"pick:upper", @"wait:1", @"clear:",
+                        @"helper:words", @"unhelper:", @"helper:history", @"unhelper:",
+                        @"edgeband:top", @"wait:1.5", @"edgeband:bottom", @"wait:1.5", @"edgeband:off", @"wait:0.5", @"flowend:" ];
     if ([[[NSProcessInfo processInfo] environment][@"FROTZ_SELFTEST_TO_CLASSIC"] boolValue])
         steps = [steps arrayByAddingObjectsFromArray: @[ @"mode:classic", @"wait:1", @"state:", @"band:", @"wait:2" ]];
     return steps;
@@ -2001,6 +2008,88 @@ extern void gli_ios_set_focus(window_t *winNum);
               (int)step, NSStringFromCGRect(m_foldExclusionFrame), NSStringFromCGRect(m_storyView.frame), bandTop,
               m_storyView.foldBandHeight, cursor.y - m_storyView.contentOffset.y, m_storyView.contentOffset.y,
               NSStringFromCGRect(m_inputLine.frame), NSStringFromCGRect(docked),
+              !CGRectIsNull(docked) && m_inputLine.frame.origin.y == docked.origin.y);
+    }
+    else if ([verb isEqualToString: @"enter"]) {
+        [m_inputLine typeText: arg];
+        [m_inputLine typeReturn];
+    } else if ([verb isEqualToString: @"flowend"]) {
+        // After input is requested: the story at its end, the prompt line against the docked input line,
+        // and the gaps at the fold and under the last line.
+        RichTextView *v = m_storyView;
+        CGFloat offset = v.contentOffset.y, end = MAX(0, v.contentSize.height - v.visibleRect.size.height);
+        CGPoint cursor = [v cursorPoint];
+        CGFloat lineHeight = [[v font] lineHeight];
+        CGRect prompt = [v presentedRectForTextRect: CGRectMake(cursor.x, cursor.y, 10, lineHeight)];
+        CGFloat promptY = v.frame.origin.y + prompt.origin.y - offset;
+        CGFloat trailing = v.frame.size.height - (CGRectGetMaxY(prompt) - offset) - v.bottomMargin;
+        CGFloat splitY = v.foldSplitY, shift = v.foldLowerShift;
+        CGRect docked = [self dockedInputFrameForTextView: v];
+        NSLog(@"kbselftest %d flowend offset=%g end=%g atEnd=%d bandTop=%g bandHeight=%g splitY(view)=%g shift=%g foldGap=%g "
+              "promptY=%g inputLine.y=%g docked.y=%g promptToInput=%g trailingGap=%g kbTop=%g",
+              (int)step, offset, end, fabs(offset - end) < 1, v.foldBandTop, v.foldBandHeight, splitY - offset, shift, shift,
+              promptY, m_inputLine.frame.origin.y, docked.origin.y, m_inputLine.frame.origin.y - promptY, trailing,
+              CGRectIsNull(m_keyboardRegionFrame) ? -1 : CGRectGetMinY(m_keyboardRegionFrame));
+    } else if ([verb isEqualToString: @"pick"]) {
+        // Select a word on the second line below the band, as a double tap there would, and check the label
+        // lands on the tapped point, not where the text would be without the band.
+        RichTextView *v = m_storyView;
+        CGFloat lineHeight = [[v font] lineHeight];
+        CGPoint pt = CGPointMake(v.leftMargin + 12, v.contentOffset.y + v.foldBandTop + v.foldBandHeight + lineHeight * 1.5);
+        if ([arg isEqualToString: @"upper"])
+            pt.y = v.contentOffset.y + MAX(v.topMargin + lineHeight * 0.5, v.foldBandTop - lineHeight * 2.5);
+        // The first word near there (the exact point may fall between words or lines), scanning on screen.
+        NSInteger run = -1;
+        CGPoint start = pt;
+        for (CGFloat dy = 0; dy < lineHeight * 2 && run < 0; dy += 2)
+            for (CGFloat x = start.x; x < v.bounds.size.width / 2 && run < 0; x += 4) {
+                pt = CGPointMake(x, start.y + dy);
+                run = [v getTextRunAtPoint: pt];
+            }
+        CGRect sel = v.selectionFrame;
+        NSLog(@"kbselftest %d pick %@ pt=%@ run=%ld selection=%@ containsPoint=%d inBand=%d", (int)step, arg, NSStringFromCGPoint(pt),
+              (long)run, NSStringFromCGRect(sel), !CGRectIsNull(sel) && sel.origin.y <= pt.y && pt.y < CGRectGetMaxY(sel),
+              !CGRectIsNull(sel) && CGRectGetMaxY(sel) - v.contentOffset.y > v.foldBandTop && sel.origin.y - v.contentOffset.y < v.foldBandTop + v.foldBandHeight);
+    } else if ([verb isEqualToString: @"helper"]) {
+        // The word picker (or with "history", the history list) against the band, in the background's coordinates.
+        FrotzInputHelper *helper = [m_inputLine valueForKey: @"m_inputHelper"]; // DEBUG only; no accessor for it
+        if ([arg isEqualToString: @"history"]) {
+            if (![helper historyCount])
+                [helper addHistoryItem: @"look"];
+            CGPoint pt = [m_inputLine helperLaunchPosition];
+            pt.y -= 10; pt.x += 20; // as handleTouch: does
+            [helper showInputHelperInView: m_background atPoint: pt withMode: FrotzInputHelperModeHistory];
+        } else
+            [m_inputLine launchInputHelper: nil];
+        UIView *shown = helper.mode == FrotzInputHelperModeWords ? [m_inputLine inputHelperView] : helper.tableView;
+        CGRect frame = [shown.superview convertRect: shown.frame toView: m_background];
+        CGRect band = [self foldExclusionInView: m_background];
+        NSLog(@"kbselftest %d helper %@ mode=%ld frame=%@ band=%@ maxHeight=%g overlapsBand=%d", (int)step, arg, (long)helper.mode,
+              NSStringFromCGRect(frame), NSStringFromCGRect(band), helper.maxHeight, CGRectIntersectsRect(frame, band));
+        next = 1.0;
+    } else if ([verb isEqualToString: @"unhelper"])
+        [m_inputLine hideInputHelper];
+    else if ([verb isEqualToString: @"edgeband"]) {
+        // A band over the story view's top or bottom edge, as a Glk buffer starting or ending within the fold
+        // would see; "off" puts the real one back.
+        RichTextView *v = m_storyView;
+        CGRect frame = v.frame;
+        if ([arg isEqualToString: @"top"])
+            v.foldExclusionRect = CGRectMake(frame.origin.x, frame.origin.y - 10, frame.size.width, 34);
+        else if ([arg isEqualToString: @"bottom"])
+            v.foldExclusionRect = CGRectMake(frame.origin.x, CGRectGetMaxY(frame) - 20, frame.size.width, 44);
+        else
+            [self applyFoldExclusion];
+        CGFloat end = MAX(0, v.contentSize.height - v.visibleRect.size.height);
+        [v setContentOffset: CGPointMake(0, end) animated: NO];
+        [v layoutIfNeeded];
+        [m_inputLine updatePosition];
+        CGRect docked = [self dockedInputFrameForTextView: v];
+        CGPoint cursor = [v cursorPoint];
+        CGRect prompt = [v presentedRectForTextRect: CGRectMake(cursor.x, cursor.y, 10, [[v font] lineHeight])];
+        NSLog(@"kbselftest %d edgeband %@ bandTop=%g bandHeight=%g loss=%g splitY(view)=%g promptBottom(view)=%g inputLine=%@ docked=%@ isDocked=%d",
+              (int)step, arg, v.foldBandTop, v.foldBandHeight, frame.size.height - v.visibleRect.size.height, v.foldSplitY - v.contentOffset.y,
+              CGRectGetMaxY(prompt) - v.contentOffset.y, NSStringFromCGRect(m_inputLine.frame), NSStringFromCGRect(docked),
               !CGRectIsNull(docked) && m_inputLine.frame.origin.y == docked.origin.y);
     }
     NSLog(@"kbselftest %d %@", (int)step, entry);
@@ -2254,6 +2343,7 @@ static UIImage *GlkGetImageCallback(int imageNum) {
     self.view = [[UIView alloc] initWithFrame:frame];
     m_postureObserver = [[FrotzPostureObserver alloc] initWithView: self.view];
     m_foldExclusionFrame = CGRectNull;
+    m_keyboardRegionFrame = CGRectNull;
     m_keyboardController = [[FrotzKeyboardController alloc] initWithStoryController: self postureObserver: m_postureObserver]; // takes the observer's delegate
     float navHeight = self.view.safeAreaInsets.top;
     frame.origin.y = navHeight;
@@ -3001,6 +3091,7 @@ static CGSize KeyboardOverlapInWindow(CGRect frameInView, UIView *view) {
 }
 
 -(void) keyboardRegionDidChange:(CGRect)frameInView visible:(BOOL)visible source:(FrotzKeyboardSource)source {
+    m_keyboardRegionFrame = visible ? frameInView : CGRectNull;
     if (!visible) {
         m_kbShown = NO;
         m_kbdSize = CGSizeZero;
@@ -3074,6 +3165,7 @@ static CGSize KeyboardOverlapInWindow(CGRect frameInView, UIView *view) {
 }
 
 -(void) keyboardRegionWillChange:(CGRect)frameInView visible:(BOOL)visible source:(FrotzKeyboardSource)source animationDuration:(NSTimeInterval)duration {
+    m_keyboardRegionFrame = visible ? frameInView : CGRectNull; // docking reads it in updatePosition below
     CGRect frame = [self storyViewFullFrame];
     if (!visible) {
 #if UseRichTextView
@@ -3163,16 +3255,29 @@ static CGSize KeyboardOverlapInWindow(CGRect frameInView, UIView *view) {
     }
 }
 
+-(CGRect)foldExclusionInView:(UIView *)view {
+    return CGRectIsNull(m_foldExclusionFrame) || !view ? CGRectNull : [self.view convertRect: m_foldExclusionFrame toView: view];
+}
+
+// The line just above the keyboard, whichever window the text is in: a Glk buffer may end above another
+// window, or within the fold, so its own bottom isn't the place. With the keyboard hidden (the band stays),
+// the bottom of the story area.
 -(CGRect)dockedInputFrameForTextView:(UIView *)textView {
     if (CGRectIsNull(m_foldExclusionFrame) || ![textView isKindOfClass: [RichTextView class]])
         return CGRectNull;
     RichTextView *v = (RichTextView *)textView;
     if (v.foldBandHeight <= 0)
         return CGRectNull;
-    CGRect frame = v.frame;
+    UIView *space = m_inputLine.superview ?: v.superview;
+    CGFloat keyboardTop;
+    if (!CGRectIsNull(m_keyboardRegionFrame) && !CGRectIsEmpty(m_keyboardRegionFrame))
+        keyboardTop = [self.view convertPoint: CGPointMake(0, CGRectGetMinY(m_keyboardRegionFrame)) toView: space].y;
+    else
+        keyboardTop = [v.superview convertPoint: CGPointMake(0, CGRectGetMaxY([self storyViewFullFrame])) toView: space].y;
+    CGRect frame = [v.superview convertRect: v.frame toView: space];
     CGFloat height = [[m_inputLine font] lineHeight] + 2;
     CGFloat bottom = MAX(4, v.bottomMargin);
-    return CGRectMake(frame.origin.x + v.leftMargin, CGRectGetMaxY(frame) - bottom - height,
+    return CGRectMake(frame.origin.x + v.leftMargin, keyboardTop - bottom - height,
                       frame.size.width - v.leftMargin - v.rightMargin, height);
 }
 
@@ -4266,6 +4371,11 @@ static int iosif_top_win_height = 1;
                      ([storyView textStyle] & kFTFixedWidth) ? [storyView fixedFont] : [storyView font]];
                 NSString *t = m_inputLine.text; [m_inputLine setTextKeepCompletion: @" "]; [m_inputLine setTextKeepCompletion: t]; // *sigh* needed to force cursor to resize
                 lastInputWindow = cwin;
+            }
+            // Flow: show the end, so the prompt sits on the line the input docks to, above the keyboard.
+            if (storyView.foldBandHeight > 0) {
+                CGFloat end = MAX(0, [storyView contentSize].height - [storyView visibleRect].size.height);
+                [storyView setContentOffset: CGPointMake(0, end) animated: NO];
             }
             [storyView markWaitForInput];
             discard_output_until_prompt = 0;

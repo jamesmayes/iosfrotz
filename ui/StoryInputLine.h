@@ -36,6 +36,8 @@ NS_ASSUME_NONNULL_BEGIN
 -(NSUInteger)addHistoryItem:(NSString*)historyItem;
 -(void)inputHelperString:(NSString*)string;
 -(void)hideInputHelper;
+-(void)launchInputHelper:(nullable id)unused;  // the word picker, as a tap on the input line raises it
+-(CGPoint)helperLaunchPosition;      // bottom-left of the helper, in the story's superview; also sizes it clear of a fold band
 @property (nonatomic, readonly, strong) UIView *inputHelperView;
 -(void)setClearButtonMode;
 -(void)maybeShowEnterKey;

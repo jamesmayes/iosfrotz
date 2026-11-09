@@ -122,6 +122,8 @@ const CGFloat kHistoryLineHeight = 20.0;
             if (nLines > maxLines)
                 nLines = maxLines;
         }
+        if (self.maxHeight > 0) // the space between the anchor and a fold band
+            nLines = MIN(nLines, (NSUInteger)MAX(1, floor((self.maxHeight - 2) / kHistoryLineHeight) - 1));
         if (nLines > 0) {
             [tableView reloadData];
             
