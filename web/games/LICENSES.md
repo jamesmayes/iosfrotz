@@ -2,7 +2,7 @@
 
 Every story in this folder is listed here with its release, its source, the text of the permission that lets it be redistributed, and the notices that have to go with it. A story without all four is not shipped. See "Adding a story to the catalogue" in `../README.md`.
 
-The catalogue is *Balances* only. The 20 other stories that the iOS app bundles from `resources/Games` were removed from the web client, because their redistribution terms have not been recorded for it. That is a hold on evidence, not a finding that their authors forbid it.
+The Z-code catalogue is *Balances* only, and the Glulx catalogue (`glulx-stories.json`) is *Adventure* only. The 20 other stories that the iOS app bundles from `resources/Games` were removed from the web client, because their redistribution terms have not been recorded for it. That is a hold on evidence, not a finding that their authors forbid it.
 
 ## Balances (`Balances.z5`)
 
@@ -23,3 +23,17 @@ How this copy meets the three conditions:
 - **(c) No profit.** Web Frotz is distributed free of charge. This condition has to hold wherever the client is hosted.
 
 Inform software, its example games included, is supplied "as is" and carries no warranty, actual or implied.
+
+## Adventure (`Advent.ulx`, Glulx)
+
+The Glulx client (`../glulx.html`) catalogues this story through `glulx-stories.json`, and `../bench/` uses it to measure performance.
+
+- **Release.** *Adventure* ("Colossal Cave"), the original 350-point game by Will Crowther and Don Woods, reconstructed by Donald Ekman, David M. Baggett and Graham Nelson. Inform port by Graham Nelson, Release 5 / Serial number 961209, compiled for Glulx by Andrew Plotkin (the banner reads "Inform v6.21(G0.33) Library 6/10"). SHA-256 `264236f2c3504eb2f326ab560aef435902d357c1ef848127b6ea0329c10387f8`.
+- **Source.** `if-archive/games/glulx/advent.ulx`, downloaded from <https://ifarchive.org/if-archive/games/glulx/advent.ulx> on 2026-11-08. It was downloaded twice and both copies were byte-identical to the file here. The archive's index describes it as "Adventure aka Colossal Cave, the original 350 points version ported to Inform by Graham Nelson, based on Dave Baggett's TADS reconstruction 'Colossal Cave Revisited', and compiled under Glulx Inform by Andrew Plotkin. Release 5 / Serial number 961209."
+- **Permission.** *Advent* is one of the standard Inform 6 example games, like *Balances*. The header of its source in the Inform 6 distribution says so: "Advent 060321 — A classic and one of the standard Inform 6 example games" ([`demos/advent.inf`](https://github.com/DavidGriffith/inform6unix/blob/master/demos/advent.inf) in `DavidGriffith/inform6unix`, checked at commit `5f2abd7`). The original Inform licence quoted for *Balances* above therefore covers it: the example games "may be freely distributed provided that: (a) distributed copies are not substantially different from those archived by the author, (b) this and other copyright messages are always retained in full, and (c) no profit is involved."
+- **Notices, and how the conditions are met.**
+  - **(a)** The file is unchanged from the IF Archive copy (hash above). It is a Glulx compile of the example game by Andrew Plotkin, not a file Graham Nelson archived himself. It is the same game and release (961209) as Nelson's Z-code *Advent*, compiled for another virtual machine. A reviewer should confirm that this counts as "not substantially different".
+  - **(b)** The story prints its own credits at the start of play ("By Will Crowther (1973) and Don Woods (1977) / Reconstructed in three steps by: Donald Ekman, David M. Baggett (1993) and Graham Nelson (1994)"). It prints no "Copyright" line of its own. The Inform copyright notice quoted above is kept in this file.
+  - **(c)** The web client is distributed free of charge, and this condition has to hold wherever it is hosted.
+
+`../../git/test/Alabaster.gblorb`, which the benchmark also plays, stays in `git/test/`, where the Git distribution ships it as its test case. It is not copied into `web/` or offered in the client.
