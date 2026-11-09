@@ -18,6 +18,9 @@
 //     transcript (setLogFile) still open then is stored, ending included;
 //   - a file without the interpreter's signature is refused with a message
 //     in the story window;
+//   - up to 256 /saves files open for writing at once are each stored when
+//     closed; an open past that fails in the game before it touches the
+//     file (bench/tads/files3.t3);
 //   - text crosses the port in the game's character set (web/tads/
 //     tads_text.c): bench/tads/utf8.t3 (TADS 3, UTF-8) prints non-ASCII
 //     text and reports each typed line's characters and code points, a
@@ -224,6 +227,38 @@ function checkQuit(r, last, label) {
     ok(r.text.includes("Café naïve, € 5, “quoted”."), "TADS 2: Windows-1252 output is shown as its characters");
     ok(r.text.includes("got [café “x”] 8 bytes"), "TADS 2: a typed line reaches the game in Windows-1252");
     checkQuit(r, "Fin — the end.", "TADS 2");
+  }
+
+  // /saves files open for writing (web/tads/tads_web.c): up to 256 at once
+  // are each stored when closed; past that, and while that many are open,
+  // an open fails before the file is touched, so the game reports it and
+  // the stored copy and MEMFS keep the last good save.
+  {
+    const r = await play("tads3", path.join(WEB, "bench", "tads", "files3.t3"),
+      ["save", "open 300", "save", "close", "open 20", "close", "save", "quit"]);
+    // The calls of each turn, by command.
+    const turn = [];
+    for (const c of r.calls) {
+      if (c[0] === "line") turn.push([]);
+      else if (turn.length) turn[turn.length - 1].push(c);
+    }
+    const [save1, open300, save2, close1, open20, , save3] = turn;
+    ok(r.text.includes("opened 256 of 300, first failure 257"),
+      "TADS 3: 256 /saves files can be open for writing at once; the 257th open fails in the game");
+    ok(open300.filter((c) => c[0] === "load").length === 256,
+      "TADS 3: an open past the limit does not reach storage");
+    ok(/save failed \d+/.test(r.text) && save2.length === 0,
+      "TADS 3: a SAVE while the table is full fails in the game, before the file is loaded, opened or stored");
+    const stored = close1.filter((c) => c[0] === "persist");
+    ok(stored.length === 256 && new Set(stored.map((c) => c[1])).size === 256 &&
+       stored.every((c) => /^\/saves\/f\d+\.txt$/.test(c[1]) && /^file \d+\n$/.test(c[3])),
+      `TADS 3: closing them stores each one, with its contents (${stored.length})`);
+    ok(r.text.includes("opened 20 of 20, first failure none") &&
+       open20.filter((c) => c[0] === "load").length === 20,
+      "TADS 3: after the close, files open again");
+    const isSave = (c) => c[0] === "persist" && c[1] === "/saves/files3.glksave" && c[2].startsWith("T3-state-v");
+    ok(save1.filter(isSave).length === 1 && save3.filter(isSave).length === 1,
+      "TADS 3: the saves before and after are stored");
   }
 
   // The wrong file for each interpreter.
