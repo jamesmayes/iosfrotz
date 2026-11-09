@@ -92,8 +92,9 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     NSString *group = _key.group;
     (m_cap ?: self).backgroundColor = (_pressed || _latched) ? [m_skin pressedColorForGroup: group] : [m_skin keyColorForGroup: group];
     m_label.textColor = [m_skin textColorForGroup: group];
-    m_sublabel.textColor = m_cap ? m_skin.caseTextColor : m_label.textColor;
-    m_shiftLabel.textColor = m_sublabel.textColor;
+    UIColor *legendColor = m_cap ? m_skin.caseTextColor : m_label.textColor;
+    m_sublabel.textColor = legendColor;
+    m_shiftLabel.textColor = legendColor;
 }
 
 -(void)setPressed:(BOOL)pressed {
