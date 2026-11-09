@@ -50,6 +50,8 @@ void iosif_feed_input_line(NSString *str);
 
 @class StoryView, StatusLine, StoryInputLine;
 
+typedef NS_ENUM(NSInteger, FrotzKeyboardSource) { FrotzKeyboardSourceSystem, FrotzKeyboardSourceInApp };
+
 extern StoryView *theStoryView;
 extern StatusLine *theStatusLine;
 extern StoryInputLine *theInputLine;
@@ -116,6 +118,10 @@ extern StoryBrowser *theStoryBrowser;
     CGFloat m_verticalBarExtraTop; // bar space above the first item beyond the estimate (a Live Activity), measured after layout
     CGRect m_handledKbWillShowFrame, m_handledKbDidShowFrame; // keyboard end frames already laid out for
     FrotzPostureObserver *m_postureObserver;
+    FrotzKeyboardSource m_keyboardSource;
+#if DEBUG
+    UIView *m_fakeInAppKeyboard; // DEBUG scaffolding, removed by the in-app keyboard task
+#endif
     NSTimeInterval m_animDuration;
     NSString *m_launchMessage;
 
@@ -211,6 +217,13 @@ extern StoryBrowser *theStoryBrowser;
 -(void) keyboardDidShow:(NSNotification*)notif;
 -(void) keyboardDidHide:(NSNotification*)notif;
 @property (nonatomic, readonly) CGSize keyboardSize;
+/// The one place keyboard geometry enters layout. frameInView is the keyboard's frame in self.view
+/// coordinates (CGRectZero with visible == NO). Runs the same layout the system keyboard
+/// notifications run: story frame, Glk screen size, bar items, input line position, notes.
+-(void)keyboardRegionWillChange:(CGRect)frameInView visible:(BOOL)visible source:(FrotzKeyboardSource)source animationDuration:(NSTimeInterval)duration;
+-(void)keyboardRegionDidChange:(CGRect)frameInView visible:(BOOL)visible source:(FrotzKeyboardSource)source;
+@property (nonatomic, readonly) FrotzKeyboardSource activeKeyboardSource;
+-(void)setInAppKeyboardActive:(BOOL)active;   // YES: suppress the system keyboard (empty inputView on the input line) while the input line stays first responder; NO: restore
 @property (nonatomic, readonly, strong) NotesViewController<FrotzFontDelegate> *notesController;
 @property (nonatomic, readonly) BOOL splashVisible;
 -(void) textSelected:(NSString*)text animDuration:(CGFloat)duration hilightView:(UIView <WordSelection>*)view;
