@@ -1749,7 +1749,32 @@ extern void gli_ios_set_focus(window_t *winNum);
     // Cheap: RichTextView's setFrame: ignores an unchanged rect.
     [self layoutStatusLine];
     [m_postureObserver refresh];
+#if DEBUG
+    if (m_fakeInAppKeyboard) // DEBUG scaffolding, removed by the in-app keyboard task
+        m_fakeInAppKeyboard.frame = [self fakeInAppKeyboardFrame];
+#endif
 }
+
+#if DEBUG
+// DEBUG scaffolding, removed by the in-app keyboard task
+-(CGRect)fakeInAppKeyboardFrame {
+    CGFloat height = [[[NSProcessInfo processInfo] environment][@"FROTZ_FAKE_INAPP_KB_HEIGHT"] doubleValue];
+    CGRect bounds = self.view.bounds;
+    return CGRectMake(0, bounds.size.height - height, bounds.size.width, height);
+}
+
+// DEBUG scaffolding, removed by the in-app keyboard task
+-(void)showFakeInAppKeyboardIfRequested {
+    if (m_fakeInAppKeyboard || [[[NSProcessInfo processInfo] environment][@"FROTZ_FAKE_INAPP_KB_HEIGHT"] doubleValue] <= 0)
+        return;
+    [self setInAppKeyboardActive: YES];
+    m_fakeInAppKeyboard = [[UIView alloc] initWithFrame: [self fakeInAppKeyboardFrame]];
+    m_fakeInAppKeyboard.backgroundColor = [UIColor systemTealColor];
+    [self.view addSubview: m_fakeInAppKeyboard]; // not m_background, which pages with the notes
+    [self keyboardRegionWillChange: m_fakeInAppKeyboard.frame visible: YES source: FrotzKeyboardSourceInApp animationDuration: 0.25];
+    [self keyboardRegionDidChange: m_fakeInAppKeyboard.frame visible: YES source: FrotzKeyboardSourceInApp];
+}
+#endif
 
 -(void)viewDidAppear:(BOOL)animated {
     [self checkAccessibility];
@@ -1762,6 +1787,9 @@ extern void gli_ios_set_focus(window_t *winNum);
         [m_inputLine becomeFirstResponder];
     else
         [self scheduleVerticalBarMeasurement]; // the keyboard's did-show handles the other case
+#if DEBUG
+    [self showFakeInAppKeyboardIfRequested]; // DEBUG scaffolding, removed by the in-app keyboard task
+#endif
 }
 
 -(void)viewWillAppear:(BOOL)animated {
@@ -2626,14 +2654,32 @@ static CGRect KeyboardBoundsInWindow(NSDictionary *userInfo, UIWindow *window) {
     return CGRectMake(0, 0, overlap.size.width, overlap.size.height);
 }
 
+// The keyboard's overlap with the window, from a frame in view's coordinates; the same overlap
+// KeyboardBoundsInWindow takes from a notification.
+static CGSize KeyboardOverlapInWindow(CGRect frameInView, UIView *view) {
+    UIWindow *window = view.window;
+    if (CGRectIsNull(frameInView) || !window)
+        return CGSizeZero;
+    CGRect windowRect = [view convertRect:frameInView toView:nil];
+    CGRect overlap = CGRectIntersection(window.bounds, windowRect);
+    if (CGRectIsNull(overlap))
+        return CGSizeZero;
+    return overlap.size;
+}
+
+// A notification's keyboard end frame in self.view coordinates, or CGRectZero without one.
+-(CGRect) keyboardFrameInViewFromNotification:(NSNotification*)notif {
+    CGRect kbEndFrame = KeyboardEndFrame([notif userInfo]);
+    UIWindow *window = self.view.window;
+    if (CGRectIsNull(kbEndFrame) || !window)
+        return CGRectZero;
+    CGRect windowRect = [window convertRect:kbEndFrame fromWindow:nil];
+    return [self.view convertRect:windowRect fromView:nil];
+}
+
 -(void) keyboardDidShow:(NSNotification*)notif {
-    // Even though we already did this in keyboardWillShow, we do it again here
-    // so the animation of the storyview resizing will sync up with the keyboard
-    // appearing, to make sure the size is correct for whether the
-    // the nav bar and device status line are visible.
-    // The storyViewFullFrame call cannot tell if these items are visible or not
-    // during a rotation because the show/hide hasn't taken effect yet,
-    // so resizing again here will be correct.
+    if (m_keyboardSource == FrotzKeyboardSourceInApp)
+        return; // the empty inputView still posts; the in-app keyboard reports its own frame
     NSDictionary *userInfo = [notif userInfo];
     CGRect bounds = KeyboardBoundsInWindow(userInfo, m_storyView.window);
     if (CGRectIsEmpty(bounds))
@@ -2658,21 +2704,51 @@ static CGRect KeyboardBoundsInWindow(NSDictionary *userInfo, UIWindow *window) {
             return;
         }
     }
+    [self keyboardRegionDidChange: [self keyboardFrameInViewFromNotification: notif] visible: YES source: FrotzKeyboardSourceSystem];
+}
+
+-(void) keyboardDidHide:(NSNotification*)notif {
+    if (m_keyboardSource == FrotzKeyboardSourceInApp)
+        return;
+    [self keyboardRegionDidChange: CGRectZero visible: NO source: FrotzKeyboardSourceSystem];
+}
+
+-(void) keyboardRegionDidChange:(CGRect)frameInView visible:(BOOL)visible source:(FrotzKeyboardSource)source {
+    if (!visible) {
+        m_kbShown = NO;
+        m_kbdSize = CGSizeZero;
+        [self showKeyboardLockState]; // keep the toggle's title ("Show Keyboard") in step
+        [self updateLeadingBarItemsForSpaceAnimated: YES]; // normally already done in keyboardWillHide
+        [self scheduleVerticalBarMeasurement];
+        m_handledKbWillShowFrame = m_handledKbDidShowFrame = CGRectNull;
+        if (gStoryInterp == kGlxStory) {
+            iosif_recompute_screensize();
+            screen_size_changed = 1;
+        }
+        return;
+    }
+    // Even though we already did this in keyboardWillShow, we do it again here
+    // so the animation of the storyview resizing will sync up with the keyboard
+    // appearing, to make sure the size is correct for whether the
+    // the nav bar and device status line are visible.
+    // The storyViewFullFrame call cannot tell if these items are visible or not
+    // during a rotation because the show/hide hasn't taken effect yet,
+    // so resizing again here will be correct.
+    CGSize kbdSize = KeyboardOverlapInWindow(frameInView, self.view);
     m_kbShown = YES;
     [self showKeyboardLockState]; // keep the toggle's title ("Hide Keyboard") in step
 
     CGRect frame = [self storyViewFullFrame];
-    m_kbdSize = bounds.size;
+    m_kbdSize = kbdSize;
     [self updateLeadingBarItemsForSpaceAnimated: YES]; // the keyboard shortens the vertical bar
     [self scheduleVerticalBarMeasurement];
 
     [m_storyView setBottomMargin: 8];
-    frame.size.height -= bounds.size.height;
-    
+    frame.size.height -= kbdSize.height;
+
     [UIView beginAnimations: @"kbd" context: 0];
     [UIView setAnimationBeginsFromCurrentState:YES];
 
-    //NSLog(@"keyboarddidshow storyview frame=(%f,%f,%f,%f) boundssize=%f boundsVal=%@", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, bounds.size.height, boundsValue);
     [m_storyView setFrame: frame];
 
     [self layoutStatusLine];
@@ -2680,19 +2756,6 @@ static CGRect KeyboardBoundsInWindow(NSDictionary *userInfo, UIWindow *window) {
 
     [m_inputLine updatePosition];
 
-    if (gStoryInterp == kGlxStory) {
-        iosif_recompute_screensize();
-        screen_size_changed = 1;
-    }
-}
-
--(void) keyboardDidHide:(NSNotification*)notif {
-    m_kbShown = NO;
-    m_kbdSize = CGSizeZero;
-    [self showKeyboardLockState]; // keep the toggle's title ("Show Keyboard") in step
-    [self updateLeadingBarItemsForSpaceAnimated: YES]; // normally already done in keyboardWillHide
-    [self scheduleVerticalBarMeasurement];
-    m_handledKbWillShowFrame = m_handledKbDidShowFrame = CGRectNull;
     if (gStoryInterp == kGlxStory) {
         iosif_recompute_screensize();
         screen_size_changed = 1;
@@ -2704,6 +2767,8 @@ static CGRect KeyboardBoundsInWindow(NSDictionary *userInfo, UIWindow *window) {
 }
 
 -(void) keyboardWillShow:(NSNotification*)notif {
+    if (m_keyboardSource == FrotzKeyboardSourceInApp)
+        return;
     NSDictionary *userInfo = [notif userInfo];
     // See keyboardDidShow: ignore repeats for a keyboard frame already laid out for. The content
     // offset bump below in particular must only happen once per actual keyboard change.
@@ -2712,8 +2777,41 @@ static CGRect KeyboardBoundsInWindow(NSDictionary *userInfo, UIWindow *window) {
         return;
     m_handledKbWillShowFrame = kbEndFrame;
 
-    CGRect bounds = KeyboardBoundsInWindow(userInfo, m_storyView.window);
+    [self keyboardRegionWillChange: [self keyboardFrameInViewFromNotification: notif] visible: YES source: FrotzKeyboardSourceSystem animationDuration: 0.3];
+}
+
+-(void) keyboardWillHide:(NSNotification*)notif {
+    if (m_keyboardSource == FrotzKeyboardSourceInApp)
+        return;
+    [self keyboardRegionWillChange: CGRectZero visible: NO source: FrotzKeyboardSourceSystem animationDuration: 0.3];
+}
+
+-(void) keyboardRegionWillChange:(CGRect)frameInView visible:(BOOL)visible source:(FrotzKeyboardSource)source animationDuration:(NSTimeInterval)duration {
     CGRect frame = [self storyViewFullFrame];
+    if (!visible) {
+#if UseRichTextView
+        [m_storyView prepareForKeyboardShowHide];
+#endif
+        if (m_notesController)
+            [m_notesController keyboardWillHide];
+
+        [UIView beginAnimations: @"kbd" context: 0];
+        [UIView setAnimationDuration: duration];
+        [UIView setAnimationBeginsFromCurrentState:YES];
+
+        [m_storyView setFrame: frame];
+
+        [self layoutStatusLine];
+        [UIView commitAnimations];
+        m_kbShown = NO;
+        m_handledKbWillShowFrame = m_handledKbDidShowFrame = CGRectNull;
+        // Bring the (i) back while the keyboard is still animating away, so the two move together;
+        // waiting for keyboardDidHide made it pop in after the bar had already grown.
+        [self updateLeadingBarItemsForSpaceAnimated: YES];
+        return;
+    }
+    CGSize kbdSize = KeyboardOverlapInWindow(frameInView, self.view);
+    CGRect bounds = CGRectMake(0, 0, kbdSize.width, kbdSize.height);
 
     // Make space on the vertical bar for the keyboard that is coming, before the bar animates.
     [self updateLeadingBarItemsForKeyboardHeight: bounds.size.height animated: YES];
@@ -2725,50 +2823,45 @@ static CGRect KeyboardBoundsInWindow(NSDictionary *userInfo, UIWindow *window) {
         [m_notesController keyboardWillShow: bounds];
 
     frame.size.height -= bounds.size.height;
-    
+
     [UIView beginAnimations: @"kbd" context: 0];
-    [UIView setAnimationDuration: 0.3];
+    [UIView setAnimationDuration: duration];
     [UIView setAnimationBeginsFromCurrentState:YES];
 
     CGPoint cofst = [m_storyView contentOffset];
     cofst.y += bounds.size.height;
     [m_storyView setContentOffset: cofst];
-    
+
     [m_storyView setFrame: frame];
-    //NSLog(@"keyboardwillshow storyview frame=(%f,%f,%f,%f) boundssize=%f boundsVal=%@", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, bounds.size.height, boundsValue);
     [self layoutStatusLine];
-    
+
     [UIView commitAnimations];
 
     [self scrollStoryViewToEnd: YES];
-    
+
     [m_inputLine updatePosition];
-    
-    //NSLog(@"kbd will show notif frame height=%f kbbh=%f", frame.size.height, bounds.size.height);
 }
 
+-(FrotzKeyboardSource) activeKeyboardSource {
+    return m_keyboardSource;
+}
 
--(void) keyboardWillHide:(NSNotification*)notif {
-    CGRect frame = [self storyViewFullFrame];
-#if UseRichTextView
-    [m_storyView prepareForKeyboardShowHide];
-#endif
-    if (m_notesController)
-        [m_notesController keyboardWillHide];
-    
-    [UIView beginAnimations: @"kbd" context: 0];
-    [UIView setAnimationDuration: 0.3];
-    [UIView setAnimationBeginsFromCurrentState:YES];
-    
-    [m_storyView setFrame: frame];
-    
-    [self layoutStatusLine];
-    [UIView commitAnimations];
-    m_kbShown = NO;
+-(void) setInAppKeyboardActive:(BOOL)active {
+    // An empty inputView keeps the input line first responder (caret, hardware keys) with no
+    // system keyboard over the in-app one.
+    m_inputLine.inputView = active ? [[UIView alloc] initWithFrame: CGRectZero] : nil;
+    m_keyboardSource = active ? FrotzKeyboardSourceInApp : FrotzKeyboardSourceSystem;
+    // The gated handlers never saw the system keyboard leave, so forget the frames they laid out
+    // for, or its return would be dropped as a repeat.
     m_handledKbWillShowFrame = m_handledKbDidShowFrame = CGRectNull;
-    // Bring the (i) back while the keyboard is still animating away, so the two move together;
-    // waiting for keyboardDidHide made it pop in after the bar had already grown.
-    [self updateLeadingBarItemsForSpaceAnimated: YES];
+    BOOL isFirstResponder = [m_inputLine isFirstResponder];
+    if (isFirstResponder)
+        [m_inputLine reloadInputViews];
+    // A first responder gets the system keyboard back, and its notifications redo the layout.
+    if (!active && !isFirstResponder) {
+        [self keyboardRegionWillChange: CGRectZero visible: NO source: FrotzKeyboardSourceSystem animationDuration: 0.3];
+        [self keyboardRegionDidChange: CGRectZero visible: NO source: FrotzKeyboardSourceSystem];
+    }
 }
 
 -(BOOL) isKBShown {
