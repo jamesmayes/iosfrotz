@@ -2972,6 +2972,15 @@ static CGSize KeyboardOverlapInWindow(CGRect frameInView, UIView *view) {
     [self scrollStoryViewToEnd: YES];
 }
 
+// The text buffer input is being asked for in: the Glk window with the focus (cwin, set when the
+// cursor is placed), or the story view if that is not a buffer.
+-(RichTextView *)flowInputBufferView {
+    if (gStoryInterp == kGlxStory && cwin > 0 && cwin < [m_glkViews count] && (NSNull *)m_glkViews[cwin] != [NSNull null]
+        && glkGridArray[cwin].win && glkGridArray[cwin].win->type == wintype_TextBuffer)
+        return m_glkViews[cwin];
+    return m_storyView;
+}
+
 -(void) scrollStoryViewToEnd:(BOOL)animated {
     FrotzView *storyView = m_storyView;
     if (gStoryInterp == kGlxStory && cwin > 0 && cwin < [m_glkViews count] && glkGridArray[cwin].win->type == wintype_TextBuffer) {
@@ -4026,10 +4035,13 @@ static int iosif_top_win_height = 1;
                 NSString *t = m_inputLine.text; [m_inputLine setTextKeepCompletion: @" "]; [m_inputLine setTextKeepCompletion: t]; // *sigh* needed to force cursor to resize
                 lastInputWindow = cwin;
             }
-            // Flow: show the end, so the prompt sits on the line the input docks to, above the keyboard.
-            if (storyView.foldBandHeight > 0) {
-                CGFloat end = MAX(0, [storyView contentSize].height - [storyView visibleRect].size.height);
-                [storyView setContentOffset: CGPointMake(0, end) animated: NO];
+            // Flow: show the end of the buffer asking for input, so the prompt sits on the line the
+            // input docks to, above the keyboard. That is the Glk window with the focus (cwin), which
+            // need not be the buffer picked above for having had output.
+            RichTextView *inputView = [self flowInputBufferView];
+            if (inputView.foldBandHeight > 0) {
+                CGFloat end = MAX(0, [inputView contentSize].height - [inputView visibleRect].size.height);
+                [inputView setContentOffset: CGPointMake(0, end) animated: NO];
             }
             [storyView markWaitForInput];
             discard_output_until_prompt = 0;

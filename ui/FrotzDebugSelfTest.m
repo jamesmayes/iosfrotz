@@ -89,6 +89,7 @@ static const CGFloat kReleaseSlop = 16; // FrotzKeyboardView.m's
 @interface RichTextView (FrotzFoldInternals)
 @property (nonatomic, readonly) CGFloat foldSplitY;      // content coordinates, for the current scroll position
 @property (nonatomic, readonly) CGFloat foldLowerShift;
+-(CGPoint)textPointForPoint:(CGPoint)pt;
 @end
 
 @interface StoryMainViewController (FrotzInternals)
@@ -507,8 +508,9 @@ static NSMutableArray<NSString *> *sHeldActions;
     if (![m_duoLayoutMode isEqualToString: @"flow"])
         return @[];
     NSArray *steps = @[ @"state:", @"band:", @"wait:1",
-                        @"enter:look", @"wait:2.5", @"flowend:", @"pick:lower", @"wait:1", @"clear:", @"pick:upper", @"wait:1", @"clear:",
+                        @"enter:look", @"wait:2.5", @"flowend:", @"pick:lower", @"wait:1", @"clear:", @"pick:upper", @"wait:1", @"clear:", @"gaptap:", @"clear:",
                         @"helper:words", @"unhelper:", @"helper:history", @"unhelper:",
+                        @"helper:short-words", @"unhelper:", @"helper:short-history", @"unhelper:",
                         @"edgeband:top", @"wait:1.5", @"edgeband:bottom", @"wait:1.5", @"edgeband:off", @"wait:0.5", @"flowend:" ];
     if ([[[NSProcessInfo processInfo] environment][@"FROTZ_SELFTEST_TO_CLASSIC"] boolValue])
         steps = [steps arrayByAddingObjectsFromArray: @[ @"mode:classic", @"wait:1", @"state:", @"band:", @"wait:2" ]];
@@ -659,6 +661,26 @@ static NSMutableArray<NSString *> *sHeldActions;
         NSLog(@"kbselftest %d pick %@ pt=%@ run=%ld selection=%@ containsPoint=%d inBand=%d", (int)step, arg, NSStringFromCGPoint(pt),
               (long)run, NSStringFromCGRect(sel), !CGRectIsNull(sel) && sel.origin.y <= pt.y && pt.y < CGRectGetMaxY(sel),
               !CGRectIsNull(sel) && CGRectGetMaxY(sel) - v.contentOffset.y > v.foldBandTop && sel.origin.y - v.contentOffset.y < v.foldBandTop + v.foldBandHeight);
+    } else if ([verb isEqualToString: @"gaptap"]) {
+        // Taps across the gap at the band, as drawn: from the split, through the band and the blank strip
+        // under it, to where the lower text starts. Everything in between must map to no text (NAN, no run);
+        // from that start down, a point maps to the text the shift above it.
+        RichTextView *v = m_storyView;
+        CGFloat offset = v.contentOffset.y, splitY = v.foldSplitY, shift = v.foldLowerShift;
+        CGFloat bandTop = offset + v.foldBandTop, bandBottom = bandTop + v.foldBandHeight, lowerTop = MAX(splitY + shift, bandBottom);
+        CGFloat ys[] = { splitY, bandTop + 1, bandBottom - 1, bandBottom + 1, lowerTop - 1, lowerTop + 0.5, lowerTop + 6 };
+        NSMutableArray *parts = [NSMutableArray array];
+        BOOL gapOK = YES;
+        for (int i = 0; i < 7; i++) {
+            CGFloat y = [v textPointForPoint: CGPointMake(v.leftMargin + 12, ys[i])].y;
+            NSInteger run = [v getTextRunAtPoint: CGPointMake(v.leftMargin + 12, ys[i])];
+            [parts addObject: [NSString stringWithFormat: @"%g->%g/run%ld", ys[i] - offset, y - offset, (long)run]];
+            BOOL inGap = ys[i] >= splitY && ys[i] < lowerTop; // over an edge the strip under the band is empty
+            if (inGap ? !isnan(y) || run >= 0 : ys[i] >= lowerTop && (isnan(y) || fabs(y - (ys[i] - shift)) > 0.01))
+                gapOK = NO;
+        }
+        NSLog(@"kbselftest %d gaptap splitY(view)=%g shift=%g band(view)=%g-%g lowerTop(view)=%g %@ gapOK=%d", (int)step, splitY - offset,
+              shift, bandTop - offset, bandBottom - offset, lowerTop - offset, [parts componentsJoinedByString: @" "], gapOK);
     } else if ([verb isEqualToString: @"helper"]) {
         // The word picker (or with "history", the history list) against the band, in the background's coordinates.
         FrotzInputHelper *helper = [m_inputLine valueForKey: @"m_inputHelper"]; // no accessor for it
@@ -668,13 +690,22 @@ static NSMutableArray<NSString *> *sHeldActions;
             CGPoint pt = [m_inputLine helperLaunchPosition];
             pt.y -= 10; pt.x += 20; // as handleTouch: does
             [helper showInputHelperInView: m_background atPoint: pt withMode: FrotzInputHelperModeHistory];
+        } else if ([arg hasPrefix: @"short"]) {
+            // "short-words"/"short-history": a 30-pt space to the band, shorter than either helper.
+            if (![helper historyCount])
+                [helper addHistoryItem: @"look"];
+            CGPoint pt = [m_inputLine helperLaunchPosition];
+            helper.maxHeight = 30;
+            [helper showInputHelperInView: m_background atPoint: pt
+                                 withMode: [arg hasSuffix: @"history"] ? FrotzInputHelperModeHistory : FrotzInputHelperModeWords];
         } else
             [m_inputLine launchInputHelper: nil];
         UIView *shown = helper.mode == FrotzInputHelperModeWords ? [m_inputLine inputHelperView] : helper.tableView;
         CGRect frame = [shown.superview convertRect: shown.frame toView: m_background];
         CGRect band = [self foldExclusionInView: m_background];
-        NSLog(@"kbselftest %d helper %@ mode=%ld frame=%@ band=%@ maxHeight=%g overlapsBand=%d", (int)step, arg, (long)helper.mode,
-              NSStringFromCGRect(frame), NSStringFromCGRect(band), helper.maxHeight, CGRectIntersectsRect(frame, band));
+        NSLog(@"kbselftest %d helper %@ mode=%ld frame=%@ band=%@ maxHeight=%g overlapsBand=%d fits=%d", (int)step, arg, (long)helper.mode,
+              NSStringFromCGRect(frame), NSStringFromCGRect(band), helper.maxHeight, CGRectIntersectsRect(frame, band),
+              helper.maxHeight <= 0 || frame.size.height <= helper.maxHeight + 0.5);
         next = 1.0;
     } else if ([verb isEqualToString: @"unhelper"])
         [m_inputLine hideInputHelper];

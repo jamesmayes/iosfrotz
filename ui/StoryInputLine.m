@@ -156,13 +156,20 @@
     return ihpt;
 }
 
-// Flow: a completion label that would sit on the fold band (the lower half is short) goes just above it.
+// Flow: a completion label that would sit on the fold band (the lower half is short) goes just above
+// it, or just below it when there is no room above, kept within the view either way.
 -(CGFloat)completionLabelY:(CGFloat)y height:(CGFloat)height inView:(UIView *)view {
     StoryMainViewController *storyController = (StoryMainViewController*)[m_storyView delegate];
     CGRect band = [storyController foldExclusionInView: view];
-    if (!CGRectIsNull(band) && y < CGRectGetMaxY(band) && y + height > CGRectGetMinY(band))
-        return CGRectGetMinY(band) - height - 2;
-    return y;
+    if (CGRectIsNull(band) || y >= CGRectGetMaxY(band) || y + height <= CGRectGetMinY(band))
+        return y;
+    CGRect bounds = view.bounds;
+    CGFloat above = CGRectGetMinY(band) - height - 2, below = CGRectGetMaxY(band) + 2;
+    if (above >= CGRectGetMinY(bounds))
+        return above;
+    if (below + height <= CGRectGetMaxY(bounds))
+        return below;
+    return MAX(CGRectGetMinY(bounds), above);
 }
 
 -(void)launchInputHelper:(id)unused {

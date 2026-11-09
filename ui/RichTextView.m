@@ -1955,16 +1955,33 @@ static const CGFloat kRTSplitSlop = 0.5; // line positions are fractional; a lin
     return top >= 0 ? top : y;
 }
 
+// The one mapping between the text and where it is drawn (both in content coordinates), used in
+// both directions so that drawing, overlays and hit testing agree. Text from the split down is
+// drawn lower by the shift. Drawn, that text starts at the split plus the shift (or at the band's
+// bottom, over the top edge), so everything from the split to there (the band, and the blank strip
+// either side of it) is the gap, which has no text: NAN y.
+-(CGFloat)foldMapY:(CGFloat)y toPresented:(BOOL)toPresented {
+    if (m_bandHeight <= 0 || isnan(y))
+        return y;
+    CGFloat splitY = [self foldSplitY], shift = [self foldLowerShift];
+    if (toPresented)
+        return y >= splitY - kRTSplitSlop ? y + shift : y;
+    CGFloat lowerTop = MAX(splitY + shift, self.bounds.origin.y + m_bandTop + m_bandHeight);
+    if (y >= lowerTop)
+        return y - shift;
+    return y >= splitY ? NAN : y;
+}
+
 // Where a rectangle of text (content coordinates) is drawn: lower by the shift from the split down.
 // A rectangle running across the split (a paragraph, for VoiceOver) grows by the shift.
 -(CGRect)presentedRectForTextRect:(CGRect)rect {
     if (m_bandHeight <= 0 || CGRectIsNull(rect))
         return rect;
-    CGFloat splitY = [self foldSplitY], shift = [self foldLowerShift];
-    if (CGRectGetMinY(rect) >= splitY - kRTSplitSlop)
-        return CGRectOffset(rect, 0, shift);
-    if (CGRectGetMaxY(rect) > splitY + kRTSplitSlop)
-        rect.size.height += shift;
+    CGFloat minY = CGRectGetMinY(rect), maxY = CGRectGetMaxY(rect) - 2 * kRTSplitSlop;
+    CGFloat moved = [self foldMapY: minY toPresented: YES] - minY;
+    if (moved > 0)
+        return CGRectOffset(rect, 0, moved);
+    rect.size.height += [self foldMapY: maxY toPresented: YES] - maxY;
     return rect;
 }
 
@@ -2068,16 +2085,10 @@ static const CGFloat kRTSplitSlop = 0.5; // line positions are fractional; a lin
     [CATransaction commit];
 }
 
-// Where a point in the view falls in the text, skipping the band; NAN y inside the band itself, or
-// in the part above it that the split hides.
+// Where a point in the view falls in the text: NAN y anywhere in the gap at the band, which shows
+// no text (the band, the blank strip under it, and the part above it that the split hides).
 -(CGPoint)textPointForPoint:(CGPoint)pt {
-    if (m_bandHeight > 0) {
-        CGFloat bandBottom = self.bounds.origin.y + m_bandTop + m_bandHeight;
-        if (pt.y >= bandBottom)
-            pt.y -= [self foldLowerShift];
-        else if (pt.y >= [self foldSplitY])
-            pt.y = NAN;
-    }
+    pt.y = [self foldMapY: pt.y toPresented: NO];
     return pt;
 }
 
