@@ -133,14 +133,30 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardPlacement) {
     UIEdgeInsets safe = view.safeAreaInsets;
     if (placement == FrotzKeyboardPlacementSplit) {
         // To the bottom edge, so the case colour runs under the home indicator; the keys stay above it.
+        _keyboardView.compact = NO;
         CGFloat top = CGRectGetMinY(m_observer.foldFrameInView);
         return CGRectMake(safe.left, top, bounds.size.width - safe.left - safe.right, bounds.size.height - top);
     }
-    // The keyboard keeps its keys out of the home indicator's safe area itself.
-    _keyboardView.compact = placement == FrotzKeyboardPlacementFlow;
-    CGFloat height = [_keyboardView preferredHeightForWidth: bounds.size.width] + safe.bottom;
-    height = MIN(height, floor(bounds.size.height * kMaxDockedHeightFraction));
+    // The keyboard keeps its keys out of the home indicator's safe area itself. A full keyboard
+    // taller than the cap (a landscape phone) gives way to the compact rows.
+    CGSize size = [self sizeForHeightDecision];
+    CGFloat cap = floor(size.height * kMaxDockedHeightFraction);
+    BOOL compact = placement == FrotzKeyboardPlacementFlow
+        || [_keyboardView preferredHeightForWidth: size.width compact: NO] + safe.bottom > cap;
+    _keyboardView.compact = compact;
+    CGFloat height = MIN([_keyboardView preferredHeightForWidth: size.width compact: compact] + safe.bottom, cap);
     return CGRectMake(0, bounds.size.height - height, bounds.size.width, height);
+}
+
+// The view's size; in DEBUG, FROTZ_FAKE_BOUNDS=<w>x<h> stands in for it here only, to try a
+// landscape phone's docked height on a simulator that can't be rotated from a script.
+-(CGSize)sizeForHeightDecision {
+#if DEBUG
+    NSArray<NSString *> *fake = [[[NSProcessInfo processInfo] environment][@"FROTZ_FAKE_BOUNDS"] componentsSeparatedByString: @"x"];
+    if (fake.count == 2 && fake[0].doubleValue > 0 && fake[1].doubleValue > 0)
+        return CGSizeMake(fake[0].doubleValue, fake[1].doubleValue);
+#endif
+    return m_smvc.view.bounds.size;
 }
 
 // What the story has to keep clear of: when split everything from the fold band down, so the story
@@ -156,7 +172,6 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardPlacement) {
     BOOL split = placement == FrotzKeyboardPlacementSplit;
     m_placement = placement;
     m_dockedFold = placement != FrotzKeyboardPlacementDocked ? m_observer.foldFrameInView : CGRectNull;
-    _keyboardView.compact = placement == FrotzKeyboardPlacementFlow;
     _keyboardView.topInset = split ? CGRectGetHeight(m_observer.foldFrameInView) : 0;
     _keyboardView.fillsHeight = split;
     _keyboardView.frame = frame;

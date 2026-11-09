@@ -34,6 +34,8 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardShiftState) {
 @property (nonatomic, readonly, strong) FrotzKeyboardSkin *skin;
 /// Bezel plus the rows at the key height this width gives; excludes the safe area.
 -(CGFloat)preferredHeightForWidth:(CGFloat)width;
+/// The same for the full or the compact rows, whichever is showing now.
+-(CGFloat)preferredHeightForWidth:(CGFloat)width compact:(BOOL)compact;
 /// Case colour only above the keys (an iPhone Duo's fold band sits there). Default 0.
 @property (nonatomic) CGFloat topInset;
 /// Keys grow to fill the view's height (up to 96 pt) rather than keep their natural height.

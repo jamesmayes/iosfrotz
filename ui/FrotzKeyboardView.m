@@ -293,17 +293,27 @@ static void FitLegendToHeight(UILabel *label) {
 // One unit of key width in a view this wide, after the side safe areas, bezel and gaps.
 // Never below a point, so a view too narrow for its gaps squashes keys rather than flips them.
 -(CGFloat)unitWidthForWidth:(CGFloat)width {
+    return [self unitWidthForWidth: width rows: m_rows];
+}
+
+-(CGFloat)unitWidthForWidth:(CGFloat)width rows:(FrotzKeyboardLayout *)layout {
     UIEdgeInsets safe = self.safeAreaInsets, bezel = _skin.bezelInsets;
-    CGFloat units = MAX(1, m_rows.unitsPerRow), gap = m_rows.gap;
+    CGFloat units = MAX(1, layout.unitsPerRow), gap = layout.gap;
     return MAX(1, (width - safe.left - safe.right - bezel.left - bezel.right - (units - 1) * gap) / units);
 }
 
 -(CGFloat)preferredHeightForWidth:(CGFloat)width {
+    return [self preferredHeightForWidth: width compact: _compact];
+}
+
+// Asks without switching rows, which would let go of any key held down.
+-(CGFloat)preferredHeightForWidth:(CGFloat)width compact:(BOOL)compact {
+    FrotzKeyboardLayout *layout = compact && _layout.compactLayout ? _layout.compactLayout : _layout;
     UIEdgeInsets bezel = _skin.bezelInsets;
-    CGFloat gap = m_rows.gap;
-    NSUInteger rows = m_rows.maxRowCount;
-    CGFloat keyHeight = [self unitWidthForWidth: width] / m_rows.keyAspect;
-    keyHeight = MIN(_compact ? kMaxCompactKeyHeight : kMaxKeyHeight, MAX(kMinKeyHeight, keyHeight));
+    CGFloat gap = layout.gap;
+    NSUInteger rows = layout.maxRowCount;
+    CGFloat keyHeight = [self unitWidthForWidth: width rows: layout] / layout.keyAspect;
+    keyHeight = MIN(compact ? kMaxCompactKeyHeight : kMaxKeyHeight, MAX(kMinKeyHeight, keyHeight));
     return ceil(bezel.top + bezel.bottom + rows * keyHeight + (rows > 0 ? rows - 1 : 0) * gap);
 }
 
