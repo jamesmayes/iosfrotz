@@ -59,7 +59,6 @@
     UISlider		    *m_storyFontSliderCtl, *m_notesFontSliderCtl;
     UITableViewCell     *m_storyFontCell, *m_notesFontCell;
     UITableViewCell	    *m_storyFontSizeCell, *m_notesFontSizeCell;
-    UITableViewCell     *m_keyboardStyleCell;
     UISegmentedControl  *m_duoLayoutCtl;
     FrotzKeyboardStylePicker *m_keyboardStylePicker;
 

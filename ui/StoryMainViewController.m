@@ -1819,13 +1819,25 @@ extern void gli_ios_set_focus(window_t *winNum);
 // "flowend:" (Flow: the end of the story against the docked input line), "pick:lower|upper" (select a word
 // below/above the band), "helper:words|history" and "unhelper:" (the input helper against the band),
 // "edgeband:top|bottom|off" (a band over the story view's edge) or "note:<text>".
+// Not scriptable, so checked by hand: one finger on a key while another's touch is consumed by the
+// story or status line (a status line multi-tap, a story magnification phase) in the same event.
+// FrotzWindow hands the whole event to UIKit; the story view or status line ignores the consumed
+// phase (FrotzTouchIsConsumed) and the key still types, with its "kbtouch" lines as usual.
 -(void)runKeyboardSelfTest {
+    NSLog(@"kbselftest note: mixed-touch suppression (a key plus a consumed story/status touch in one event) "
+          @"needs two real fingers; check by hand that the key types and the story doesn't scroll");
     for (NSString *skinID in [FrotzKeyboardSkin availableSkinIDs]) {
         FrotzKeyboardLayout *layout = [FrotzKeyboardLayout layoutWithID: skinID];
         if (layout && [FrotzKeyboardSkin skinWithID: skinID])
             NSLog(@"kbskin %@ ok rows=%lu units=%g", skinID, (unsigned long)layout.maxRowCount, layout.unitsPerRow);
         else
             NSLog(@"kbskin %@ failed (the loader logs why, once per launch)", skinID);
+    }
+    // FROTZ_SELFTEST_SCRIPT="<step>|<step>|..." runs those steps instead of the skin's script.
+    NSString *custom = [[NSProcessInfo processInfo] environment][@"FROTZ_SELFTEST_SCRIPT"];
+    if (custom.length) {
+        [self keyboardSelfTestStep: 0 ofScript: [custom componentsSeparatedByString: @"|"]];
+        return;
     }
     // The faithful skins have their own legends: backspace, return and shift, then a few keys of their own.
     NSDictionary<NSString *, NSArray *> *faithful = @{
@@ -1926,7 +1938,9 @@ extern void gli_ios_set_focus(window_t *winNum);
             [m_keyboardController.keyboardView runOverlapSelfTestWithShift: labels[0] repeatKey: labels[1] letter: labels[2] backspace: labels[3]];
         } else if ([verb isEqualToString: @"a11y"]) {
         FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
-        NSLog(@"kbselftest %d a11y layer=%@ %@", (int)step, keyboard.keyLayer,
+        NSLog(@"kbselftest %d a11y container=\"%@\" type=%ld frame=%@ view=%@ elements=%lu layer=%@ %@", (int)step, keyboard.accessibilityLabel,
+              (long)keyboard.accessibilityContainerType, NSStringFromCGRect(keyboard.accessibilityFrame), NSStringFromCGRect([keyboard convertRect: keyboard.bounds toView: nil]),
+              (unsigned long)keyboard.accessibilityElements.count, keyboard.keyLayer,
               [[keyboard.accessibilityElements valueForKey: @"accessibilityLabel"] componentsJoinedByString: @" | "]);
     } else if ([verb isEqualToString: @"select"]) {
         UITextPosition *end = m_inputLine.endOfDocument;
@@ -1973,6 +1987,22 @@ extern void gli_ios_set_focus(window_t *winNum);
         NSLog(@"kbselftest %d %@", (int)step, arg);
     else if ([verb isEqualToString: @"mode"])
         [self setDuoLayoutMode: arg];
+    else if ([verb isEqualToString: @"edges"]) {
+        // Which controller the system asks for deferred edges (the top full-screen presentation, then
+        // its children), and how low the keys take touches.
+        UIViewController *vc = self.view.window.rootViewController;
+        while (vc.presentedViewController)
+            vc = vc.presentedViewController;
+        NSMutableArray *chain = [NSMutableArray arrayWithObject: NSStringFromClass([vc class])];
+        while (vc.childViewControllerForScreenEdgesDeferringSystemGestures) {
+            vc = vc.childViewControllerForScreenEdgesDeferringSystemGestures;
+            [chain addObject: NSStringFromClass([vc class])];
+        }
+        FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
+        NSLog(@"kbselftest %d edges chain=%@ deferred=%lu inAppShowing=%d kbHeight=%g safeBottom=%g lowestHit=%g",
+              (int)step, [chain componentsJoinedByString: @" > "], (unsigned long)vc.preferredScreenEdgesDeferringSystemGestures,
+              m_keyboardController.isShowing, keyboard.bounds.size.height, keyboard.safeAreaInsets.bottom, [keyboard lowestKeyHitY]);
+    }
     else if ([verb isEqualToString: @"band"]) {
         // Put the cursor's line a few points into the band, as scrolling back would.
         CGPoint cursor = [m_storyView cursorPoint];
@@ -2213,6 +2243,22 @@ extern void gli_ios_set_focus(window_t *winNum);
         [m_inputLine resignFirstResponder];
     [self showKeyboardLockState];
     return kbdWasShown ? m_inputLine : nil;
+}
+
+// The input line usually keeps first responder under the in-app keyboard while settings are up, so
+// making it first responder again wouldn't bring that keyboard back; show it directly.
+-(void)restoreKeyboard:(id)responder {
+    if (responder == m_inputLine && [self usesInAppKeyboard]) {
+        if (!m_kbLocked && ![m_notesController isVisible])
+            [m_keyboardController showAnimated: YES];
+    } else
+        [responder becomeFirstResponder];
+}
+
+-(void)focusInputLineForHardwareKey {
+    m_focusingForHardwareKey = YES;
+    [m_inputLine becomeFirstResponder];
+    m_focusingForHardwareKey = NO;
 }
 
 -(void)activateKeyboard {
@@ -2683,6 +2729,7 @@ static const CGFloat kVerticalBarLiveActivityReserve = 90;
 -(NSInteger)estimatedVerticalBarCapacityWithKeyboardHeight:(CGFloat)keyboardHeight {
     if (![self hasVerticalBar])
         return NSIntegerMax;
+    keyboardHeight = [self verticalBarKeyboardHeightForRegionHeight: keyboardHeight];
     CGFloat bottom = self.view.bounds.size.height;
     // The keyboard reaches the bottom of the screen, so the home indicator inset is already in it.
     bottom -= keyboardHeight > 0 ? keyboardHeight : self.view.safeAreaInsets.bottom;
@@ -2693,6 +2740,20 @@ static const CGFloat kVerticalBarLiveActivityReserve = 90;
         return 1;
     CGFloat pitch = kVerticalBarItemLength + kVerticalBarItemGap;
     return (NSInteger)floor((space - kVerticalBarGroupGap + 2 * kVerticalBarItemGap) / pitch);
+}
+
+// How much of a keyboard region of this height the vertical bar has to stop above. UIKit shortens
+// the bar for its own keyboard only; the in-app one counts just where it reaches under the bar's
+// side inset (docked, full width), not when it stops beside it (Classic split).
+-(CGFloat)verticalBarKeyboardHeightForRegionHeight:(CGFloat)height {
+    if (height <= 0 || m_keyboardSource != FrotzKeyboardSourceInApp)
+        return height;
+    CGRect frame = m_keyboardController.keyboardView.frame;
+    CGRect bounds = self.view.bounds;
+    UIEdgeInsets safe = self.view.safeAreaInsets;
+    BOOL underBar = (safe.left > 0 && CGRectGetMinX(frame) < safe.left)
+                 || (safe.right > 0 && CGRectGetMaxX(frame) > CGRectGetMaxX(bounds) - safe.right);
+    return underBar ? MIN(height, CGRectGetMaxY(bounds) - CGRectGetMinY(frame)) : 0;
 }
 
 // Leading items, by how many items the vertical bar has space for: the Story List with the Frotz
@@ -2772,9 +2833,9 @@ static const CGFloat kVerticalBarLiveActivityReserve = 90;
         // The inputs to the estimate, for checking the constants above against the device.
         m_lastVerticalBarCapacity = capacity;
         UIEdgeInsets safe = self.view.safeAreaInsets;
-        NSLog(@"vertical bar: height %.0f, island at top %d, status hidden %d, keyboard %.0f, safe insets (t %.0f l %.0f b %.0f r %.0f), first tile top %.0f (measured extra %.0f) -> capacity %ld, %lu leading item(s)",
+        NSLog(@"vertical bar: height %.0f, island at top %d, status hidden %d, keyboard %.0f (under the bar %.0f), safe insets (t %.0f l %.0f b %.0f r %.0f), first tile top %.0f (measured extra %.0f) -> capacity %ld, %lu leading item(s)",
               self.view.bounds.size.height, [self dynamicIslandIsAtTopOfVerticalBar], [self prefersStatusBarHidden],
-              keyboardHeight, safe.top, safe.left, safe.bottom, safe.right,
+              keyboardHeight, [self verticalBarKeyboardHeightForRegionHeight: keyboardHeight], safe.top, safe.left, safe.bottom, safe.right,
               [self estimatedVerticalBarFirstItemTop], m_verticalBarExtraTop, (long)capacity, (unsigned long)items.count);
     }
     if (![self.navigationItem.leftBarButtonItems isEqualToArray: items])
@@ -2869,6 +2930,11 @@ static const CGFloat kVerticalBarLiveActivityReserve = 90;
     if (@available(iOS 26.0, *))
         return UIStatusBarStyleDefault;
     return UIStatusBarStyleLightContent;
+}
+
+- (UIRectEdge)preferredScreenEdgesDeferringSystemGestures {
+    // The bottom row of an in-app keyboard sits by the home indicator; a press there is a key, not a swipe home.
+    return m_keyboardController.isShowing ? UIRectEdgeBottom : UIRectEdgeNone;
 }
 
 - (void)autosize {
@@ -4527,8 +4593,11 @@ static UIColor *scanColor(NSString *colorStr) {
         if ([[NSProcessInfo processInfo] environment][@"FROTZ_INAPP_KEYBOARD"].length)
             applyStyle = NO; // the override wins; viewDidAppear applies it
 #endif
-        if (applyStyle)
+        if (applyStyle) {
             m_keyboardController.skinID = m_keyboardStyle;
+            if (!m_keyboardController.skinID)
+                m_keyboardStyle = nil; // a style that no longer loads means the system keyboard
+        }
     }
 }
 
@@ -4539,6 +4608,8 @@ static UIColor *scanColor(NSString *colorStr) {
     if (self.navigationController.presentedViewController)
         [m_inputLine resignFirstResponder];
     m_keyboardController.skinID = m_keyboardStyle;
+    if (m_keyboardController && !m_keyboardController.skinID)
+        m_keyboardStyle = nil; // it didn't load; the system keyboard stays
     [self savePrefs];
 }
 
@@ -5334,7 +5405,8 @@ static void setScreenDims(char *storyNameBuf) {
 // Re-requesting first responder (after settings, on return to the foreground) brings the
 // system keyboard back; do the same for the in-app one.
 - (void)textFieldDidBeginEditing:(UITextField *)textField {
-    if (textField == m_inputLine && [self usesInAppKeyboard])
+    // Typing on a hardware keyboard needs the line, not the in-app keys over half the story.
+    if (textField == m_inputLine && [self usesInAppKeyboard] && !m_focusingForHardwareKey)
         [m_keyboardController inputLineDidBeginEditing];
 }
 

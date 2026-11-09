@@ -392,8 +392,15 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
 
     m_storyFontSliderCtl.value = (float)m_origStoryFontSize;
     m_notesFontSliderCtl.value = (float)m_origNotesFontSize;
-    if (m_keyboardStyleCell) // back from the style picker
-        m_keyboardStyleCell.detailTextLabel.text = [FrotzKeyboardStylePicker displayNameForStyle: [m_storyDelegate keyboardStyle]];
+    // Back from the style picker. By index path: a kept cell may have been reused for another row since.
+    NSIndexPath *styleRow = [self keyboardStyleIndexPath];
+    if (styleRow && [m_tableView cellForRowAtIndexPath: styleRow])
+        [m_tableView reloadRowsAtIndexPaths: @[styleRow] withRowAnimation: UITableViewRowAnimationNone];
+}
+
+-(NSIndexPath *)keyboardStyleIndexPath {
+    NSUInteger row = [SettingsSectionRows()[kFrotzKeyboardSection] indexOfObject: @(kFrotzPrefsKeyboardStyle)];
+    return row == NSNotFound ? nil : [NSIndexPath indexPathForRow: row inSection: kFrotzKeyboardSection];
 }
 
 #pragma mark - UITableView delegates
@@ -525,7 +532,6 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
             cell.accessoryView = m_switchCtl;
             break;
         case kFrotzPrefsKeyboardStyle:
-            m_keyboardStyleCell = cell;
             cell.textLabel.text = @"Keyboard Style";
             cell.detailTextLabel.text = [FrotzKeyboardStylePicker displayNameForStyle: [m_storyDelegate keyboardStyle]];
             break;
@@ -640,8 +646,7 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
 
 #if DEBUG
 -(FrotzKeyboardStylePicker*)showKeyboardStylePicker {
-    NSIndexPath *indexPath = [NSIndexPath indexPathForRow: [SettingsSectionRows()[kFrotzKeyboardSection] indexOfObject: @(kFrotzPrefsKeyboardStyle)]
-                                                inSection: kFrotzKeyboardSection];
+    NSIndexPath *indexPath = [self keyboardStyleIndexPath];
     [m_tableView scrollToRowAtIndexPath: indexPath atScrollPosition: UITableViewScrollPositionMiddle animated: NO];
     [self tableView: m_tableView didSelectRowAtIndexPath: indexPath];
     return m_keyboardStylePicker;

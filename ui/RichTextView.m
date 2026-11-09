@@ -75,6 +75,7 @@ static const CGFloat kRTSplitSlop = 0.5; // line positions are fractional; a lin
     CGRect m_selectionTextFrame;      // the selection label in text coordinates, before the band offset
     CGRect m_selectionPresentedFrame; // where it was put for that; once the controller animates it away, it's left alone
     NSMutableArray<UIImageView *> *m_imageClones; // the lower parts of pictures the split cuts
+    BOOL m_foldOverlaysPlaced;        // the last layoutFoldBandOverlays allowed for a band, so one more pass undoes it
 }
 
 @synthesize tileSize = m_tileSize;
@@ -2083,6 +2084,7 @@ static const CGFloat kRTSplitSlop = 0.5; // line positions are fractional; a lin
         m_selectionView.frame = m_selectionPresentedFrame;
     }
     [CATransaction commit];
+    m_foldOverlaysPlaced = m_bandHeight > 0;
 }
 
 // Where a point in the view falls in the text: NAN y anywhere in the gap at the band, which shows
@@ -2116,7 +2118,8 @@ static const CGFloat kRTSplitSlop = 0.5; // line positions are fractional; a lin
         [self layoutFoldBandTiles];
         visibleBounds.size.height = m_bandTop; // the rest is the lower container's
     }
-    [self layoutFoldBandOverlays];
+    if (m_bandHeight > 0 || m_foldOverlaysPlaced) // without a band there is nothing to place or undo
+        [self layoutFoldBandOverlays];
 
     // first recycle all tiles that are no longer visible
     for (UIView *tile in [m_tileContainerView subviews]) {

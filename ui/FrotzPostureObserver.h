@@ -30,6 +30,7 @@ typedef NS_ENUM(NSInteger, FrotzPosture) { FrotzPostureUnknown, FrotzPostureClos
 @end
 
 // Where a foldable's hinge is and how far it's open, so the story layout can keep clear of the fold.
+// Main thread only, like the view it watches; the delegate is called there too.
 @interface FrotzPostureObserver : NSObject
 -(instancetype)initWithView:(UIView *)view NS_DESIGNATED_INITIALIZER;
 -(instancetype)init NS_UNAVAILABLE;

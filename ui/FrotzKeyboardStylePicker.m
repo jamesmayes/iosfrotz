@@ -98,20 +98,45 @@ static const CGFloat kPreviewMargin = 6.0;
 }
 
 -(void)loadSkins {
-    NSMutableArray *skins = [NSMutableArray array];
+    // Each skin's files are parsed once; its layout is kept beside it.
+    NSMutableArray<NSArray *> *pairs = [NSMutableArray array];
     for (NSString *skinID in [FrotzKeyboardSkin availableSkinIDs]) {
         FrotzKeyboardSkin *skin = [FrotzKeyboardSkin skinWithID: skinID];
-        if (skin && [FrotzKeyboardLayout layoutWithID: skinID]) // a broken skin isn't offered
-            [skins addObject: skin];
+        FrotzKeyboardLayout *layout = skin ? [FrotzKeyboardLayout layoutWithID: skinID] : nil;
+        if (layout) // a broken skin isn't offered
+            [pairs addObject: @[ skin, layout ]];
     }
-    [skins sortUsingComparator: ^NSComparisonResult(FrotzKeyboardSkin *a, FrotzKeyboardSkin *b) {
-        return [a.name localizedStandardCompare: b.name];
+    [pairs sortUsingComparator: ^NSComparisonResult(NSArray *a, NSArray *b) {
+        return [((FrotzKeyboardSkin *)a[0]).name localizedStandardCompare: ((FrotzKeyboardSkin *)b[0]).name];
     }];
-    NSMutableArray *layouts = [NSMutableArray array];
-    for (FrotzKeyboardSkin *skin in skins)
-        [layouts addObject: [FrotzKeyboardLayout layoutWithID: skin.skinID]];
+    NSMutableArray *skins = [NSMutableArray array], *layouts = [NSMutableArray array];
+    for (NSArray *pair in pairs) {
+        [skins addObject: pair[0]];
+        [layouts addObject: pair[1]];
+    }
     m_skins = skins;
     m_layouts = layouts;
+}
+
+// Off screen the skins and the preview keyboards (in the table's cells) are let go;
+// viewWillAppear loads them again.
+-(void)releaseSkins {
+    if (self.isViewLoaded && self.view.window)
+        return;
+    m_skins = nil;
+    m_layouts = nil;
+    if (self.isViewLoaded)
+        self.view = nil; // the table and its cells; the next appearance makes a new one
+}
+
+-(void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear: animated];
+    [self releaseSkins];
+}
+
+-(void)didReceiveMemoryWarning {
+    [super didReceiveMemoryWarning];
+    [self releaseSkins];
 }
 
 -(void)viewWillAppear:(BOOL)animated {
@@ -164,7 +189,7 @@ static const CGFloat kPreviewMargin = 6.0;
 #if DEBUG
 -(void)selectRow:(NSInteger)row {
     NSIndexPath *indexPath = [NSIndexPath indexPathForRow: row inSection: 0];
-    if (row < [self tableView: self.tableView numberOfRowsInSection: 0])
+    if (row >= 0 && row < [self tableView: self.tableView numberOfRowsInSection: 0])
         [self tableView: self.tableView didSelectRowAtIndexPath: indexPath];
 }
 #endif

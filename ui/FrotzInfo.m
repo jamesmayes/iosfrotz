@@ -109,7 +109,9 @@
             [self performSelector:@selector(dismissInfoModal) withObject: nil afterDelay: 0.2];
         }
     }
-    if (m_prevResponder && [m_prevResponder respondsToSelector:@selector(becomeFirstResponder)])
+    if (m_prevResponder && [m_kbdOwner respondsToSelector:@selector(restoreKeyboard:)])
+        [(NSObject *)m_kbdOwner performSelector:@selector(restoreKeyboard:) withObject:m_prevResponder afterDelay:0.3];
+    else if (m_prevResponder && [m_prevResponder respondsToSelector:@selector(becomeFirstResponder)])
         [m_prevResponder performSelector:@selector(becomeFirstResponder) withObject:nil afterDelay:0.3];
 }
 

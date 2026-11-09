@@ -22,9 +22,54 @@
 - (void)sendEvent:(UIEvent *)event;                    // called by UIApplication to dispatch events to views inside the window
 @end
 
+// Touches a phase of which the story view, status line or input line consumed (handleTouch:
+// returned NO), mapped to the view they were routed to. The event itself still goes to UIKit, so
+// every touch keeps its whole lifecycle in UIKit and its gesture recognizers; the routed views
+// ignore a consumed touch instead (FrotzTouchIsConsumed). A touch stays consumed from that phase
+// until its Ended or Cancelled phase has been through UIKit, so nothing it did after it was
+// consumed can complete a gesture. Other touches, such as the in-app keyboard's, are never in it.
+static NSMapTable<UITouch *, UIView *> *ConsumedTouches(void) {
+    static NSMapTable<UITouch *, UIView *> *consumed;
+    if (!consumed)
+        consumed = [NSMapTable weakToWeakObjectsMapTable];
+    return consumed;
+}
+
+BOOL FrotzTouchIsConsumed(UITouch *touch) {
+    return [ConsumedTouches() objectForKey: touch] != nil;
+}
+
+NSSet<UITouch *> *FrotzUnconsumedTouches(NSSet<UITouch *> *touches) {
+    NSMapTable<UITouch *, UIView *> *consumed = ConsumedTouches();
+    if (consumed.count == 0)
+        return touches;
+    return [touches objectsPassingTest: ^BOOL(UITouch *touch, BOOL *stop) { return [consumed objectForKey: touch] == nil; }];
+}
+
+BOOL FrotzViewHasConsumedTouch(UIView *view) {
+    NSMapTable<UITouch *, UIView *> *consumed = ConsumedTouches();
+    for (UITouch *touch in consumed)
+        if ([[consumed objectForKey: touch] isDescendantOfView: view])
+            return YES;
+    return NO;
+}
+
+// A touch consumed after its Began reached UIKit (a magnification drag) may already be held by
+// recognizers on the routed view: reset them, so a two-finger tap or a scroll it started can't fire.
+static void FrotzResetRecognizers(UITouch *touch, UIView *routedRoot) {
+    for (UIGestureRecognizer *recognizer in [touch.gestureRecognizers copy])
+        if (recognizer.enabled && [recognizer.view isDescendantOfView: routedRoot]) {
+            recognizer.enabled = NO; // cancels it if it began, fails it if it was still possible
+            recognizer.enabled = YES;
+        }
+}
+
 @implementation FrotzWindow
 - (void)sendEvent:(UIEvent *)event {
-    static UIView *prevView;
+    // The view each touch's Began was routed to, for its later phases that arrive with no view.
+    static NSMapTable<UITouch *, UIView *> *routedTouches;
+    if (!routedTouches)
+        routedTouches = [NSMapTable weakToWeakObjectsMapTable];
 #if DEBUG
     // Shows which view a touch on the in-app keyboard really reaches, for touches the keyboard never sees.
     FrotzKeyboardView *keyboard = [[[theStoryBrowser storyMainViewController] valueForKey: @"m_keyboardController"] keyboardView];
@@ -38,26 +83,36 @@
         }
     }
 #endif
-    for (UITouch *touch in [event allTouches]) {
+    NSMapTable<UITouch *, UIView *> *consumed = ConsumedTouches();
+    NSSet<UITouch *> *touches = [event allTouches];
+    for (UITouch *touch in touches) {
         UIView *view = [touch view];
         UITouchPhase phase = [touch phase];
 
         if (!view && phase != UITouchPhaseBegan)
-            view = prevView; // for some reason sometomes view is nil and we lose the phase ended event!
+            view = [routedTouches objectForKey: touch]; // for some reason sometimes view is nil and we lose the phase ended event!
+        UIView *routedRoot = nil;
+        BOOL keep = YES;
         if ([touch tapCount]>=1 || phase == UITouchPhaseEnded) {
             if ([view isDescendantOfView: theInputLine]) {
-                prevView = view;
-                if (![theInputLine handleTouch: touch withEvent: event])
-                    return;
+                routedRoot = theInputLine;
+                keep = [theInputLine handleTouch: touch withEvent: event];
             } else if ([view isDescendantOfView: theStoryView]) {
-                prevView = view;
-                if (![theStoryView handleTouch: touch withEvent: event])
-                    return;
-                } else if ([view isDescendantOfView: theStatusLine]) {
-                    prevView = view;
-                    if (![theStatusLine handleTouch: touch withEvent: event])
-                        return;
-                }
+                routedRoot = theStoryView;
+                keep = [theStoryView handleTouch: touch withEvent: event];
+            } else if ([view isDescendantOfView: theStatusLine]) {
+                routedRoot = theStatusLine;
+                keep = [theStatusLine handleTouch: touch withEvent: event];
+            }
+        }
+        if (routedRoot && phase == UITouchPhaseBegan)
+            [routedTouches setObject: view forKey: touch];
+        else if (phase == UITouchPhaseEnded || phase == UITouchPhaseCancelled)
+            [routedTouches removeObjectForKey: touch];
+        if (!keep && ![consumed objectForKey: touch]) { // only a routed touch, so view is set
+            [consumed setObject: view forKey: touch];
+            if (phase != UITouchPhaseBegan)
+                FrotzResetRecognizers(touch, routedRoot);
         }
     }
     if ([event isKindOfClass: [UIPressesEvent class]]) {
@@ -66,10 +121,13 @@
             && ![[smvc navigationController] presentedViewController]
             && ![[smvc notesController] isVisible]) {
             if (theInputLine.isFirstResponder == NO)
-                [theInputLine becomeFirstResponder];
+                [smvc focusInputLineForHardwareKey];
         }
     }
     [super sendEvent: event];
+    for (UITouch *touch in touches) // only now that UIKit has delivered the terminal phase
+        if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled)
+            [consumed removeObjectForKey: touch];
 }
 @end
 
@@ -81,6 +139,10 @@
 
 @implementation FrotzNavigationController
 - (UIViewController *)childViewControllerForStatusBarStyle {
+    return self.topViewController;
+}
+
+- (UIViewController *)childViewControllerForScreenEdgesDeferringSystemGestures {
     return self.topViewController;
 }
 @end

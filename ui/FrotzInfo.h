@@ -13,6 +13,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @protocol KeyboardOwner <NSObject>
 -(nullable id)dismissKeyboard;
+@optional
+/// Brings back what dismissKeyboard put away (it returned responder); without this the responder is just made first responder again.
+-(void)restoreKeyboard:(id)responder;
 @end
 
 @interface FrotzInfo : UIViewController <FrotzSettingsInfoDelegate> {
