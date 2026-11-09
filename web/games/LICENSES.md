@@ -1,6 +1,8 @@
 # Licences for the bundled stories
 
-Every file in this folder is a byte-for-byte copy of the file with the same name in `resources/Games`, which the iOS app already bundles. This file records the redistribution permission for each story, where it has been found.
+Every story in this folder is listed here with its release, its source, the text of the permission that lets it be redistributed, and the notices that have to go with it. A story without all four is not shipped. See "Adding a story to the catalogue" in `../README.md`.
+
+The catalogue is *Balances* only. The 20 other stories that the iOS app bundles from `resources/Games` were removed from the web client, because their redistribution terms have not been recorded for it. That is a hold on evidence, not a finding that their authors forbid it.
 
 ## Balances (`Balances.z5`)
 
@@ -21,7 +23,3 @@ How this copy meets the three conditions:
 - **(c) No profit.** Web Frotz is distributed free of charge. This condition has to hold wherever the client is hosted.
 
 Inform software, its example games included, is supplied "as is" and carries no warranty, actual or implied.
-
-## The other stories
-
-The other 20 stories, listed with their authors in `stories.json`, are bundled because the iOS app already redistributes them from `resources/Games`. Their individual redistribution terms have **not** been checked for this web client. Before the web client is published, each needs the same evidence as *Balances* above, or it should be removed from `games/` and `stories.json`.

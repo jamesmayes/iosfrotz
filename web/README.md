@@ -91,7 +91,18 @@ Blorb-wrapped Z-code needs no extra code: `init_memory()` in `frotz/common/fastm
 
 ### Bundled stories
 
-`games/` holds the 21 `.z5`/`.z8` files from `resources/Games`, which the iOS app already ships (the Xcode project bundles that folder as a resource). The `.zblorb` files there are not copied. V6 (`.z6`) games load, but pictures are not drawn.
+`games/` holds one story, *Balances* (`Balances.z5`), with its redistribution permission in [`games/LICENSES.md`](games/LICENSES.md). Any other Z-code file can be played with **Open a story file…**. V6 (`.z6`) games load, but pictures are not drawn.
+
+### Adding a story to the catalogue
+
+A story goes into `games/` and `games/stories.json` only with all of this recorded for it in `games/LICENSES.md`:
+
+1. **Release.** Title, author, release and serial number, and the file's SHA-256.
+2. **Source.** Where this exact file comes from (for example its IF Archive path), checked to be byte-identical.
+3. **Permission.** The text that allows redistribution, quoted, with where it was found (the game's own banner or documentation, a licence file, or a statement from the author). "The iOS app already bundles it" or "it is on the IF Archive" is not permission.
+4. **Notices.** The copyright and licence notices the permission requires, and how the web client keeps them (for example a banner the game prints itself), plus any condition the host has to meet, such as no charge.
+
+A story that lacks any of these stays out of the catalogue.
 
 ## Saves
 
@@ -128,6 +139,6 @@ Blorb-wrapped Z-code needs no extra code: `init_memory()` in `frotz/common/fastm
 
 ## Games
 
-Every file in `games/` is a byte-for-byte copy of a file in `resources/Games`, which the iOS app already redistributes. The list, with authors, is in `games/stories.json`.
+The catalogue is *Balances* only. `games/Balances.z5` is a byte-for-byte copy of `resources/Games/Balances.z5` and of the IF Archive's file. *Balances* is one of Graham Nelson's Inform 6 example games, and the Inform licence lets anyone distribute those freely if the copy is unchanged, the copyright messages are kept and no profit is involved. [`games/LICENSES.md`](games/LICENSES.md) quotes the permission and shows how each condition is met.
 
-Redistribution terms are in [`games/LICENSES.md`](games/LICENSES.md). *Balances* is one of Graham Nelson's Inform 6 example games, and the Inform licence lets anyone distribute those freely if the copy is unchanged (ours is byte-identical to the IF Archive's), the copyright messages are kept and no profit is involved. That file quotes the permission and shows how each condition is met. The terms of the other 20 stories have not been checked yet. Each needs the same evidence, or should be removed, before the web client is published.
+The other 20 stories in `resources/Games`, which the iOS app bundles, are not in the web client: their terms have not been recorded for it. Each can come back once it has the evidence listed under "Adding a story to the catalogue".

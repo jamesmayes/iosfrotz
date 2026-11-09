@@ -1,23 +1,3 @@
 [
-  { "file": "905.z5", "title": "9:05", "author": "Adam Cadre" },
-  { "file": "ActofMurder.z8", "title": "An Act of Murder", "author": "Christopher Huang" },
-  { "file": "AllRoads.z5", "title": "All Roads", "author": "Jon Ingold" },
-  { "file": "anchor.z8", "title": "Anchorhead", "author": "Michael Gentry" },
-  { "file": "Balances.z5", "title": "Balances", "author": "Graham Nelson" },
-  { "file": "minster.z5", "title": "Christminster", "author": "Gareth Rees" },
-  { "file": "curses.z5", "title": "Curses", "author": "Graham Nelson" },
-  { "file": "zdungeon.z5", "title": "Dungeon", "author": "Tim Anderson, Marc Blank, Bruce Daniels, Dave Lebling" },
-  { "file": "change.z5", "title": "For a Change", "author": "Dan Schmidt" },
-  { "file": "heroes.z5", "title": "Heroes", "author": "Sean Barrett" },
-  { "file": "Jigsaw.z8", "title": "Jigsaw", "author": "Graham Nelson" },
-  { "file": "Misdirection.z5", "title": "Misdirection", "author": "Callico Harrison" },
-  { "file": "photopia.z5", "title": "Photopia", "author": "Adam Cadre" },
-  { "file": "slouch.z5", "title": "Slouching Towards Bedlam", "author": "Star Foster, Daniel Ravipinto" },
-  { "file": "Tangle.z5", "title": "Spider and Web", "author": "Andrew Plotkin" },
-  { "file": "sherbet.z5", "title": "The Meteor, the Stone and a Long Glass of Sherbet", "author": "Graham Nelson" },
-  { "file": "dreamhold.z8", "title": "The Dreamhold", "author": "Andrew Plotkin" },
-  { "file": "weapon.z5", "title": "The Weapon", "author": "Sean Barrett" },
-  { "file": "weather.z5", "title": "A Change in the Weather", "author": "Andrew Plotkin" },
-  { "file": "vgame.z8", "title": "Varicella", "author": "Adam Cadre" },
-  { "file": "vespers.z8", "title": "Vespers", "author": "Jason Devlin" }
+  { "file": "Balances.z5", "title": "Balances", "author": "Graham Nelson" }
 ]
