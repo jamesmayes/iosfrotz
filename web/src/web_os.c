@@ -18,9 +18,11 @@
  *     browser event loop runs, and the stack is rewound when the player's
  *     line (or a timeout) resolves the Promise.
  *
- * Saves go to /saves, which app.js mounts on IDBFS. After every successful
- * save or restore, and before the interpreter exits, js_sync_saves() awaits
- * FS.syncfs so the files reach IndexedDB.
+ * Saves go to /saves, which is plain MEMFS. Each file is persisted on its
+ * own (web/saves.js): after a successful SAVE, js_persist_save() writes that
+ * one file to IndexedDB, and before a RESTORE, js_load_save() copies that one
+ * file from IndexedDB into MEMFS if the stored copy is newer. Both are
+ * awaited, and neither can hang the game: they give up after a timeout.
  */
 
 #include <emscripten.h>
@@ -82,13 +84,22 @@ EM_JS(int, js_size_changed, (void), {
     return Module.webFrotz.sizeChanged();
 });
 
-/* Flush /saves (IDBFS) to IndexedDB. Awaited, so a quit cannot race it. */
-EM_ASYNC_JS(void, js_sync_saves, (void), {
-    try {
-        await Module.webFrotz.syncSaves();
-    } catch (e) {
-        console.warn("[frotz] syncfs failed", e);
-    }
+/* Write one save file (a MEMFS path) to IndexedDB. If that fails or times
+   out, the page reports it in the transcript; the save itself stays in
+   MEMFS for this session. */
+EM_ASYNC_JS(void, js_persist_save, (const char *path), {
+    await Module.webFrotz.persistSave(UTF8ToString(path));
+});
+
+/* Before a restore: copy that file from IndexedDB into MEMFS if MEMFS lacks
+   it or the stored copy is newer. A failure leaves MEMFS as it is. */
+EM_ASYNC_JS(void, js_load_save, (const char *path), {
+    await Module.webFrotz.loadSave(UTF8ToString(path));
+});
+
+/* The <story>.sav name the core uses, for the page's Import. */
+EM_JS(void, js_set_save_name, (const char *name), {
+    Module.webFrotz.setSaveName(UTF8ToString(name));
 });
 
 /* Resolves to a Unicode code point / ZC_* key, or 0 (ZC_TIME_OUT). */
@@ -542,16 +553,22 @@ zchar os_read_key(int timeout, int cursor)
 
 /* ---- Files ---- */
 
+/* The kind of the last file request, so os_mark_recent_save can tell a
+   save from a restore. */
+static int last_file_flag = -1;
+
 int os_read_file_name(char *file_name, const char *default_name, int flag)
 {
     const char *base = default_name;
     const char *slash = strrchr(default_name, '/');
-    (void) flag;
     if (slash)
         base = slash + 1;
     /* The spike does not prompt: every save/restore uses the default name
        under /saves in MEMFS. */
     snprintf(file_name, MAX_FILE_NAME, "%s/%s", SAVE_PATH, base);
+    last_file_flag = flag;
+    if (flag == FILE_RESTORE)
+        js_load_save(file_name);
     return 1;
 }
 
@@ -560,10 +577,15 @@ FILE *os_path_open(const char *name, const char *mode)
     return fopen(name, mode);
 }
 
-/* Called by the core after a successful save or restore (fastmem.c). */
+/* Called by the core after a successful save or restore (fastmem.c). After
+   a save, save_name holds the file's path. Text still in the output buffer
+   (the echoed SAVE) goes out first, so a storage notice follows it. */
 void os_mark_recent_save(void)
 {
-    js_sync_saves();
+    if (last_file_flag != FILE_SAVE)
+        return;
+    flush_output();
+    js_persist_save(save_name);
 }
 
 void os_start_script(void) { }
@@ -577,7 +599,6 @@ void os_fatal(const char *s)
     flush_output();
     snprintf(msg, sizeof msg, "Fatal error: %s", s);
     js_fatal(msg);
-    js_sync_saves();
     exit(1);
 }
 
@@ -717,6 +738,7 @@ int main(int argc, char *argv[])
     }
     story_name = argv[1];
     set_default_file_names(story_name);
+    js_set_save_name(save_name);
 
     os_init_setup();
     init_buffer();
@@ -730,6 +752,5 @@ int main(int argc, char *argv[])
     interpret();
     reset_memory();
     os_reset_screen();
-    js_sync_saves();    /* `quit`: make sure the last save reached IndexedDB */
     return 0;
 }

@@ -23,6 +23,7 @@
       --fg: #1d1d1f;
       --muted: #6e6e73;
       --rule: #d9d6cf;
+      --warn: #b3261e;
       --screen-bg: var(--bg);
       --z2: #1d1d1f;
       --z3: #c62828;
@@ -42,6 +43,7 @@
         --fg: #e8e6e1;
         --muted: #98989d;
         --rule: #3a3a3c;
+        --warn: #d93a30;
         --z2: #000000;
         --z3: #ff6b63;
         --z4: #5fcf6a;
@@ -116,6 +118,23 @@
     #saves-list li.empty { color: var(--muted); }
     .dialog-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+    /* Storage notices in the transcript (app.js), apart from the game's text. */
+    #transcript .notice {
+      font: 14px/1.4 -apple-system, system-ui, sans-serif;
+      color: var(--warn);
+    }
+    /* A save that did not reach browser storage: badge until one does. */
+    #saves-button[data-warning]::after {
+      content: "!";
+      display: inline-block;
+      margin-left: 6px;
+      min-width: 1.3em;
+      border-radius: 999px;
+      background: var(--warn);
+      color: #fff;
+      font-weight: 700;
+      text-align: center;
+    }
     #story-title {
       flex: 1;
       min-width: 0;
@@ -250,6 +269,7 @@
     </form>
   </dialog>
   <script src="dist/frotz.js"></script>
+  <script src="saves.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

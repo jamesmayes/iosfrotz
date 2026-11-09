@@ -21,11 +21,11 @@ make clean
 - `frotz/dumb/` is **not** used. It no longer compiles against this core: `zchar` is 16-bit because `USE_UTF8` is hard-wired in `frotz.h`, and it has conflicting `os_display_char` and `getline` signatures. `src/web_os.c` implements the `os_*` interface directly, modelled on `frotz/ios/ui_*.c`.
 - Diagnostics: `src/web_os.c` is compiled with `-Wall -Wextra` and builds without warnings. The core gets the compiler's default diagnostics and also builds without warnings, so no `-Wno-*` suppressions are used. If a legacy core file ever needs one, `CORE_CFLAGS` in the Makefile applies to `frotz/common` objects only.
 - Every object depends on the core headers and `shim/iosfrotz.h`. One link rule writes both `dist/frotz.js` and `dist/frotz.wasm`, so a missing or stale file of either relinks.
-- Link flags: `-sASYNCIFY -sASYNCIFY_STACK_SIZE=65536 -sALLOW_MEMORY_GROWTH -sINVOKE_RUN=0 -sEXIT_RUNTIME=1 -sMODULARIZE -sEXPORT_NAME=createFrotz -sEXPORTED_RUNTIME_METHODS=callMain,FS,IDBFS -sENVIRONMENT=web -lidbfs.js`.
+- Link flags: `-sASYNCIFY -sASYNCIFY_STACK_SIZE=65536 -sALLOW_MEMORY_GROWTH -sINVOKE_RUN=0 -sEXIT_RUNTIME=1 -sMODULARIZE -sEXPORT_NAME=createFrotz -sEXPORTED_RUNTIME_METHODS=callMain,FS -sENVIRONMENT=web`. Saves do not use IDBFS (see "Saves").
 
 ## Serve
 
-The page fetches `dist/frotz.wasm`, `games/stories.json` and the chosen story, so it has to be served over HTTP. Opening it with `file://` does not work.
+The page loads `dist/frotz.js`, `saves.js` and `app.js`, and fetches `dist/frotz.wasm`, `games/stories.json` and the chosen story, so it has to be served over HTTP. Opening it with `file://` does not work.
 
 ```sh
 cd web
@@ -95,13 +95,16 @@ Blorb-wrapped Z-code needs no extra code: `init_memory()` in `frotz/common/fastm
 
 ## Saves
 
-`/saves` is mounted on IDBFS (`-lidbfs.js`), so save files live in the browser's IndexedDB:
+`/saves` is plain MEMFS. Nothing mirrors the whole directory to browser storage; each save file is stored on its own in IndexedDB by `saves.js` (database `web-frotz`, object store `saves` with key = file name and value `{bytes, mtime, story}`, plus a `meta` store with `{size, mtime, story}` for listing):
 
-- At start, `app.js` mounts `/saves` and calls `FS.syncfs(true)` to load earlier saves before the game runs.
-- After every successful `save` or `restore`, the core calls `os_mark_recent_save()`. `web_os.c` then awaits `FS.syncfs(false)` through an `EM_ASYNC_JS` call, so the file is in IndexedDB before the game prints "Ok.". `quit` (the end of `main()`) and `os_fatal` sync the same way.
-- `syncfs(false)` makes IndexedDB a mirror of `/saves`, deleting files it does not have. So before each sync, `app.js` first copies in any save that exists only in IndexedDB (written by another tab since this one loaded).
-- Each sync gives up after 5 seconds, so the game cannot hang on storage. During testing, Safari twice left the saves database locked: transactions on it never completed until the tab was closed. The first time a second, backgrounded tab was open (an earlier build synced on `visibilitychange`). The second time the previous page in the same tab had been navigated away from, and was probably held in the back/forward cache. Neither could be reproduced on demand. So the page no longer syncs on `visibilitychange`, it closes its IndexedDB connection on `pagehide` (IDBFS reopens it on the next sync, which was checked with a page restored from the back/forward cache), and it reports the problem in the Saves dialog when storage does not respond. Opening the Saves dialog also retries loading saves that the start-up sync missed.
-- The **Saves** button lists the files in `/saves`. **Export** downloads one as a file. **Import save…** reads a `.sav` file and writes it as the current story's save name (`<story>.sav`), so the game's next `RESTORE` loads it.
+- **Save.** After a successful `save`, the core calls `os_mark_recent_save()`, and `web_os.c` awaits `js_persist_save(path)`. That writes this one file in one readwrite transaction (both stores). If it fails or times out (5 seconds), the game still continues, the transcript shows "Saved for this session only, not to browser storage. Export it from Saves.", and the **Saves** button gets a warning badge. The badge clears only when a later save is written to storage. The game does wait for the write before it prints its reply, but a reply of "Ok." does not by itself mean the file is in browser storage: only the absence of that notice does.
+- **Restore.** Before the core opens the file for `restore`, `os_read_file_name` awaits `js_load_save(path)`. That reads this one file and copies it into MEMFS if MEMFS lacks it or the stored copy is newer. If the read fails or times out, the restore uses what MEMFS has (if anything) and the transcript says so. A slow read delays only that restore.
+- **Start.** Nothing is loaded at start. The page only lists the store (names, sizes, times) for the Saves dialog, and the game does not wait for it.
+- **Several tabs.** Each file is decided on its own, and the copy saved later wins: `put` reads the stored record in the same transaction and does not replace one with a later save time. A tab only ever writes the file it just saved, so it cannot overwrite or delete another tab's other files, and a tab that loaded an old save cannot overwrite a newer one written by another tab. If two tabs save the same file, the later save is kept.
+- **Timeouts.** Every IndexedDB operation settles within 5 seconds. Each one carries a generation number for its file name, and once it times out (or a newer operation of the same kind on the same file starts) it is superseded: its late result is ignored, a write still in its transaction is aborted, and a connection that opens late is closed unused. Each operation opens its own connection and closes it when its transaction ends, so no connection is kept open between saves or held by a page in the back/forward cache.
+- `quit` and fatal errors need no flush: a save is already stored when the game continues.
+- The **Saves** button lists the saves in browser storage and any newer ones this page holds only in memory (marked "this session only"). **Export** downloads one. **Import save…** checks that the file is a Quetzal save (an IFF `FORM` of type `IFZS`) of at most 4 MB, then writes it as the current story's save name and stores it, so the game's next `RESTORE` loads it. Anything else is rejected and the previous save is kept. The save name is the one the core uses (`<story>.sav`, the story file name up to its first `.`, at most 236 bytes), which `web_os.c` passes to the page.
+- There is no delete. Removing a save means clearing the site's data in the browser.
 
 **Safari caveat.** WebKit deletes all script-writable storage (IndexedDB included) for a site that has not been visited for 7 days, unless the site has been added to the Home Screen as a web app. Treat browser storage as a cache and export saves you care about.
 

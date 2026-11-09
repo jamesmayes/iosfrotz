@@ -39,9 +39,8 @@ LDFLAGS := -O2 \
            -sINVOKE_RUN=0 \
            -sEXIT_RUNTIME=1 \
            -sMODULARIZE -sEXPORT_NAME=createFrotz \
-           -sEXPORTED_RUNTIME_METHODS=callMain,FS,IDBFS \
-           -sENVIRONMENT=web \
-           -lidbfs.js
+           -sEXPORTED_RUNTIME_METHODS=callMain,FS \
+           -sENVIRONMENT=web
 
 all: $(DIST)/frotz.js $(DIST)/frotz.wasm
 
