@@ -72,6 +72,16 @@ static NSNumber *OptionalBool(NSDictionary *dict, NSString *key, NSString **erro
     return value;
 }
 
+// Newer flags take only JSON true/false; "repeat" and "shadow" keep accepting numbers as they always have.
+static NSNumber *OptionalStrictBool(NSDictionary *dict, NSString *key, NSString **error) {
+    id value = dict[key];
+    if (value && (![value isKindOfClass: [NSNumber class]] || CFGetTypeID((__bridge CFTypeRef)value) != CFBooleanGetTypeID())) {
+        Fail(error, [NSString stringWithFormat: @"\"%@\" is not true or false", key]);
+        return nil;
+    }
+    return value;
+}
+
 static CGFloat OptionalNumber(NSDictionary *dict, NSString *key, CGFloat fallback, NSString **error) {
     NSNumber *n = Optional(dict, key, [NSNumber class], error);
     return n ? [n doubleValue] : fallback;
@@ -357,12 +367,14 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
         return nil;
     NSString *error = nil;
     NSDictionary *key = Optional(json, @"key", [NSDictionary class], &error);
-    UIColor *caseColor = DynamicColor(Optional(json, @"case", [NSDictionary class], &error), @"light", @"dark", &error);
+    NSDictionary *caseJSON = Optional(json, @"case", [NSDictionary class], &error);
+    UIColor *caseColor = DynamicColor(caseJSON, @"light", @"dark", &error);
     UIColor *keyColor = DynamicColor(key, @"light", @"dark", &error);
     UIColor *textColor = DynamicColor(key, @"textLight", @"textDark", &error);
     if (!caseColor || !keyColor || !textColor)
         Fail(&error, @"case or key colours missing");
     UIColor *pressedColor = DynamicColor(key, @"pressedLight", @"pressedDark", &error);
+    UIColor *caseTextColor = DynamicColor(caseJSON, @"textLight", @"textDark", &error);
     NSDictionary *profiles = @{ @"flat": @(FrotzKeyProfileFlat), @"rounded": @(FrotzKeyProfileRounded),
                                 @"sculpted": @(FrotzKeyProfileSculpted), @"chiclet": @(FrotzKeyProfileChiclet) };
     NSString *profileName = Optional(json, @"profile", [NSString class], &error) ?: @"rounded";
@@ -377,7 +389,10 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     NSString *legendCase = Optional(json, @"legendCase", [NSString class], &error) ?: @"asis";
     if (![legendCase isEqualToString: @"upper"] && ![legendCase isEqualToString: @"asis"])
         Fail(&error, [NSString stringWithFormat: @"unknown legendCase \"%@\"", legendCase]);
-    NSNumber *blankCaps = OptionalBool(json, @"blankCaps", &error);
+    NSNumber *blankCaps = OptionalStrictBool(json, @"blankCaps", &error);
+    CGFloat capInset = OptionalNumber(json, @"capInset", 0, &error);
+    if (capInset < 0)
+        Fail(&error, @"capInset is negative");
     NSDictionary *bezel = Optional(json, @"bezel", [NSDictionary class], &error);
     CGFloat sides = OptionalNumber(bezel, @"sides", 4, &error);
     CGFloat top = OptionalNumber(bezel, @"top", 8, &error), bottom = OptionalNumber(bezel, @"bottom", 8, &error);
@@ -426,6 +441,8 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     skin->_sublabelPosition = [positions[positionName] integerValue];
     skin->_upperCaseLegends = [legendCase isEqualToString: @"upper"];
     skin->_blankCaps = [blankCaps boolValue];
+    skin->_capInset = skin->_sublabelPosition == FrotzSublabelPositionTop ? capInset : 0;
+    skin->_caseTextColor = caseTextColor ?: textColor;
     skin->m_keyColor = keyColor;
     skin->m_textColor = textColor;
     skin->m_pressedColor = pressedColor ?: keyColor;

@@ -25,6 +25,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     FrotzKeyboardSkin *m_skin;
     UILabel *m_label, *m_sublabel, *m_shiftLabel;
     UIFont *m_sublabelFont;
+    UIView *m_cap; // a cap smaller than the key, legends on the case above it (the PCjr)
     CAShapeLayer *m_bevel;
     CALayer *m_bottomEdge;
 }
@@ -58,12 +59,18 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
             m_shiftLabel.minimumScaleFactor = 0.5;
             [self addSubview: m_shiftLabel];
         }
-        self.layer.cornerRadius = skin.cornerRadius;
+        if (skin.capInset > 0) {
+            m_cap = [[UIView alloc] init];
+            m_cap.userInteractionEnabled = NO;
+            [self insertSubview: m_cap atIndex: 0];
+        }
+        UIView *cap = m_cap ?: self;
+        cap.layer.cornerRadius = skin.cornerRadius;
         if (skin.shadow) {
-            self.layer.shadowColor = [UIColor blackColor].CGColor;
-            self.layer.shadowOpacity = 0.3;
-            self.layer.shadowOffset = CGSizeMake(0, 1);
-            self.layer.shadowRadius = 0;
+            cap.layer.shadowColor = [UIColor blackColor].CGColor;
+            cap.layer.shadowOpacity = 0.3;
+            cap.layer.shadowOffset = CGSizeMake(0, 1);
+            cap.layer.shadowRadius = 0;
         }
         if (skin.profile == FrotzKeyProfileSculpted) {
             self.clipsToBounds = YES;
@@ -83,10 +90,10 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 
 -(void)updateColors {
     NSString *group = _key.group;
-    self.backgroundColor = (_pressed || _latched) ? [m_skin pressedColorForGroup: group] : [m_skin keyColorForGroup: group];
+    (m_cap ?: self).backgroundColor = (_pressed || _latched) ? [m_skin pressedColorForGroup: group] : [m_skin keyColorForGroup: group];
     m_label.textColor = [m_skin textColorForGroup: group];
-    m_sublabel.textColor = m_label.textColor;
-    m_shiftLabel.textColor = m_label.textColor;
+    m_sublabel.textColor = m_cap ? m_skin.caseTextColor : m_label.textColor;
+    m_shiftLabel.textColor = m_sublabel.textColor;
 }
 
 -(void)setPressed:(BOOL)pressed {
@@ -130,6 +137,10 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     m_label.hidden = m_skin.blankCaps || _joinsBelow;
     m_sublabel.hidden = m_shiftLabel.hidden = _joinsBelow;
     CGFloat w = b.size.width - 4, subHeight = ceil(m_sublabelFont.lineHeight);
+    if (m_cap) {
+        [self layoutCapWithLegendHeight: subHeight];
+        return;
+    }
     // The shifted character sits top right, as printed over the digits; a top sublabel shares the line, on the left.
     BOOL topLine = m_shiftLabel || (m_sublabel && position == FrotzSublabelPositionTop);
     CGFloat labelTop = topLine ? subHeight : 0;
@@ -162,6 +173,25 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
         m_bevel.path = path.CGPath;
         m_bevel.frame = b;
     }
+}
+
+// The cap is a small square (as wide as the key, on a wide key) at the bottom of the key's area,
+// with the top legends printed on the case just above it. The touch area stays the whole key.
+-(void)layoutCapWithLegendHeight:(CGFloat)subHeight {
+    CGRect b = self.bounds;
+    CGFloat inset = m_skin.capInset < 1 ? round(b.size.height * m_skin.capInset) : m_skin.capInset;
+    CGFloat legend = m_sublabel || m_shiftLabel ? subHeight + 1 : 0;
+    CGFloat capWidth = MAX(1, b.size.width - 2 * inset);
+    CGFloat capHeight = MAX(1, MIN(b.size.height - legend - inset, b.size.width / MAX(1, _key.width) - 2 * inset));
+    CGRect cap = CGRectMake(inset, b.size.height - capHeight, capWidth, capHeight);
+    m_cap.frame = cap;
+    if (m_cap.layer.shadowOpacity > 0)
+        m_cap.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect: m_cap.bounds cornerRadius: m_cap.layer.cornerRadius].CGPath;
+    CGFloat w = b.size.width - 4, legendTop = MAX(0, CGRectGetMinY(cap) - legend);
+    m_shiftLabel.frame = CGRectMake(2, legendTop, w, subHeight);
+    m_sublabel.textAlignment = m_shiftLabel ? NSTextAlignmentLeft : NSTextAlignmentCenter;
+    m_sublabel.frame = CGRectMake(2, legendTop, m_shiftLabel ? w * 0.6 : w, subHeight);
+    m_label.frame = CGRectInset(cap, 2, 0);
 }
 
 @end
