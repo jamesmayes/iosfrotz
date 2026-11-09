@@ -68,6 +68,7 @@ extern NSString *const FrotzKeyboardLayerSymbols;
 @property (nonatomic, readonly, strong) UIColor *caseColor;
 @property (nonatomic, readonly) FrotzSublabelPosition sublabelPosition; // front: on a sculpted key's front face
 @property (nonatomic, readonly) BOOL upperCaseLegends; // "legendCase": "upper" draws caps on text keys that type lower case
+@property (nonatomic, readonly) BOOL blankCaps; // the legends are printed off the key, so only sublabels are drawn
 -(UIColor *)keyColorForGroup:(NSString *)group;
 -(UIColor *)pressedColorForGroup:(NSString *)group;
 -(UIColor *)textColorForGroup:(NSString *)group;

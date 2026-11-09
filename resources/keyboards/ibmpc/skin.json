@@ -1,0 +1,9 @@
+{ "id": "ibmpc", "name": "IBM PC (Model F)", "profile": "sculpted", "legendCase": "upper",
+  "case": { "light": "#CFC8B5", "dark": "#57524A" },
+  "bezel": { "top": 10, "bottom": 10, "sides": 4 },
+  "key": { "radius": 2, "light": "#E4DFD2", "dark": "#D6D1C4", "textLight": "#1A1A1A", "textDark": "#1A1A1A",
+           "font": "system", "fontSize": 11, "pressedLight": "#C9C3B4", "pressedDark": "#BDB7A8" },
+  "groups": { "mod": { "light": "#A8A396", "dark": "#9D988B", "pressedLight": "#C2BDB0", "pressedDark": "#B4AFA2" },
+              "pad": { "light": "#A8A396", "dark": "#9D988B", "pressedLight": "#C2BDB0", "pressedDark": "#B4AFA2" } },
+  "credits": "Layout after the IBM PC/XT 83-key Model F keyboard (1981); colours after its beige case, light and grey caps and black legends.",
+  "notes": "Faithful: all 83 keys of the XT layout, with the ten function keys in two columns on the left and the numeric keypad on the right, the shifted legends above the characters, the backslash beside the left shift, PrtSc/* beside the right shift, a long Caps Lock under them, light letter keys against grey function, modifier and keypad keys, black legends and a blank space bar. Approximated: widths are compressed to fit a phone; the big L-shaped Return is two keys, one in each of its rows, because a skin can't join keys; the keypad shows the digit under its cursor legend rather than over it, since a skin puts all its second legends in one place; and the Model F's tall cylindrical caps are suggested by the sculpted profile only. Keypad keys type their digits whatever the Num Lock state. F1 to F4 are up, down, left and right (the XT has no cursor keys outside the keypad, which types digits here), so the command history is one tap away. Mapped to none: F5 to F10, Tab, Ctrl, Alt, Num Lock, Scroll Lock and shifted PrtSc (no control, function-key or print layer). No IBM logo is drawn." }

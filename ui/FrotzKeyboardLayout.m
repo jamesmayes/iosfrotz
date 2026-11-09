@@ -365,6 +365,7 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     NSString *legendCase = Optional(json, @"legendCase", [NSString class], &error) ?: @"asis";
     if (![legendCase isEqualToString: @"upper"] && ![legendCase isEqualToString: @"asis"])
         Fail(&error, [NSString stringWithFormat: @"unknown legendCase \"%@\"", legendCase]);
+    NSNumber *blankCaps = OptionalBool(json, @"blankCaps", &error);
     NSDictionary *bezel = Optional(json, @"bezel", [NSDictionary class], &error);
     CGFloat sides = OptionalNumber(bezel, @"sides", 4, &error);
     CGFloat top = OptionalNumber(bezel, @"top", 8, &error), bottom = OptionalNumber(bezel, @"bottom", 8, &error);
@@ -412,6 +413,7 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     skin->_caseColor = caseColor;
     skin->_sublabelPosition = [positions[positionName] integerValue];
     skin->_upperCaseLegends = [legendCase isEqualToString: @"upper"];
+    skin->_blankCaps = [blankCaps boolValue];
     skin->m_keyColor = keyColor;
     skin->m_textColor = textColor;
     skin->m_pressedColor = pressedColor ?: keyColor;
