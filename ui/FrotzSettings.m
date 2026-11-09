@@ -1,5 +1,6 @@
 #import "FrotzSettings.h"
 #import "FileTransferInfo.h"
+#import "FrotzKeyboardStylePicker.h"
 
 #import "iosfrotz.h"
 
@@ -52,6 +53,7 @@ enum ControlTableSections
     kFrotzStorySection,     // "Story Appearance": colors and the story font
     kFrotzNotesSection,
     kFrotzInputSection,
+    kFrotzKeyboardSection,
     kFrotzLibrarySection,
     kFrotzResetSection,
     kFrotzNumSections
@@ -73,6 +75,8 @@ typedef NS_ENUM(NSInteger, FrotzSettingsRow)
     kFrotzPrefsNotesFont,
     kFrotzPrefsNotesFontSize,
     kFrotzPrefsWordCompletion,
+    kFrotzPrefsKeyboardStyle,
+    kFrotzPrefsDuoLayoutMode,
     kFrotzPrefsStoryInfoEditing,
 #if UseDropBoxSDK && defined(FROTZ_DB_APP_KEY)
     kFrotzPrefsDropbox,
@@ -89,6 +93,7 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
             @[ @(kFrotzPrefsTextColor), @(kFrotzPrefsBGColor), @(kFrotzPrefsStoryFont), @(kFrotzPrefsStoryFontSize) ],
             @[ @(kFrotzPrefsNotesFont), @(kFrotzPrefsNotesFontSize) ],
             @[ @(kFrotzPrefsWordCompletion) ],
+            @[ @(kFrotzPrefsKeyboardStyle), @(kFrotzPrefsDuoLayoutMode) ],
             @[ @(kFrotzPrefsStoryInfoEditing),
 #if UseDropBoxSDK && defined(FROTZ_DB_APP_KEY)
                @(kFrotzPrefsDropbox),
@@ -115,6 +120,7 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
         case kFrotzPrefsBGColor:
         case kFrotzPrefsStoryFont:
         case kFrotzPrefsNotesFont:
+        case kFrotzPrefsKeyboardStyle:
 #if UseDropBoxSDK && defined(FROTZ_DB_APP_KEY)
         case kFrotzPrefsDropbox:
 #endif
@@ -237,6 +243,23 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
     [m_switchCtl2 setOn: [m_storyDelegate canEditStoryInfo]];
 }
 
+- (void)create_duoLayoutControl
+{
+    m_duoLayoutCtl = [[UISegmentedControl alloc] initWithItems: @[ NSLocalizedString(@"Classic split", @""), NSLocalizedString(@"Flow", @"") ]];
+    [m_duoLayoutCtl addTarget:self action:@selector(duoLayoutAction:) forControlEvents:UIControlEventValueChanged];
+    m_duoLayoutCtl.selectedSegmentIndex = [[m_storyDelegate duoLayoutMode] isEqualToString: @"flow"] ? 1 : 0;
+    [m_duoLayoutCtl sizeToFit];
+}
+
+- (void)duoLayoutAction:(UISegmentedControl*)sender
+{
+    [m_storyDelegate setDuoLayoutMode: sender.selectedSegmentIndex == 1 ? @"flow" : @"classic"];
+    // the footer mentions Flow only while it's chosen
+    [UIView performWithoutAnimation:^{
+        [m_tableView reloadSections: [NSIndexSet indexSetWithIndex: kFrotzKeyboardSection] withRowAnimation: UITableViewRowAnimationNone];
+    }];
+}
+
 - (void)switchAction:(id)sender
 {
     if (sender == m_switchCtl)
@@ -293,6 +316,7 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
     m_fileTransferInfo = [[FileTransferInfo alloc] initWithController: m_storyDelegate];
 
     [self create_UISwitches];
+    [self create_duoLayoutControl];
 
     CGRect sframe = CGRectMake(0.0, 0.0, 120.0, kSliderHeight);
 
@@ -372,6 +396,8 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
 
     m_storyFontSliderCtl.value = (float)m_origStoryFontSize;
     m_notesFontSliderCtl.value = (float)m_origNotesFontSize;
+    if (m_keyboardStyleCell) // back from the style picker
+        m_keyboardStyleCell.detailTextLabel.text = [FrotzKeyboardStylePicker displayNameForStyle: [m_storyDelegate keyboardStyle]];
 }
 
 #pragma mark - UITableView delegates
@@ -394,9 +420,20 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
         case kFrotzStorySection:    return NSLocalizedString(@"Story Appearance", @"");
         case kFrotzNotesSection:    return NSLocalizedString(@"Notes", @"");
         case kFrotzInputSection:    return NSLocalizedString(@"Input", @"");
+        case kFrotzKeyboardSection: return NSLocalizedString(@"Keyboard", @"");
         case kFrotzLibrarySection:  return NSLocalizedString(@"Library", @"");
         default:                    return nil; // the reset button stands alone
     }
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section
+{
+    if (section != kFrotzKeyboardSection)
+        return nil;
+    NSString *footer = NSLocalizedString(@"In-app keyboards are drawn by Frotz in place of the iOS keyboard; the half-open setting applies to foldables such as iPhone Duo.", @"");
+    if (m_duoLayoutCtl.selectedSegmentIndex == 1)
+        footer = [footer stringByAppendingFormat: @" %@", NSLocalizedString(@"Flow layout arrives in a later update.", @"")];
+    return footer;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
@@ -434,6 +471,8 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
     }
     cell.textAlignment = NSTextAlignmentLeft;
     cell.textLabel.text = nil;
+    cell.textLabel.numberOfLines = 1;
+    cell.textLabel.font = [UIFont preferredFontForTextStyle: UIFontTextStyleBody];
     cell.detailTextLabel.text = nil;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
 
@@ -492,6 +531,17 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
             cell.textLabel.text = @"Word Completion";
             cell.accessoryView = m_switchCtl;
             break;
+        case kFrotzPrefsKeyboardStyle:
+            m_keyboardStyleCell = cell;
+            cell.textLabel.text = @"Keyboard Style";
+            cell.detailTextLabel.text = [FrotzKeyboardStylePicker displayNameForStyle: [m_storyDelegate keyboardStyle]];
+            break;
+        case kFrotzPrefsDuoLayoutMode:
+            cell.textLabel.text = @"When Half Open\n(iPhone Duo)";
+            cell.textLabel.numberOfLines = 2; // shares a phone-width row with the segments
+            cell.textLabel.font = [UIFont preferredFontForTextStyle: UIFontTextStyleSubheadline];
+            cell.accessoryView = m_duoLayoutCtl;
+            break;
         case kFrotzPrefsStoryInfoEditing:
             cell.textLabel.text = @"Story Info Editing";
             cell.accessoryView = m_switchCtl2;
@@ -549,6 +599,12 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
         case kFrotzPrefsNotesFont:
             viewController = m_notesFontPicker;
             break;
+        case kFrotzPrefsKeyboardStyle:
+            if (!m_keyboardStylePicker)
+                m_keyboardStylePicker = [[FrotzKeyboardStylePicker alloc] initWithStoryDelegate: m_storyDelegate];
+            m_keyboardStylePicker.storyDelegate = m_storyDelegate;
+            viewController = m_keyboardStylePicker;
+            break;
 #if UseDropBoxSDK && defined(FROTZ_DB_APP_KEY)
         case kFrotzPrefsDropbox:
             viewController = m_frotzDB;
@@ -588,6 +644,16 @@ static NSArray<NSArray<NSNumber*>*> *SettingsSectionRows(void) {
         [tableView deselectRowAtIndexPath:indexPath animated:NO];
     }
 }
+
+#if DEBUG
+-(FrotzKeyboardStylePicker*)showKeyboardStylePicker {
+    NSIndexPath *indexPath = [NSIndexPath indexPathForRow: [SettingsSectionRows()[kFrotzKeyboardSection] indexOfObject: @(kFrotzPrefsKeyboardStyle)]
+                                                inSection: kFrotzKeyboardSection];
+    [m_tableView scrollToRowAtIndexPath: indexPath atScrollPosition: UITableViewScrollPositionMiddle animated: NO];
+    [self tableView: m_tableView didSelectRowAtIndexPath: indexPath];
+    return m_keyboardStylePicker;
+}
+#endif
 
 @end
 

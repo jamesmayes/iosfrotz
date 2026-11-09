@@ -8,6 +8,7 @@
 #import "FrotzDB.h"
 
 @class StoryBrowser;
+@class FrotzKeyboardStylePicker;
 
 @protocol FrotzSettingsInfoDelegate <NSObject>
 -(void)dismissInfo;
@@ -24,6 +25,10 @@
 @property (nonatomic, readwrite) BOOL canEditStoryInfo;
 -(void)savePrefs;
 -(StoryBrowser*)storyBrowser;
+-(void)setKeyboardStyle:(NSString*)skinID;     // nil = system keyboard; applied at once
+-(NSString*)keyboardStyle;
+-(void)setDuoLayoutMode:(NSString*)mode;       // "classic" or "flow"
+-(NSString*)duoLayoutMode;
 @end
 
 @class FileTransferInfo;
@@ -54,6 +59,9 @@
     UISlider		    *m_storyFontSliderCtl, *m_notesFontSliderCtl;
     UITableViewCell     *m_storyFontCell, *m_notesFontCell;
     UITableViewCell	    *m_storyFontSizeCell, *m_notesFontSizeCell;
+    UITableViewCell     *m_keyboardStyleCell;
+    UISegmentedControl  *m_duoLayoutCtl;
+    FrotzKeyboardStylePicker *m_keyboardStylePicker;
 
     int m_origStoryFontSize, m_newStoryFontSize;
     int m_origNotesFontSize, m_newNotesFontSize;
@@ -67,6 +75,9 @@
 - (void)colorPicker:(ColorPicker*)picker selectedColor:(UIColor*)color;
 @property (nonatomic, readonly, copy) UIFont *fontForColorDemo;
 - (void)updateAccessibility;
+#if DEBUG
+-(FrotzKeyboardStylePicker*)showKeyboardStylePicker;    // the Keyboard style row's tap, for the settings self-test
+#endif
 
 @end
 

@@ -90,6 +90,10 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
         return;
     }
     [m_smvc setInAppKeyboardActive: YES];
+    // Chosen in Settings: showing now would take first responder under the sheet, and the
+    // responder it restores on dismissal brings the keyboard up then.
+    if (m_smvc.navigationController.presentedViewController)
+        return;
     if (wasShowing || !m_smvc.KBLocked)
         [self showAnimated: NO];
 }
@@ -255,9 +259,9 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
         return NO;
     m_envSkinApplied = YES;
     NSString *skinID = [[NSProcessInfo processInfo] environment][@"FROTZ_INAPP_KEYBOARD"];
-    if (skinID.length == 0 || _skinID)
+    if (skinID.length == 0)
         return NO;
-    self.skinID = skinID;
+    self.skinID = [skinID isEqualToString: @"system"] ? nil : skinID;
     return _keyboardView != nil;
 }
 #endif

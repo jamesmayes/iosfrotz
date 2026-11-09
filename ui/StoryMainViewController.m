@@ -30,6 +30,7 @@
 #import "GlkView.h"
 
 #import "FileBrowser.h"
+#import "FrotzKeyboardStylePicker.h"
 
 #import "ui_setup.h"
 #import "ui_utils.h"
@@ -1760,12 +1761,47 @@ extern void gli_ios_set_focus(window_t *winNum);
 }
 
 #if DEBUG
-// FROTZ_INAPP_KEYBOARD=<skin-id> until the settings choose a keyboard; read once, so a failed
-// load isn't retried on every appearance and clearing the skin sticks.
+// FROTZ_INAPP_KEYBOARD=<skin-id> (or "system") overrides the keyboardStyle pref; read once, so
+// a failed load isn't retried on every appearance and a choice made in settings sticks.
 -(void)showInAppKeyboardIfRequested {
     NSDictionary *env = [[NSProcessInfo processInfo] environment];
     if ([m_keyboardController applySkinFromEnvironment] && [env[@"FROTZ_INAPP_KEYBOARD_SELFTEST"] boolValue])
         [self performSelector: @selector(runKeyboardSelfTest) withObject: nil afterDelay: 2.0];
+}
+
+// FROTZ_SETTINGS_SELFTEST=1 walks Settings > Keyboard Style, picks row FROTZ_SETTINGS_SELFTEST_ROW
+// (default 1, the first skin; 0 is the system keyboard) and backs out, since the lane can't tap.
+-(void)runSettingsSelfTestIfRequested {
+    static BOOL started;
+    NSDictionary *env = [[NSProcessInfo processInfo] environment];
+    if (started || ![env[@"FROTZ_SETTINGS_SELFTEST"] boolValue])
+        return;
+    started = YES;
+    NSInteger row = env[@"FROTZ_SETTINGS_SELFTEST_ROW"] ? [env[@"FROTZ_SETTINGS_SELFTEST_ROW"] integerValue] : 1;
+    [self settingsSelfTestStep: 0 row: row picker: nil];
+}
+
+-(void)settingsSelfTestStep:(NSUInteger)step row:(NSInteger)row picker:(FrotzKeyboardStylePicker *)picker {
+    FrotzSettingsController *settings = [m_storyBrowser settings];
+    NSString *name;
+    switch (step) {
+        case 0: name = @"start (keyboard up)"; [self activateKeyboard]; break;
+        case 1: name = @"settings"; [m_frotzInfoController frotzInfo]; break;
+        case 2: name = @"picker"; picker = [settings showKeyboardStylePicker]; break;
+        case 3: name = [NSString stringWithFormat: @"select row=%d", (int)row]; [picker selectRow: row]; break;
+        case 4: name = @"pop"; [settings.navigationController popViewControllerAnimated: YES]; break;
+        case 5: name = @"done-pressed"; [settings donePressed]; break;
+        default: name = @"done"; break;
+    }
+    NSLog(@"kbsettings step %d %@ keyboardStyle=%@ skinID=%@ duoLayoutMode=%@ inAppShowing=%d kbShown=%d lineFirstResponder=%d top=%@", (int)step, name,
+          m_keyboardStyle, m_keyboardController.skinID, m_duoLayoutMode, m_keyboardController.isShowing, m_kbShown,
+          [m_inputLine isFirstResponder], NSStringFromClass([settings.navigationController.topViewController class]));
+    if (step > 5)
+        return;
+    __weak StoryMainViewController *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf settingsSelfTestStep: step + 1 row: row picker: picker];
+    });
 }
 
 // Drives the keyboard's own key handling through the typing API, since the simulator can't be
@@ -1874,6 +1910,7 @@ extern void gli_ios_set_focus(window_t *winNum);
         [self scheduleVerticalBarMeasurement]; // the keyboard's did-show handles the other case
 #if DEBUG
     [self showInAppKeyboardIfRequested];
+    [self runSettingsSelfTestIfRequested];
 #endif
 }
 
@@ -4116,6 +4153,11 @@ static int iosif_top_win_height = 1;
     [dict setObject: @(m_canEditStoryInfo) forKey: @"canEditStoryInfo"];
     [dict setObject: @(iosif_ifrotz_verbose_debug) forKey: @"debug_flags_" IPHONE_FROTZ_VERS];
     [dict setObject: @(m_autoRestoreEnabled) forKey:@"autorestore_preference"];
+    if (m_keyboardStyle.length)
+        [dict setObject: m_keyboardStyle forKey: @"keyboardStyle"];
+    else
+        [dict removeObjectForKey: @"keyboardStyle"];
+    [dict setObject: m_duoLayoutMode ?: @"classic" forKey: @"duoLayoutMode"];
     
     [dict synchronize];    
 }
@@ -4178,7 +4220,41 @@ static UIColor *scanColor(NSString *colorStr) {
             m_autoRestoreEnabled = [arp boolValue];
         else
             m_autoRestoreEnabled = YES;
+        NSString *style = [dict stringForKey: @"keyboardStyle"];
+        m_keyboardStyle = style.length ? style : nil;
+        m_duoLayoutMode = [[dict stringForKey: @"duoLayoutMode"] isEqualToString: @"flow"] ? @"flow" : @"classic";
+        // The first call comes from init, before loadView has made the controller.
+        BOOL applyStyle = m_keyboardController != nil;
+#if DEBUG
+        if ([[NSProcessInfo processInfo] environment][@"FROTZ_INAPP_KEYBOARD"].length)
+            applyStyle = NO; // the override wins; viewDidAppear applies it
+#endif
+        if (applyStyle)
+            m_keyboardController.skinID = m_keyboardStyle;
     }
+}
+
+-(void)setKeyboardStyle:(NSString *)skinID {
+    m_keyboardStyle = skinID.length ? [skinID copy] : nil;
+    // Under the settings sheet the input line would raise the new keyboard over it; settings
+    // hands first responder back when it closes.
+    if (self.navigationController.presentedViewController)
+        [m_inputLine resignFirstResponder];
+    m_keyboardController.skinID = m_keyboardStyle;
+    [self savePrefs];
+}
+
+-(NSString *)keyboardStyle {
+    return m_keyboardStyle;
+}
+
+-(void)setDuoLayoutMode:(NSString *)mode {
+    m_duoLayoutMode = [mode isEqualToString: @"flow"] ? @"flow" : @"classic"; // Flow has no effect yet
+    [self savePrefs];
+}
+
+-(NSString *)duoLayoutMode {
+    return m_duoLayoutMode ?: @"classic";
 }
 
 -(void)rememberActiveStory {
