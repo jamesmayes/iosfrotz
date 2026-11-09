@@ -18,11 +18,13 @@
  *   - the layout: one record per leaf window (id, type, rectangle) when the
  *     tree or the page size changed.
  *
- * glk_select is the one place the interpreter waits. It flushes the above,
+ * glk_select is where the interpreter waits for the player. It flushes the above,
  * tells the page which windows want line or char input, and awaits
  * Module.glkWeb.wait() through EM_ASYNC_JS, so under -sASYNCIFY the C stack
  * unwinds and the browser event loop runs. Timers are kept here: select
- * passes the time left to the next tick as the wait's timeout.
+ * passes the time left to the next tick as the wait's timeout. The file
+ * bridges (load, persist and delete of a /saves file) are awaited too, so
+ * the C stack also unwinds inside file calls.
  *
  * Built with -DGLK_WEB_SYNC (the benchmark's non-ASYNCIFY build), the same
  * bridge functions are plain EM_JS and Module.glkWeb.wait() must return
@@ -1787,6 +1789,16 @@ void glk_select_poll(event_t *event)
 
 /* ---- Gestalt, styles, misc ---- */
 
+/* A character the page can take as typed text: printable Latin-1 or a
+   Unicode scalar value above it (no surrogates, nothing past U+10FFFF, no
+   C1 controls). */
+static int printable_input(glui32 val)
+{
+    if (val >= 32 && val < 127)
+        return 1;
+    return val >= 160 && val <= 0x10ffff && !(val >= 0xd800 && val < 0xe000);
+}
+
 glui32 glk_gestalt(glui32 sel, glui32 val)
 {
     return glk_gestalt_ext(sel, val, NULL, 0);
@@ -1798,12 +1810,19 @@ glui32 glk_gestalt_ext(glui32 sel, glui32 val, glui32 *arr, glui32 arrlen)
     case gestalt_Version:
         return 0x00070400;
     case gestalt_LineInput:
-        return (val >= 32 && val < 127) || val >= 160;
+        return printable_input(val);
     case gestalt_CharInput:
-        if ((val >= 32 && val < 127) || val >= 160)
-            return val <= 0x10ffff || val >= keycode_Func12;
-        return val == keycode_Return || val == keycode_Delete || val == keycode_Escape
-            || val == keycode_Tab;
+        /* The keys glk.js's keyCode() delivers. */
+        if (printable_input(val))
+            return 1;
+        switch (val) {
+        case keycode_Left: case keycode_Right: case keycode_Up: case keycode_Down:
+        case keycode_Return: case keycode_Delete: case keycode_Escape: case keycode_Tab:
+        case keycode_PageUp: case keycode_PageDown: case keycode_Home: case keycode_End:
+            return 1;
+        default:
+            return val >= keycode_Func12 && val <= keycode_Func1;
+        }
     case gestalt_CharOutput:
         if ((val >= 32 && val < 127) || (val >= 160 && val <= 0x10ffff) || val == '\n') {
             if (arr && arrlen > 0) arr[0] = 1;
@@ -1855,7 +1874,8 @@ void glk_stylehint_clear(glui32 wintype, glui32 styl, glui32 hint)
 /* How the CSS classes in glulx.html look: styles in one group look alike. */
 static int style_look(glui32 s, glui32 wintype)
 {
-    static const int buffer[style_NUMSTYLES] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0 };
+    /* Buffer: Subheader and Input are both plain bold (.gs-4, .gs-8). */
+    static const int buffer[style_NUMSTYLES] = { 0, 1, 2, 3, 4, 5, 6, 7, 4, 0, 0 };
     static const int grid[style_NUMSTYLES] = { 0, 1, 0, 3, 3, 3, 1, 0, 3, 0, 0 };
     if (s >= style_NUMSTYLES)
         s = 0;

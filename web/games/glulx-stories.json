@@ -1,3 +1,3 @@
 [
-  { "file": "Advent.ulx", "title": "Adventure", "author": "Crowther, Woods; Inform port by Graham Nelson" }
+  { "file": "glulxercise.ulx", "title": "Glulxercise", "author": "Andrew Plotkin (a Glulx interpreter unit test)" }
 ]

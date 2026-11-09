@@ -38,3 +38,4 @@ Frotz.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
 *.hmap
 *.ipa
 web/dist/
+web/bench/local/

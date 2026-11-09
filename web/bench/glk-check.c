@@ -11,7 +11,8 @@
  * cancelling a line before it was shown returns its initial text; the echo
  * setting is fixed per request; overdue timers wait on the page between
  * consecutive timer events; deleting a /saves file reaches the page and the
- * file no longer exists.
+ * file no longer exists; gestalt for line and char input; style_distinguish
+ * against the CSS in glulx.html.
  */
 
 #include <emscripten.h>
@@ -238,6 +239,29 @@ static void deletion(void)
     glk_fileref_destroy(f);
 }
 
+static void gestalt_and_styles(void)
+{
+    winid_t a = glk_window_open(NULL, 0, 0, wintype_TextBuffer, 1);
+    winid_t g = glk_window_open(a, winmethod_Above | winmethod_Fixed, 1, wintype_TextGrid, 2);
+    next_id += 3;
+    check(glk_gestalt(gestalt_LineInput, 'a') && glk_gestalt(gestalt_LineInput, 0x1f600),
+          "LineInput: printable and supplementary characters");
+    check(!glk_gestalt(gestalt_LineInput, 0xd800) && !glk_gestalt(gestalt_LineInput, 0x110000)
+          && !glk_gestalt(gestalt_LineInput, 0x85) && !glk_gestalt(gestalt_LineInput, keycode_Left),
+          "LineInput: surrogates, out of range, C1 controls and keycodes are not");
+    check(glk_gestalt(gestalt_CharInput, keycode_Func5) && glk_gestalt(gestalt_CharInput, keycode_Home)
+          && glk_gestalt(gestalt_CharInput, 0xe9),
+          "CharInput: function keys, Home, Latin-1");
+    check(!glk_gestalt(gestalt_CharInput, 0xfffffff0) && !glk_gestalt(gestalt_CharInput, keycode_Unknown)
+          && !glk_gestalt(gestalt_CharInput, 0xd800),
+          "CharInput: reserved keycodes, Unknown and surrogates are not");
+    check(!glk_style_distinguish(a, style_Subheader, style_Input)
+          && glk_style_distinguish(a, style_Header, style_Subheader)
+          && !glk_style_distinguish(g, style_Header, style_Subheader),
+          "style_distinguish matches the CSS");
+    glk_window_close(glk_window_get_root(), NULL);
+}
+
 void glk_main(void)
 {
     arrangement();
@@ -245,6 +269,7 @@ void glk_main(void)
     cancel_and_echo();
     timers();
     deletion();
+    gestalt_and_styles();
     printf("%s\n", failures ? "FAILED" : "PASSED");
 }
 

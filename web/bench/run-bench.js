@@ -16,8 +16,13 @@
 // generator the same way in both builds and they play the same game; the
 // transcript hash printed at the end lets the two be compared.
 //
-// Prints one JSON line: { build, turns, startupMs, totalMs, perTurnMs[],
-// asyncifyMaxBytes, hash }. asyncifyMaxBytes is the most of the Asyncify
+// Prints one JSON line: { build, reason, turns, moduleMs, startupMs,
+// mainStartupMs, totalMs, perTurnMs[], commandsUsed, commandsTotal,
+// complete, asyncifyMaxBytes, hash }. moduleMs is createGit (compiling
+// and instantiating the wasm); startupMs runs from before createGit to the
+// first input wait, so it includes moduleMs; mainStartupMs is callMain to
+// the first wait. complete is true when every command was fed and the run
+// ended normally (commands ran out, or the game exited after the last). asyncifyMaxBytes is the most of the Asyncify
 // buffer any one unwind used (async build only; see glk_web.c).
 // Timing uses performance.now(): a turn is the time from one glk_select
 // wait to the next, which includes the unwind and rewind under ASYNCIFY.
@@ -50,7 +55,9 @@ let lastGrid = "";
 const inputs = [];
 let nextCmd = 0;
 const marks = [];
-let t0 = 0;
+let tModule = 0; // before createGit
+let moduleMs = null;
+let t0 = 0;      // callMain
 let finished = false;
 let asyncifyMax = 0; // most bytes of the Asyncify buffer one unwind used
 
@@ -65,10 +72,15 @@ function report(reason) {
     build,
     reason,
     turns: per.length,
-    startupMs: marks.length ? marks[0] - t0 : null,
-    totalMs: marks.length ? marks[marks.length - 1] - t0 : null,
+    moduleMs,
+    startupMs: marks.length ? marks[0] - tModule : null,
+    mainStartupMs: marks.length ? marks[0] - t0 : null,
+    totalMs: marks.length ? marks[marks.length - 1] - tModule : null,
     turnsMs: per.reduce((a, b) => a + b, 0),
     perTurnMs: per,
+    commandsUsed: nextCmd,
+    commandsTotal: commands.length,
+    complete: nextCmd === commands.length && (reason === "walkthrough done" || reason === "game exited"),
     asyncifyMaxBytes: build === "async" ? asyncifyMax : null,
     hash: crypto.createHash("sha256").update(all).digest("hex").slice(0, 16),
   };
@@ -128,11 +140,13 @@ const glkWeb = {
 
 (async () => {
   const story = fs.readFileSync(storyPath);
+  tModule = performance.now();
   const Module = await createGit({
     glkWeb,
     print: (t) => process.stderr.write(`[git] ${t}\n`),
     printErr: (t) => process.stderr.write(`[git] ${t}\n`),
   });
+  moduleMs = performance.now() - tModule;
   Module.FS.mkdir("/games");
   const name = path.basename(storyPath);
   Module.FS.writeFile(`/games/${name}`, story);

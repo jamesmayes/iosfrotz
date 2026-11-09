@@ -66,7 +66,7 @@ GLK_SYNC_OBJ  := $(GLK_COMMON) $(OBJDIR)/glk/glk_web_sync.o
 # bridge uses, so they are named here.
 CHECK_OBJ := $(GIDISP_OBJ) $(OBJDIR)/glk/glk_unicode.o $(OBJDIR)/glk/glk_date.o \
              $(OBJDIR)/glk/glk_web_sync.o $(OBJDIR)/glk/glk-check.o
-CHECK_LIBS := '-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$$stringToUTF8,$$UTF8ToString'
+CHECK_LIBS := -sEXPORTED_RUNTIME_METHODS=callMain,FS,stringToUTF8,UTF8ToString
 
 GIT_CFLAGS := -O2 -DUSE_INLINE -Iglk/shim -Iglk -I$(GLKIOS) -I$(GIT)
 GIT_HEADERS := $(wildcard $(GIT)/*.h) $(GIT)/labels.inc $(GLKIOS)/glk.h \
@@ -104,14 +104,43 @@ all: frotz git
 
 frotz: $(DIST)/frotz.js $(DIST)/frotz.wasm
 git: $(DIST)/git.js $(DIST)/git.wasm
-bench: $(BENCH)/git-async.js $(BENCH)/git-sync.js
+# Each link writes a .js and a .wasm; both are named, so a missing .wasm is
+# rebuilt even when its .js is present.
+bench: $(BENCH)/git-async.js $(BENCH)/git-async.wasm $(BENCH)/git-sync.js $(BENCH)/git-sync.wasm
 
-check: $(BENCH)/glk-check.js $(BENCH)/git-sync.js
+check: $(BENCH)/glk-check.js $(BENCH)/glk-check.wasm $(BENCH)/git-sync.js $(BENCH)/git-sync.wasm
 	node bench/check-glk.js
 	node bench/check-malformed.js
 
 $(OBJDIR) $(OBJDIR)/git $(OBJDIR)/glk $(DIST) $(BENCH):
 	mkdir -p $@
+
+# Link flags per output. dist/obj/<name>.ldflags holds the flags the output
+# was last linked with. It is checked each time make reads this file; when
+# the flags differ it is rewritten and that output's .js and .wasm are
+# removed, so changing a flag (GIT_ASYNC_STACK=..., an edit here) relinks
+# just the outputs it affects. (Removing them, rather than relying on the
+# stamp's mtime, matters on GNU make 3.81, whose timestamps are whole
+# seconds: a stamp written in the same second as the last link would not
+# count as newer.)
+LINK_frotz     := $(LDFLAGS)
+LINK_git       := $(GIT_LDFLAGS)
+LINK_git-async := $(BENCH_LDFLAGS) -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK)
+LINK_git-sync  := $(BENCH_LDFLAGS)
+LINK_glk-check := $(BENCH_LDFLAGS) $(CHECK_LIBS)
+LINK_OUTPUTS   := frotz git git-async git-sync glk-check
+OUT_frotz      := $(DIST)/frotz
+OUT_git        := $(DIST)/git
+OUT_git-async  := $(BENCH)/git-async
+OUT_git-sync   := $(BENCH)/git-sync
+OUT_glk-check  := $(BENCH)/glk-check
+
+ifneq ($(MAKECMDGOALS),clean)
+_ldflags := $(shell mkdir -p $(OBJDIR))$(foreach n,$(LINK_OUTPUTS),$(shell \
+    printf '%s\n' '$(LINK_$(n))' | cmp -s - $(OBJDIR)/$(n).ldflags || { \
+    printf '%s\n' '$(LINK_$(n))' > $(OBJDIR)/$(n).ldflags; \
+    rm -f $(OUT_$(n)).js $(OUT_$(n)).wasm; }))
+endif
 
 $(OBJDIR)/%.o: $(CORE)/%.c $(HEADERS) | $(OBJDIR)
 	$(EMCC) $(CFLAGS) $(CORE_CFLAGS) -c $< -o $@
@@ -149,21 +178,20 @@ $(OBJDIR)/glk/glk-check.o: bench/glk-check.c $(GIT_HEADERS) | $(OBJDIR)/glk
 # too. Each rule's pattern only matches its own pair ("frotz%js" matches
 # dist/frotz.js with the stem "."), so the two interpreters cannot pick up
 # each other's link rule.
-$(DIST)/frotz%js $(DIST)/frotz%wasm: $(CORE_OBJ) $(WEB_OBJ) | $(DIST)
-	$(EMCC) $(LDFLAGS) $(CORE_OBJ) $(WEB_OBJ) -o $(DIST)/frotz.js
+$(DIST)/frotz%js $(DIST)/frotz%wasm: $(CORE_OBJ) $(WEB_OBJ) $(OBJDIR)/frotz.ldflags | $(DIST)
+	$(EMCC) $(LINK_frotz) $(CORE_OBJ) $(WEB_OBJ) -o $(DIST)/frotz.js
 
-$(DIST)/git%js $(DIST)/git%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) | $(DIST)
-	$(EMCC) $(GIT_LDFLAGS) $(GIT_OBJ) $(GLK_ASYNC_OBJ) -o $(DIST)/git.js
+$(DIST)/git%js $(DIST)/git%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) $(OBJDIR)/git.ldflags | $(DIST)
+	$(EMCC) $(LINK_git) $(GIT_OBJ) $(GLK_ASYNC_OBJ) -o $(DIST)/git.js
 
-$(BENCH)/git-async%js $(BENCH)/git-async%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) | $(BENCH)
-	$(EMCC) $(BENCH_LDFLAGS) -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK) \
-	    $(GIT_OBJ) $(GLK_ASYNC_OBJ) -o $(BENCH)/git-async.js
+$(BENCH)/git-async%js $(BENCH)/git-async%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) $(OBJDIR)/git-async.ldflags | $(BENCH)
+	$(EMCC) $(LINK_git-async) $(GIT_OBJ) $(GLK_ASYNC_OBJ) -o $(BENCH)/git-async.js
 
-$(BENCH)/git-sync%js $(BENCH)/git-sync%wasm: $(GIT_OBJ) $(GLK_SYNC_OBJ) | $(BENCH)
-	$(EMCC) $(BENCH_LDFLAGS) $(GIT_OBJ) $(GLK_SYNC_OBJ) -o $(BENCH)/git-sync.js
+$(BENCH)/git-sync%js $(BENCH)/git-sync%wasm: $(GIT_OBJ) $(GLK_SYNC_OBJ) $(OBJDIR)/git-sync.ldflags | $(BENCH)
+	$(EMCC) $(LINK_git-sync) $(GIT_OBJ) $(GLK_SYNC_OBJ) -o $(BENCH)/git-sync.js
 
-$(BENCH)/glk-check%js $(BENCH)/glk-check%wasm: $(CHECK_OBJ) | $(BENCH)
-	$(EMCC) $(BENCH_LDFLAGS) $(CHECK_LIBS) $(CHECK_OBJ) -o $(BENCH)/glk-check.js
+$(BENCH)/glk-check%js $(BENCH)/glk-check%wasm: $(CHECK_OBJ) $(OBJDIR)/glk-check.ldflags | $(BENCH)
+	$(EMCC) $(LINK_glk-check) $(CHECK_OBJ) -o $(BENCH)/glk-check.js
 
 # Objects reached only through a pattern rule would count as intermediate
 # and be deleted after the link; keep them so rebuilds are incremental.

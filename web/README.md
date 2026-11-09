@@ -158,7 +158,7 @@ The other 20 stories in `resources/Games`, which the iOS app bundles, are not in
 
 ## Glulx
 
-`glulx.html` plays Glulx stories (`.ulx`, `.gblorb`) with `git/` (the faster of the repo's two Glulx interpreters) compiled unmodified to WebAssembly on a small browser Glk library in `glk/`. `index.html` links to it from the story picker. The page looks like the Z-machine client and uses the same save store (`saves.js`).
+`glulx.html` plays Glulx stories (`.ulx`, `.gblorb`) with `git/` (the faster of the repo's two Glulx interpreters) compiled unmodified to WebAssembly on a small browser Glk library in `glk/`. `index.html` links to it from the story picker. The page looks like the Z-machine client and uses the same save store (`saves.js`). Its catalogue (`games/glulx-stories.json`) is *Glulxercise* only, Andrew Plotkin's public-domain Glulx unit test; *Adventure* waits for a licence decision (see `games/LICENSES.md`). Any `.ulx` or `.gblorb` can be opened from the device.
 
 ### How it is built
 
@@ -178,7 +178,7 @@ The library owns the window tree and lays it out itself, in CSS pixels, from fon
 - **Pair windows.** Fixed and proportional splits in all four directions, key windows, `set_arrangement` and closing (the sibling takes the pair's place). `set_arrangement` follows `glkios/ipwindow.c`: changing Above to Below (or Left to Right) swaps the pair's children with the direction, so both windows stay where they are and only the side that gets the size moves. A change of split axis, and a fixed size on a blank key window, are refused. Blank windows are supported. Graphics windows are refused (`glk_window_open` returns NULL).
 - **Styles.** The 11 standard styles map to CSS classes `.gs-0` … `.gs-10` in `glulx.html`. Style hints are accepted and ignored. `glk_style_distinguish` reports which styles look different under those classes.
 
-**Input and events.** `glk_select` is the one place the interpreter waits. It flushes output, tells the page which windows want line or char input, and awaits `Module.glkWeb.wait()` from an `EM_ASYNC_JS` function, so ASYNCIFY unwinds the C stack as `web_os.c` does. The page keeps one record per pending request (line or char, maxlen in code points, terminators, the line typed so far), so requests in several windows are independent. There is one command field, and it serves one request at a time: the first line request by default, else the first char request. Tapping another window that has a request switches the field to it (that window gets a thin outline), and the line typed so far in the previous one is kept. A char request takes a key, or the first code point of text that arrives without a usable key event (a soft keyboard, dictation, or the committed text of an input method; `compositionend` and `input` are handled). The rest of such text waits for the next char request. Line length is limited in code points, not with the UTF-16 `maxlength` attribute, so a supplementary character fits in a maxlen of one. In a text grid, line input is limited to the rest of the cursor's row. Line input supports initial text, echo (in the Input style; `glk_set_echo_line_event` applies to the next request), cancelling (which returns the partial line, or the initial text if the line was never shown), and terminators (Escape, F1–F12, Up/Down, PageUp/PageDown, when the game asks for them). Lines typed while the game is busy are queued. Timers are kept in C: `glk_select` passes the time to the next tick as the wait's timeout, and `glk_select_poll` reports a due timer. Missed intervals make one timer event. A select may return an overdue timer at once only if the previous one did not; otherwise it waits on the page with a zero timeout, which is a `setTimeout` macrotask. So a game whose timer handler takes longer than its interval still lets the page paint, resize and deliver input between ticks. A page resize ends the wait with an Arrange event, after which the layout is recomputed and the game redraws (or `glk_select_poll` reports it).
+**Input and events.** `glk_select` is where the interpreter waits for the player. (It is not the only asynchronous bridge: loading, persisting and deleting a `/saves` file are awaited too, so the C stack also unwinds inside those file calls.) It flushes output, tells the page which windows want line or char input, and awaits `Module.glkWeb.wait()` from an `EM_ASYNC_JS` function, so ASYNCIFY unwinds the C stack as `web_os.c` does. The page keeps one record per pending request (line or char, maxlen in code points, terminators, the line typed so far), so requests in several windows are independent. There is one command field, and it serves one request at a time: the first line request by default, else the first char request. Tapping another window that has a request switches the field to it (that window gets a thin outline), and the line typed so far in the previous one is kept. A char request takes a key, or the first code point of text that arrives without a usable key event (a soft keyboard, dictation, or the committed text of an input method; `compositionend` and `input` are handled). The rest of such text waits for the next char request. Line length is limited in code points, not with the UTF-16 `maxlength` attribute, so a supplementary character fits in a maxlen of one. In a text grid, line input is limited to the rest of the cursor's row. Line input supports initial text, echo (in the Input style; `glk_set_echo_line_event` applies to the next request), cancelling (which returns the partial line, or the initial text if the line was never shown), and terminators (Escape, F1–F12, Up/Down, PageUp/PageDown, when the game asks for them). Lines typed while the game is busy are queued. Timers are kept in C: `glk_select` passes the time to the next tick as the wait's timeout, and `glk_select_poll` reports a due timer. Missed intervals make one timer event. A select may return an overdue timer at once only if the previous one did not; otherwise it waits on the page with a zero timeout, which is a `setTimeout` macrotask. So a game whose timer handler takes longer than its interval still lets the page paint, resize and deliver input between ticks. A page resize ends the wait with an Arrange event, after which the layout is recomputed and the game redraws (or `glk_select_poll` reports it).
 
 **Files and saves.** Files live in MEMFS. Everything under `/saves` (saved games, data files, transcripts) is persisted one file at a time through `saves.js`: a write-mode stream is written to IndexedDB when it is closed, and a file is brought in from IndexedDB (with the same revision and conflict rules as the Z-machine client, see "Saves") before it is opened or tested with `glk_fileref_does_file_exist`. Output is flushed before each of these, so a storage notice follows the game's own text. `glk_fileref_create_by_prompt` does not prompt. It uses one name per story and usage, like the Z-machine client: `<story>.glksave`, `<story>.txt` (transcript), `<story>.rec` (command record), `<story>.glkdata`. `glk_fileref_create_by_name` gives `/saves/<name>.<suffix>`, shared between stories as the Glk spec intends. Temporary files go to `/tmp` and are not stored. The Saves dialog, Export and Import work as in the Z-machine client. Glulx saves are Quetzal files too, and Import replaces `<story>.glksave`. A file the game deletes (`glk_fileref_delete_file`) is removed from MEMFS and from IndexedDB: `saves.js`'s `remove` deletes the bytes and leaves a tombstone in `meta` at the next revision, so the file stays deleted after a reload, existence checks find nothing, the Saves dialog leaves it out, and a stale tab that saves the old version afterwards gets the usual conflict. The delete is awaited, like a save. If the tombstone cannot be written (no storage, a failure, or another tab saved the file since), a notice says so and the file is hidden for the rest of the session.
 
@@ -186,32 +186,43 @@ The library owns the window tree and lays it out itself, in CSS pixels, from fon
 
 ### What has been checked, and how
 
-`make check` builds `bench/glk-check.c`, a small Glk program on the plain bridge, and runs it with `bench/check-glk.js`: `set_arrangement` direction and axis changes, a nested key, closing a key, a blank fixed key, grid line limits and echo wrapping, cancelling a line before it is shown, echo per request, consecutive overdue timers (each waits on the page with a zero timeout), and deleting a `/saves` file. It then runs `bench/check-malformed.js`.
+`make check` builds `bench/glk-check.c`, a small Glk program on the plain bridge, and runs it with `bench/check-glk.js`: `set_arrangement` direction and axis changes, a nested key, closing a key, a blank fixed key, grid line limits and echo wrapping, cancelling a line before it is shown, echo per request, consecutive overdue timers (each waits on the page with a zero timeout), deleting a `/saves` file, the LineInput/CharInput gestalt answers, and `glk_style_distinguish` against the CSS. It then runs `bench/check-malformed.js`.
 
-There is no browser test from this branch yet. Everything below ran in Node, with the same objects:
+**Safari 27.2 (macOS), 2026-11-08.** `glulx.html` was served by a test-only server that injected a remote-control script (not in the repo); input went through the real form (`requestSubmit()`) and synthetic `keydown`, `input` and `composition*` events on the command field, not real keystrokes. Test stories came from Plotkin's `erkyrath/glk-dev` unit tests and from `git/test/`, served by the test server and not shipped.
+
+- *InputEventTest* (`inputeventtest.ulx`): char input delivered `q` (113), Left (`$FFFFFFFE`) and F5 (`$FFFFFFEB`); Unicode char input took `é` (233) as the committed text of a composition and `😀` (`$1F600`) as soft-keyboard text without a key event; line input in the status (grid) window returned the line; the timer test printed "(timer event)... Done." after its two seconds, and the page kept painting during the wait.
+- *Alabaster* (`git/test/Alabaster.gblorb`): SAVE stored `Alabaster.glksave` in IndexedDB (rev 1, 19,092 B). After a reload MEMFS `/saves` was empty, and RESTORE printed "Ok." with the file copied in from IndexedDB. Deleting it through the page's `deleteFile` left a tombstone (rev 2, `deleted`); after another reload RESTORE printed "Restore failed.", and the next SAVE stored rev 3, which the Saves dialog listed as "in browser storage".
+- *Glulxercise* (the bundled file): `all` ended with "All tests passed."
+- No page errors or unhandled rejections were logged.
+- Not tested in a browser: iOS or iPadOS Safari, real hardware keys and a real input method or soft keyboard, Chrome or Firefox, multi-window games beyond a status line, line terminators, and a timer handler slower than its interval (covered in `make check` only).
+
+In Node, with the same objects:
 
 - `bench/run-bench.js` plays a story through a Node build with a scripted `Module.glkWeb`. *Adventure* ran 234 turns, including a SAVE and a RESTORE. `git/test/Alabaster.gblorb` (Blorb, Inform 7, git's own test case) played to its ending. Its story text matches `git/test/Alabaster.golden` line for line (164 of 164 lines), once the golden file's CheapGlk status-window errors and the echoed commands are set aside.
 - `glk.js` ran in Node on a minimal DOM stub against the ASYNCIFY build. Covered: window layout (status grid plus buffer), the grid's status line, buffer text with styles, typing commands, type-ahead, SAVE and RESTORE (with no IndexedDB, so the "session only" notice and badge appear), and a resize (an Arrange event; the game redrew a narrower status line).
-- Not run at all: Safari or any real browser, IndexedDB persistence for Glulx saves, timers, char input, line terminators and multi-window games beyond a status line.
+- *Glulxercise* `all` under `bench/run-bench.js` passes every test except git's two random-number checks, which fail on bit balance with the harness's pinned clock (they passed in Safari, with a real clock; see `games/LICENSES.md`).
 
 ### Measurement: ASYNCIFY or a worker?
 
-`make bench && node bench/measure.js --runs 9` plays the same stories with the same commands under (a) the ASYNCIFY build and (b) a plain build without ASYNCIFY. In (b) `glk_select` gets its event from a plain function call; it is compiled with `-DGLK_WEB_SYNC`, and nothing else differs. Each run is a fresh Node process, the builds alternate, and Date.now is pinned so both play identical games (the transcript hashes match). A turn is the time from one input wait to the next, so under ASYNCIFY it includes the unwind and the rewind. The table shows medians of 9 runs (Node 22.21.1, Apple Silicon):
+`make bench && node bench/measure.js --runs 9` plays the same stories with the same commands under (a) the ASYNCIFY build and (b) a plain build without ASYNCIFY. In (b) `glk_select` gets its event from a plain function call; it is compiled with `-DGLK_WEB_SYNC`, and nothing else differs. Each run is a fresh Node process, the builds alternate, and Date.now is pinned so both play identical games. A turn is the time from one input wait to the next, so under ASYNCIFY it includes the unwind and the rewind. "Module load" is `createGit` (compiling and instantiating the wasm), and "Startup" runs from before it to the first input wait, so it includes it. The run fails, after printing the table, if the transcripts differ between runs or builds, if the turn counts differ, or if any run did not play every command of its walkthrough to a normal end.
 
-| Story | Build | Turns | Startup ms | All turns ms | Mean turn ms | Slowest turn ms | Turn time vs plain | Asyncify buffer used |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| Advent.ulx (Inform 6) | (b) plain | 234 | 3.7 | 33.3 | 0.142 | 0.6 | 1× | – |
-| Advent.ulx (Inform 6) | (a) ASYNCIFY | 234 | 6.2 | 39.6 | 0.169 | 0.8 | 1.19× | 236 B |
-| Alabaster.gblorb (Inform 7) | (b) plain | 43 | 5.6 | 5449.5 | 126.7 | 396.4 | 1× | – |
-| Alabaster.gblorb (Inform 7) | (a) ASYNCIFY | 43 | 8.5 | 5189.7 | 120.7 | 378.1 | 0.95× | 216 B |
+*Adventure* is no longer in `web/games` (see `games/LICENSES.md`, "Available after clearance"). To include it, put the IF Archive's `advent.ulx` at `bench/local/Advent.ulx` (ignored by git) and check its SHA-256, `264236f2c3504eb2f326ab560aef435902d357c1ef848127b6ea0329c10387f8`; without it only *Alabaster* runs. The table shows medians of 9 runs on the final build of this branch (Node 22.21.1, Apple Silicon):
 
-Sizes: `git.wasm` is 264,700 bytes with ASYNCIFY and 189,365 bytes without (+40%). `git.js` is 71,156 bytes.
+| Story | Build | Turns | Module load ms | Startup ms | All turns ms | Mean turn ms | Slowest turn ms | Turn time vs plain | Asyncify buffer used |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Advent.ulx (Inform 6) | (b) plain | 234 | 2.3 | 6.4 | 34.0 | 0.145 | 0.6 | 1× | – |
+| Advent.ulx (Inform 6) | (a) ASYNCIFY | 234 | 2.5 | 9.0 | 39.0 | 0.166 | 0.8 | 1.146× | 288 B |
+| Alabaster.gblorb (Inform 7) | (b) plain | 43 | 2.3 | 8.2 | 5519.9 | 128.4 | 401.5 | 1× | – |
+| Alabaster.gblorb (Inform 7) | (a) ASYNCIFY | 43 | 2.8 | 11.7 | 5049.7 | 117.4 | 364.8 | 0.915× | 268 B |
+
+Sizes: `git.wasm` is 267,216 bytes with ASYNCIFY and 191,209 bytes without (+40%). `git.js` is 71,341 bytes. The deepest unwind is now 288 bytes (the awaited delete and the timer path added frames); 64 KB stays ample.
 
 **Recommendation: ASYNCIFY for every interpreter.** On both stories (a) is within 20% of (b):
 
-- On *Adventure*, whose turns take a seventh of a millisecond, ASYNCIFY adds a fixed ~27 µs per turn for the unwind, the Promise and the rewind. That is 19% of almost nothing, and no player can see it. This ratio is the noisiest number in the table. An earlier 7-run measurement gave 1.17×.
-- On *Alabaster*, whose turns take 30–400 ms of interpreter work, the ASYNCIFY build was not slower. It was about 5% faster in every set of runs, for reasons not investigated (the binary is laid out and optimised differently).
-- The costs that remain are 75 KB more wasm and a little more startup time (2–3 ms).
+- On *Adventure*, whose turns take a seventh of a millisecond, ASYNCIFY adds a fixed ~21 µs per turn for the unwind, the Promise and the rewind. That is 15% of almost nothing, and no player can see it. This ratio is the noisiest number in the table: earlier sets gave 1.19×, 1.17× and 1.14×.
+- On *Alabaster*, whose turns take 30–400 ms of interpreter work, the ASYNCIFY build was not slower. It was 5–9% faster in every set of runs, for reasons not investigated (the binary is laid out and optimised differently).
+- The costs that remain are 76 KB more wasm and about 3 ms more startup. Module load (compile and instantiate) is about 2.5 ms under Node for either build; Safari's has not been measured.
+- This holds for git only. It says nothing about glulxe or TADS (see "What glulxe and TADS need").
 
 A worker with `SharedArrayBuffer` and `Atomics.wait` would also need COOP/COEP headers (see "Serve"), a message protocol and a second JS context. Nothing here justifies that. Revisit it only if an interpreter needs a stack deeper than ASYNCIFY can unwind cheaply, or if a large game shows a cost that this measurement did not.
 
@@ -219,4 +230,26 @@ A worker with `SharedArrayBuffer` and `Atomics.wait` would also need COOP/COEP h
 
 - Graphics windows, images, sound, hyperlinks, mouse input: stubbed, gestalt false.
 - Style hints are ignored. There is no per-game colour.
-- `glulxe/` is not built. It should only need its own startup file next to `glk/git_web.c`.
+- `glulxe/` and `tads/` are not built. Neither needs only a startup file; see "What glulxe and TADS need" below.
+
+### What glulxe and TADS need
+
+These are the iOS (`glkios`) dependencies found in the sources, not a tested port. Each needs a web stand-in before the interpreter links against `glk/glk_web.c`.
+
+**glulxe**
+
+- `glkmain.c`, `exec.c` and `glkop.c` include `"iosfrotz.h"` unconditionally (an empty stand-in like `glk/shim/iosfrotz.h` covers that).
+- `exec.c` (lines 35–54 and 648–666) uses the iOS autosave unconditionally: `do_autosave`, `AUTOSAVE_FILE`, `gli_new_fileref`, `gli_delete_stream`, `gli_delete_fileref` and `glk_game_loaded`. A web build needs `do_autosave = 0` and stubs, or the code compiled out.
+- `glkop.c` (lines 1110–1116) tears down with `gli_delete_window`, `gli_delete_stream` and `gli_delete_fileref`, which are glkios internals; `glk_web.c` would need equivalents.
+- `unixstrt.c` opens the story with `glkunix_stream_open_pathname` → `gli_stream_open_pathname`. A web startup file like `git_web.c` replaces it, and should validate the file as `git_web.c` does.
+
+**TADS 2/3 (`tads/osglk.c` and friends)**
+
+- `osglk.c` includes `"iosfrotz.h"`, `"glkios.h"` and `"git.h"` unconditionally (lines 29–31): iOS headers, and git's, in a TADS file.
+- `os_term` (lines 193–194) closes `gli_rootwin`, a glkios global, and calls `git_shutdown_dispatch()`, a function of the iOS git integration.
+- `os_gets` and the timed read (lines 560–576 and 685–703) test `do_autosave` and cancel the line read with it, and read lines through `os_get_buffer`/`os_fill_buffer`. Those two are in `tads/osbuffer.c` (portable, on top of `glk_request_line_event[_uni]`), so that file and its Unicode helpers must be compiled in.
+- The file prompt (line 543) copies `fileref->filename` directly, which reaches into glkios's fileref struct. `glk_web.c`'s fileref has `path` instead, so a web build needs an accessor (or the `garglk_fileref_get_name` call that line replaces).
+- Startup is `glkunix_startup_code`-style with `glkunix_stream_open_pathname` (`tads/tads2/glkstart.h`). `garglk_*` calls are only under `#ifdef GARGLK`.
+- TADS games use char input, timers and status grids heavily; those now have checks in `make check`, but no TADS game has run.
+
+**Both.** The measurement above is for git under Node only. glulxe and TADS have their own interpreter loops and Glk use: measure each one's own build, with representative 200+ turn workloads, warm and cold, in Safari, before fixing their architecture (ASYNCIFY or a worker).
