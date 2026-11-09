@@ -89,7 +89,7 @@ const webFrotz = {
     webFrotz.output("\n" + msg + "\n", 2);
   },
   syncSaves() {
-    return syncfs(false);
+    return persistSaves();
   },
 };
 
@@ -100,6 +100,42 @@ function syncfs(populate) {
     if (!Module) return resolve();
     Module.FS.syncfs(populate, (err) => (err ? reject(err) : resolve()));
   });
+}
+
+const cb = (fn) => new Promise((res, rej) => fn((err, v) => (err ? rej(err) : res(v))));
+
+// syncfs(false) makes IndexedDB mirror MEMFS, deleting anything MEMFS lacks.
+// Another tab may have saved since this page loaded, so first copy any save
+// that exists only in IndexedDB into MEMFS.
+async function pullMissingSaves() {
+  const IDBFS = Module.IDBFS;
+  const mount = Module.FS.lookupPath(SAVE_DIR).node.mount;
+  const remote = await cb((k) => IDBFS.getRemoteSet(mount, k));
+  const local = await cb((k) => IDBFS.getLocalSet(mount, k));
+  const missing = Object.keys(remote.entries).filter((p) => !local.entries[p]).sort();
+  if (!missing.length) return;
+  const store = remote.db.transaction(["FILE_DATA"], "readonly").objectStore("FILE_DATA");
+  for (const path of missing) {
+    const entry = await cb((k) => IDBFS.loadRemoteEntry(store, path, k));
+    await cb((k) => IDBFS.storeLocalEntry(path, entry, k));
+  }
+}
+
+function withTimeout(promise, ms, what) {
+  let t;
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what} timed out`)), ms); }),
+  ]).finally(() => clearTimeout(t));
+}
+
+// The game waits on this after every save, so it must never hang: if
+// IndexedDB is stuck (Safari can hold a lock for a suspended background
+// tab), give up after a few seconds. The file stays in MEMFS and goes to
+// IndexedDB with the next successful sync.
+function persistSaves() {
+  if (!Module) return Promise.resolve();
+  return withTimeout(pullMissingSaves().then(() => syncfs(false)), 5000, "Saving to browser storage");
 }
 
 function listSaves() {
@@ -159,36 +195,8 @@ importInput.addEventListener("change", async () => {
   if (!file || !Module || !saveName) return;
   const bytes = new Uint8Array(await file.arrayBuffer());
   Module.FS.writeFile(`${SAVE_DIR}/${saveName}`, bytes);
-  try { await syncfs(false); } catch (e) { console.warn("[frotz] syncfs", e); }
+  try { await persistSaves(); } catch (e) { console.warn("[frotz] syncfs", e); }
   renderSaves();
-});
-
-// Belt and braces: flush when the page is hidden (tab switch, app switch).
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") syncfs(false).catch(() => {});
-});
-
-form.addEventListener("submit", (e) => {
-  e.preventDefault();
-  if (!pending || pending.kind === "line") {
-    const line = input.value;
-    input.value = "";
-    if (pending) settle(line);
-    else typeAhead.push(line);
-  } else {
-    settle(13); // ZC_RETURN for "press any key"
-  }
-});
-
-input.addEventListener("keydown", (e) => {
-  if (!pending || pending.kind !== "key") return;
-  e.preventDefault();
-  if (e.key === "Enter") return settle(13);
-  if (e.key === "Backspace") return settle(8);
-  if (e.key === "Escape") return settle(27);
-  const arrows = { ArrowUp: 0x81, ArrowDown: 0x82, ArrowLeft: 0x83, ArrowRight: 0x84 };
-  if (e.key in arrows) return settle(arrows[e.key]);
-  if (e.key.length === 1) settle(e.key.codePointAt(0));
 });
 
 async function start() {
@@ -206,7 +214,8 @@ async function start() {
   Module.FS.mkdir(SAVE_DIR);
   Module.FS.mount(Module.IDBFS, {}, SAVE_DIR);
   try {
-    await syncfs(true); // load saves persisted by earlier visits
+    // Load saves persisted by earlier visits.
+    await withTimeout(syncfs(true), 5000, "Loading saves");
   } catch (e) {
     console.warn("[frotz] could not load saves from IndexedDB", e);
   }

@@ -49,7 +49,9 @@ Cross-Origin-Embedder-Policy: require-corp
 `/saves` is mounted on IDBFS (`-lidbfs.js`), so save files live in the browser's IndexedDB:
 
 - At start, `app.js` mounts `/saves` and calls `FS.syncfs(true)` to load earlier saves before the game runs.
-- After every successful `save` or `restore`, the core calls `os_mark_recent_save()`. `web_os.c` then awaits `FS.syncfs(false)` through an `EM_ASYNC_JS` call, so the file is in IndexedDB before the game prints "Ok.". `quit` (the end of `main()`) and `os_fatal` sync the same way, and the page also syncs when it is hidden.
+- After every successful `save` or `restore`, the core calls `os_mark_recent_save()`. `web_os.c` then awaits `FS.syncfs(false)` through an `EM_ASYNC_JS` call, so the file is in IndexedDB before the game prints "Ok.". `quit` (the end of `main()`) and `os_fatal` sync the same way.
+- `syncfs(false)` makes IndexedDB a mirror of `/saves`, deleting files it does not have. So before each sync, `app.js` first copies in any save that exists only in IndexedDB (written by another tab since this one loaded).
+- Each sync gives up after 5 seconds so the game cannot hang on storage. In testing, a save in one Safari tab hung in IndexedDB while a second, backgrounded tab of the page was open (an earlier build synced on `visibilitychange`). Closing that tab released it. The likely cause is Safari suspending the hidden tab in the middle of a write transaction, so the page no longer syncs when it is hidden.
 - The **Saves** button lists the files in `/saves`. **Export** downloads one as a file. **Import save…** reads a `.sav` file and writes it as the current story's save name (`<story>.sav`), so the game's next `RESTORE` loads it.
 
 **Safari caveat.** WebKit deletes all script-writable storage (IndexedDB included) for a site that has not been visited for 7 days, unless the site has been added to the Home Screen as a web app. Treat browser storage as a cache and export saves you care about.
