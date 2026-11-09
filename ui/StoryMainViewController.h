@@ -124,6 +124,7 @@ extern StoryBrowser *theStoryBrowser;
     NSString *m_keyboardStyle;      // the player's choice; nil = system keyboard
     NSString *m_duoLayoutMode;      // "classic" or "flow"
     CGRect m_foldExclusionFrame;
+    BOOL m_focusingForHardwareKey;  // the input line is taking first responder for a hardware key press
     NSTimeInterval m_animDuration;
     NSString *m_launchMessage;
 
@@ -154,6 +155,8 @@ extern StoryBrowser *theStoryBrowser;
 - (void) activateKeyboard;
 - (void) toggleKeyboard;
 - (void) forceToggleKeyboard;
+/// First responder for a hardware key press, without raising an in-app keyboard for it.
+- (void) focusInputLineForHardwareKey;
 @property (nonatomic, readonly, strong) id dismissKeyboard;
 - (void) setIgnoreWordSelection:(BOOL)ignore;
 - (void) abortToBrowser;

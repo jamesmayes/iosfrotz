@@ -78,7 +78,7 @@
             && ![[smvc navigationController] presentedViewController]
             && ![[smvc notesController] isVisible]) {
             if (theInputLine.isFirstResponder == NO)
-                [theInputLine becomeFirstResponder];
+                [smvc focusInputLineForHardwareKey];
         }
     }
     [super sendEvent: event];

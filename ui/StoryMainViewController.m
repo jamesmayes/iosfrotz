@@ -2118,6 +2118,22 @@ extern void gli_ios_set_focus(window_t *winNum);
     return kbdWasShown ? m_inputLine : nil;
 }
 
+// The input line usually keeps first responder under the in-app keyboard while settings are up, so
+// making it first responder again wouldn't bring that keyboard back; show it directly.
+-(void)restoreKeyboard:(id)responder {
+    if (responder == m_inputLine && [self usesInAppKeyboard]) {
+        if (!m_kbLocked && ![m_notesController isVisible])
+            [m_keyboardController showAnimated: YES];
+    } else
+        [responder becomeFirstResponder];
+}
+
+-(void)focusInputLineForHardwareKey {
+    m_focusingForHardwareKey = YES;
+    [m_inputLine becomeFirstResponder];
+    m_focusingForHardwareKey = NO;
+}
+
 -(void)activateKeyboard {
     [m_inputLine resetState];
     [m_notesController workaroundFirstResponderBug]; // in iOS 6 on iPad, for some reason the notes controller keeps us from getting first responder after a modal dialog is dismissed (e.g. after 'restore' command)
@@ -5224,7 +5240,8 @@ static void setScreenDims(char *storyNameBuf) {
 // Re-requesting first responder (after settings, on return to the foreground) brings the
 // system keyboard back; do the same for the in-app one.
 - (void)textFieldDidBeginEditing:(UITextField *)textField {
-    if (textField == m_inputLine && [self usesInAppKeyboard])
+    // Typing on a hardware keyboard needs the line, not the in-app keys over half the story.
+    if (textField == m_inputLine && [self usesInAppKeyboard] && !m_focusingForHardwareKey)
         [m_keyboardController inputLineDidBeginEditing];
 }
 
