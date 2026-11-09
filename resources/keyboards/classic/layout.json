@@ -1,0 +1,15 @@
+{ "id": "classic", "name": "Classic", "keyAspect": 1.15, "gap": 6,
+  "layers": {
+    "default": [
+      { "indent": 0, "keys": [ {"label": "q"}, {"label": "w"}, {"label": "e"}, {"label": "r"}, {"label": "t"}, {"label": "y"}, {"label": "u"}, {"label": "i"}, {"label": "o"}, {"label": "p"} ] },
+      { "indent": 0.5, "keys": [ {"label": "a"}, {"label": "s"}, {"label": "d"}, {"label": "f"}, {"label": "g"}, {"label": "h"}, {"label": "j"}, {"label": "k"}, {"label": "l"} ] },
+      { "keys": [ {"label": "⇧", "action": "shift", "width": 1.5, "group": "mod"}, {"label": "z"}, {"label": "x"}, {"label": "c"}, {"label": "v"}, {"label": "b"}, {"label": "n"}, {"label": "m"}, {"label": "⌫", "action": "backspace", "width": 1.5, "group": "mod"} ] },
+      { "keys": [ {"label": "123", "action": "symbols", "width": 1.5, "group": "mod"}, {"label": "space", "action": "space", "width": 5, "group": "space"}, {"label": ".", "width": 1.5}, {"label": "return", "action": "return", "width": 2, "group": "return"} ] }
+    ],
+    "symbols": [
+      { "indent": 0, "keys": [ {"label": "1"}, {"label": "2"}, {"label": "3"}, {"label": "4"}, {"label": "5"}, {"label": "6"}, {"label": "7"}, {"label": "8"}, {"label": "9"}, {"label": "0"} ] },
+      { "keys": [ {"label": "-"}, {"label": "/"}, {"label": ":"}, {"label": ";"}, {"label": "("}, {"label": ")"}, {"label": "$"}, {"label": "&"}, {"label": "@"}, {"label": "\""} ] },
+      { "keys": [ {"label": "."}, {"label": ","}, {"label": "?"}, {"label": "!"}, {"label": "'"}, {"label": "*"}, {"label": "#"}, {"label": "%"}, {"label": "⌫", "action": "backspace", "width": 2, "group": "mod"} ] },
+      { "keys": [ {"label": "ABC", "action": "letters", "width": 1.5, "group": "mod"}, {"label": "esc", "action": "escape", "group": "fn"}, {"label": "←", "action": "left", "group": "fn"}, {"label": "↑", "action": "up", "group": "fn"}, {"label": "↓", "action": "down", "group": "fn"}, {"label": "→", "action": "right", "group": "fn"}, {"label": "space", "action": "space", "width": 1.5, "group": "space"}, {"label": "return", "action": "return", "width": 2, "group": "return"} ] }
+    ]
+  } }
