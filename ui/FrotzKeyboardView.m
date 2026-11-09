@@ -33,7 +33,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
         self.userInteractionEnabled = NO;
         self.isAccessibilityElement = NO; // the keyboard provides the accessibility elements
         m_label = [[UILabel alloc] init];
-        m_label.text = key.label;
+        m_label.text = skin.upperCaseLegends ? [key.label uppercaseString] : key.label;
         m_label.textAlignment = NSTextAlignmentCenter;
         m_label.adjustsFontSizeToFitWidth = YES;
         m_label.minimumScaleFactor = 0.5;
@@ -283,7 +283,8 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 
             FrotzKeyAccessibilityElement *element = [[FrotzKeyAccessibilityElement alloc] initWithAccessibilityContainer: self];
             element.keyView = kv;
-            element.accessibilityLabel = key.label;
+            // A faithful space bar is blank.
+            element.accessibilityLabel = key.label.length || key.action != FrotzKeyActionSpace ? key.label : @"space";
             element.accessibilityTraits = UIAccessibilityTraitKeyboardKey;
             element.accessibilityFrameInContainerSpace = frame;
             [elements addObject: element];

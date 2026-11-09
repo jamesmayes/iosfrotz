@@ -1810,6 +1810,28 @@ extern void gli_ios_set_focus(window_t *winNum);
 // "clear:", "hit:<label>" (which view a real touch at that key's centre would reach), "notes:show|hide"
 // (the notes page programmatically), "notes:edit" (raise the notes keyboard), "kb:show|hide", "state:" (keyboard source and region) or "note:<text>".
 -(void)runKeyboardSelfTest {
+    for (NSString *skinID in [FrotzKeyboardSkin availableSkinIDs]) {
+        FrotzKeyboardLayout *layout = [FrotzKeyboardLayout layoutWithID: skinID];
+        if (layout && [FrotzKeyboardSkin skinWithID: skinID])
+            NSLog(@"kbskin %@ ok rows=%lu units=%g", skinID, (unsigned long)layout.maxRowCount, layout.unitsPerRow);
+        else
+            NSLog(@"kbskin %@ failed (the loader logs why, once per launch)", skinID);
+    }
+    // The faithful skins have their own legends: backspace, return and shift, then a few keys of their own.
+    NSDictionary<NSString *, NSArray *> *faithful = @{
+        @"apple2plus": @[ @"←", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:Q", @"tap:1", @"tap:SHIFT", @"tap:1",
+                          @"tap:SHIFT", @"tap:N", @"tap:g", @"tap:←", @"tap:ESC", @"tap:RESET" ],
+    };
+    NSArray *keys = faithful[m_keyboardController.skinID];
+    if (keys) {
+        NSString *bs = [@"tap:" stringByAppendingString: keys[0]], *ret = [@"tap:" stringByAppendingString: keys[1]];
+        NSMutableArray *script = [@[ @"tap:l", @"tap:o", @"tap:o", @"tap:k", bs, bs, @"tap:o", @"tap:k", ret, @"wait:2", @"story:",
+                                     [@"tap:" stringByAppendingString: keys[2]], @"tap:L", bs ] mutableCopy];
+        [script addObjectsFromArray: [keys subarrayWithRange: NSMakeRange(3, keys.count - 3)]];
+        [script addObject: @"clear:"];
+        [self keyboardSelfTestStep: 0 ofScript: script];
+        return;
+    }
     NSArray *script = @[ @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"tap:⌫", @"tap:⌫", @"tap:o", @"tap:k", @"tap:return", @"wait:2", @"story:",
                          @"tap:i", @"tap:n", @"tap:v", @"tap:space", @"tap:return", @"wait:2", @"story:",
                          @"tap:⇧", @"tap:N", @"tap:123", @"tap:1", @"tap:⌫", @"tap:⌫",

@@ -357,6 +357,9 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     if (!profiles[profileName])
         Fail(&error, [NSString stringWithFormat: @"unknown profile \"%@\"", profileName]);
     NSString *name = Optional(json, @"name", [NSString class], &error) ?: skinID;
+    NSString *legendCase = Optional(json, @"legendCase", [NSString class], &error) ?: @"asis";
+    if (![legendCase isEqualToString: @"upper"] && ![legendCase isEqualToString: @"asis"])
+        Fail(&error, [NSString stringWithFormat: @"unknown legendCase \"%@\"", legendCase]);
     NSDictionary *bezel = Optional(json, @"bezel", [NSDictionary class], &error);
     CGFloat sides = OptionalNumber(bezel, @"sides", 4, &error);
     CGFloat top = OptionalNumber(bezel, @"top", 8, &error), bottom = OptionalNumber(bezel, @"bottom", 8, &error);
@@ -402,6 +405,7 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     skin->_shadow = skin->_profile == FrotzKeyProfileRounded || skin->_profile == FrotzKeyProfileChiclet
                     ? [shadow boolValue] : NO;
     skin->_caseColor = caseColor;
+    skin->_upperCaseLegends = [legendCase isEqualToString: @"upper"];
     skin->m_keyColor = keyColor;
     skin->m_textColor = textColor;
     skin->m_pressedColor = pressedColor ?: keyColor;
