@@ -18,6 +18,11 @@
 // the game's closing text and the page's end notice must stay in the story
 // window after the game ends (web/tads/tads3_web.cpp does not call os_term).
 //
+// Also on that build, through the real save session (saves.js, ui.js) on
+// one fake IndexedDB: belfry.t3 SAVEs in one page, and a second page, a
+// fresh interpreter instance with an empty MEMFS, RESTOREs it from storage
+// and is in the saved state.
+//
 // Covered: while the interpreter's scripts are still loading the command
 // field is disabled and a submit is cancelled (no page reload); no path hands an input method's uncommitted (preedit) text to a
 // char or line request, including a wait that starts after a timer or an
@@ -486,22 +491,26 @@ async function saveChecks() {
     "with no record at all the clean copy is removed");
 }
 
-// ---- a normal QUIT through the page, on the real TADS 3 build ----
+// ---- TADS 3 through the page, on the real ASYNCIFY build ----
 
-async function tadsQuitCheck() {
+// A page of its own (fake DOM, vm context) that opens bench/tads/<file> as
+// index.html would (main.js, glk.js), on dist/bench/tads3-async.js in place
+// of dist/tads3.js. idb is its indexedDB (null: none). Each call is a fresh
+// interpreter instance with its own MEMFS.
+function tadsPage(file, idb) {
   const create = require(path.join(WEB, "dist", "bench", "tads3-async.js"));
-  const story = fs.readFileSync(path.join(WEB, "bench", "tads", "utf8.t3"));
+  const story = fs.readFileSync(path.join(WEB, "bench", "tads", file));
   const ids = {};
   for (const id of ["glk-root", "command-form", "command", "saves-button", "saves-dialog", "saves-list",
     "import-save", "import-note", "picker", "story-list", "open-story", "stories-button", "story-title",
     "picker-status"])
     ids[id] = new El("div", id);
   let tctx = null;
-  const loaded = [];
+  const page = { ids, loaded: [], ended: false, Module: null };
   class TadsBody extends El {
     appendChild(c) {
       if (c.tag !== "script") return super.appendChild(c);
-      loaded.push(c.src);
+      page.loaded.push(c.src);
       setTimeout(() => {
         if (!c.src.startsWith("dist/")) vm.runInContext(fs.readFileSync(path.join(WEB, c.src), "utf8"), tctx);
         c.onload();
@@ -517,63 +526,104 @@ async function tadsQuitCheck() {
     body: new TadsBody("body"),
     title: "",
   };
-  let ended = false;
   const quiet = { log() {}, warn() {}, info() {}, error: (...a) => console.error(...a) };
+  const stem = file.replace(/\..*$/, "");
   tctx = {
     document: doc, console: quiet, setTimeout, clearTimeout, Promise, Uint8Array, URL, Blob: class {},
     navigator: {},
+    indexedDB: idb,
     window: {
       addEventListener() {},
       getSelection: () => ({ toString: () => "" }),
-      indexedDB: null,
+      indexedDB: idb,
       innerHeight: 600,
     },
-    location: { hash: "#story=utf8", pathname: "/index.html", search: "", reload() {}, replace() {} },
+    location: { hash: `#story=${stem}`, pathname: "/index.html", search: "", reload() {}, replace() {} },
     history: { replaceState() {} },
     fetch: async (u) => (u.endsWith(".json")
-      ? { ok: true, json: async () => [{ file: "utf8.t3", title: "U", author: "A", format: "tads3" }] }
+      ? { ok: true, json: async () => [{ file, title: stem, author: "A", format: "tads3" }] }
       : { ok: true, arrayBuffer: async () => story.buffer.slice(story.byteOffset, story.byteOffset + story.length) }),
     WebFrotzSaves: Saves,
     // The Node build finds its own .wasm; the page's locateFile is for dist/.
-    createTads3: (opts) => {
+    createTads3: async (opts) => {
       const glkWeb = opts.glkWeb;
       const exit = glkWeb.exit;
-      glkWeb.exit = () => { exit(); ended = true; };
-      return create({ glkWeb, print() {}, printErr() {} });
+      glkWeb.exit = () => { exit(); page.ended = true; };
+      page.Module = await create({ glkWeb, print() {}, printErr() {} });
+      return page.Module;
     },
   };
   vm.createContext(tctx);
   for (const f of ["ui.js", "main.js"]) vm.runInContext(fs.readFileSync(path.join(WEB, f), "utf8"), tctx);
 
   const root = ids["glk-root"];
-  const field = ids.command;
-  const buffer = () => root.children.find((c) => c.className.includes("glk-buffer"));
-  const until = async (cond, ms = 5000) => {
+  page.buffer = () => root.children.find((c) => c.className.includes("glk-buffer"));
+  page.text = () => (page.buffer() ? page.buffer().textContent : "");
+  page.until = async (cond, ms = 5000) => {
     for (let t = 0; t < ms && !cond(); t += 5) await sleep(5);
     return cond();
   };
-  const type = async (line) => {
-    const before = buffer() ? buffer().textContent.length : 0;
-    field.value = line;
+  // Type a command and wait for the next prompt (or the end).
+  page.type = async (line) => {
+    const before = page.text().length;
+    ids.command.value = line;
     ids["command-form"].fire("submit");
-    await until(() => ended || (buffer() && buffer().textContent.length > before
-      && buffer().textContent.endsWith(">")));
+    await page.until(() => page.ended || (page.text().length > before && page.text().endsWith(">")));
   };
-  ok(await until(() => buffer() && buffer().textContent.endsWith(">")) &&
-     loaded.join(" ") === "dist/tads3.js glk.js",
+  page.started = () => page.until(() => page.text().endsWith(">"));
+  return page;
+}
+
+// A normal QUIT: the closing text and the end notice stay in the story
+// window (web/tads/tads3_web.cpp does not call os_term).
+async function tadsQuitCheck() {
+  const pg = tadsPage("utf8.t3", null);
+  ok(await pg.started() && pg.loaded.join(" ") === "dist/tads3.js glk.js",
     "TADS 3 page: utf8.t3 starts on the ASYNCIFY build through main.js and glk.js");
-  await type("naïve");
-  await type("quit");
-  ok(await until(() => ended), "TADS 3 page: QUIT ends the game");
-  const b = buffer();
-  const t = b ? b.textContent : "";
-  ok(!!b && root.children.includes(b), "TADS 3 page: the story window stays on the page after the game ends");
+  await pg.type("naïve");
+  await pg.type("quit");
+  ok(await pg.until(() => pg.ended), "TADS 3 page: QUIT ends the game");
+  const b = pg.buffer();
+  const t = pg.text();
+  ok(!!b && pg.ids["glk-root"].children.includes(b), "TADS 3 page: the story window stays on the page after the game ends");
   ok(t.includes("got [naïve] 5:") && t.includes("Auf Wiedersehen — the end."),
     "TADS 3 page: it keeps the turns and the closing text");
   ok(t.indexOf("Auf Wiedersehen — the end.") < t.indexOf("[The story has ended.]") &&
      b.children.some((c) => c.className === "notice" && c.textContent.includes("[The story has ended.]")),
     "TADS 3 page: the end notice follows the closing text in the story window");
-  ok(field.disabled === true, "TADS 3 page: the command field is disabled after the end");
+  ok(pg.ids.command.disabled === true, "TADS 3 page: the command field is disabled after the end");
+}
+
+// SAVE in one page, RESTORE in another: two interpreter instances (each its
+// own MEMFS) on one (fake) IndexedDB, through the real save session
+// (saves.js via ui.js), on the ASYNCIFY build, so the awaited storage
+// calls unwind and resume the VM.
+async function tadsStoreCheck() {
+  const idb = fakeIDB();
+  const A = tadsPage("belfry.t3", idb);
+  ok(await A.started(), "TADS 3 store: belfry.t3 starts in page A");
+  for (const c of ["e", "take lantern", "take mug"]) await A.type(c);
+  await A.type("save");
+  ok(/Saved\./.test(A.text()), "TADS 3 store: page A saves");
+  const rec = idb.data.saves.get("belfry.glksave"); // { bytes, mtime, story, rev } (saves.js)
+  const head = rec ? Buffer.from(rec.bytes.slice(0, 10)).toString("latin1") : "";
+  ok(!!rec && idb.data.meta.has("belfry.glksave") && head.startsWith("T3-state-v"),
+    `TADS 3 store: the save is in IndexedDB as belfry.glksave, a T3 save (${JSON.stringify(head)})`);
+  await A.type("drop lantern");
+
+  const B = tadsPage("belfry.t3", idb);
+  ok(await B.started() && B.Module !== A.Module, "TADS 3 store: belfry.t3 starts again in page B, a new instance");
+  let fresh = true;
+  try { fresh = !B.Module.FS.readdir("/saves").includes("belfry.glksave"); } catch (e) { /* no /saves */ }
+  ok(fresh, "TADS 3 store: page B's MEMFS has no save before RESTORE");
+  await B.type("restore");
+  ok(/Restored\./.test(B.text()), "TADS 3 store: RESTORE in page B succeeds from browser storage");
+  await B.type("i");
+  const inv = B.text().slice(B.text().lastIndexOf(">i"));
+  ok(/carrying: .*lantern/.test(inv) && /mug/.test(inv),
+    "TADS 3 store: page B is in page A's saved state (carrying the lantern and the mug)");
+  await B.type("look");
+  ok(!/\[The story has ended\.\]/.test(B.text()) && !B.ended, "TADS 3 store: page B plays on after the restore");
 }
 
 (async () => {
@@ -581,6 +631,7 @@ async function tadsQuitCheck() {
   await pageChecks();
   await saveChecks();
   await tadsQuitCheck();
+  await tadsStoreCheck();
   console.log(failed ? `${failed} of ${total} failed` : `all ${total} passed`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => {
