@@ -1,0 +1,9 @@
+{ "id": "atari800", "name": "Atari 800", "profile": "sculpted", "legendCase": "upper",
+  "case": { "light": "#C9B596", "dark": "#4A4033" },
+  "bezel": { "top": 10, "bottom": 10, "sides": 6 },
+  "key": { "radius": 3, "light": "#352A23", "dark": "#352A23", "textLight": "#F5F1E8", "textDark": "#E6E0D2",
+           "font": "system", "fontSize": 11, "pressedLight": "#5A4A3F", "pressedDark": "#5A4A3F" },
+  "groups": { "fn": { "light": "#C9762F", "dark": "#B2692A", "textLight": "#2A1C12", "textDark": "#22170F",
+                      "pressedLight": "#E0924F", "pressedDark": "#C98244" } },
+  "credits": "Layout after the Atari 800 (1979) keyboard; colours after its beige-brown case, dark brown caps and orange-brown console keys.",
+  "notes": "Faithful: the same key matrix as the Atari 400, now as the 800's full-travel sculpted keys: dark brown caps with white upper-case legends on the beige-brown case, BREAK at the end of the number row, CAPS/LOWR beside *, the inverse-video key after the right SHIFT, the shifted, CLEAR, INSERT, DELETE and cursor-arrow legends above the characters, and SYSTEM RESET (RESET under SYSTEM, as on the cap), OPTION, SELECT and START as the orange-brown column on the right. Letters type lower case and SHIFT upper case; LOWR locks capitals here. Approximated: widths are compressed to fit a phone, there is no gap before the console keys, the inverse key is the text ◪ with ATARI above (no logo), and shifted < and > type < and >. Mapped to none: BREAK, TAB, CTRL, the inverse key and the console keys. The cursor arrows on - = + * were CTRL combinations and are out of scope." }

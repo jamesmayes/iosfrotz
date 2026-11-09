@@ -1829,6 +1829,8 @@ extern void gli_ios_set_focus(window_t *winNum);
                      @"tap:Esc", @"tap:⇥", @"tap:Ctrl", @"tap:Alt", @"tap:Num Lock", @"tap:F10" ],
         @"atari400": @[ @"BACK S", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:1", @"tap:LOWR", @"tap:A", @"tap:LOWR", @"tap:b",
                         @"tap:ESC", @"tap:BREAK", @"tap:RESET", @"tap:START", @"tap:◪" ],
+        @"atari800": @[ @"BACK S", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:1", @"tap:LOWR", @"tap:A", @"tap:LOWR", @"tap:b",
+                        @"tap:ESC", @"tap:BREAK", @"tap:RESET", @"tap:START", @"tap:◪" ],
     };
     NSArray *keys = faithful[m_keyboardController.skinID];
     if (keys) {
