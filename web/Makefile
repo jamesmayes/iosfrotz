@@ -353,14 +353,22 @@ stamp_link = printf '%s\n' '$(LINK_$(1))' > $(OBJDIR)/$(1).ldflags
 # its own (after all its objects were compiled). If one differs, all of
 # those objects are rebuilt, so objects built for two longjmp modes are
 # never linked together: the TADS 3 objects (TADS3_EH) and the TADS 2 ones
-# in TADS2_SJLJ_OBJ. (The shared C objects have no setjmp and are built
-# with TADS_CFLAGS alone.)
+# in TADS2_SJLJ_OBJ. The objects both link (dist/obj/tads: the Glk OS
+# layer and web/tads/; and the four shared tads/tads2 files) have no setjmp
+# and are built with TADS_CFLAGS (and WEB_CFLAGS for web/tads/) alone;
+# dist/obj/tadsos.ccflags stamps those flags for them (and for
+# tads3_web.o, the one TADS 3 object that also gets WEB_CFLAGS), so a
+# change to TADS_CFLAGS or WEB_CFLAGS rebuilds them too.
 CC_tads2 := $(TADS_CFLAGS) $(TADS2_SJLJ)
 CC_tads3 := $(TADS3_CXXFLAGS)
+CC_tadsos := $(TADS_CFLAGS) $(WEB_CFLAGS)
 CCOBJ_tads2 := $(TADS2_SJLJ_OBJ)
 CCOBJ_tads3 := $(filter $(OBJDIR)/tads3/%,$(TADS3_OBJ))
+CCOBJ_tadsos := $(filter $(OBJDIR)/tads/%,$(TADS2_OBJ) $(TADS3_OBJ)) \
+                $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,$(TADS2_SHARED))) \
+                $(OBJDIR)/tads3/tads3_web.o
 stale_cc = $(shell printf '%s\n' '$(CC_$(1))' | cmp -s - $(OBJDIR)/$(1).ccflags 2>/dev/null || echo stale)
-$(foreach n,tads2 tads3,$(if $(call stale_cc,$(n)),$(eval $(CCOBJ_$(n)): FORCE)))
+$(foreach n,tads2 tads3 tadsos,$(if $(call stale_cc,$(n)),$(eval $(CCOBJ_$(n)): FORCE)))
 stamp_cc = printf '%s\n' '$(CC_$(1))' > $(OBJDIR)/$(1).ccflags
 FORCE:
 
@@ -468,41 +476,49 @@ $(DIST)/tads2%js $(DIST)/tads2%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) $(TADS2_ASYN
 	$(EMXX) $(LINK_tads2) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(DIST)/tads2.js
 	$(call stamp_link,tads2)
 	$(call stamp_cc,tads2)
+	$(call stamp_cc,tadsos)
 
 $(BENCH)/tads2-async%js $(BENCH)/tads2-async%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) $(TADS2_ASYNC_LIST) | $(BENCH)
 	$(EMXX) $(LINK_tads2-async) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads2-async.js
 	$(call stamp_link,tads2-async)
 	$(call stamp_cc,tads2)
+	$(call stamp_cc,tadsos)
 
 $(BENCH)/tads2-sync%js $(BENCH)/tads2-sync%wasm: $(TADS2_OBJ) $(TADS_GLK_SYNC) | $(BENCH)
 	$(EMXX) $(LINK_tads2-sync) $(TADS2_OBJ) $(TADS_GLK_SYNC) -o $(BENCH)/tads2-sync.js
 	$(call stamp_link,tads2-sync)
 	$(call stamp_cc,tads2)
+	$(call stamp_cc,tadsos)
 
 $(DIST)/tads3%js $(DIST)/tads3%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) $(TADS3_ASYNC_LIST) | $(OBJDIR)
 	$(EMXX) $(LINK_tads3) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(DIST)/tads3.js
 	$(call stamp_link,tads3)
 	$(call stamp_cc,tads3)
+	$(call stamp_cc,tadsos)
 
 $(BENCH)/tads3-async%js $(BENCH)/tads3-async%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) $(TADS3_ASYNC_LIST) | $(BENCH)
 	$(EMXX) $(LINK_tads3-async) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads3-async.js
 	$(call stamp_link,tads3-async)
 	$(call stamp_cc,tads3)
+	$(call stamp_cc,tadsos)
 
 $(BENCH)/tads3-sync%js $(BENCH)/tads3-sync%wasm: $(TADS3_OBJ) $(TADS_GLK_SYNC) | $(BENCH)
 	$(EMXX) $(LINK_tads3-sync) $(TADS3_OBJ) $(TADS_GLK_SYNC) -o $(BENCH)/tads3-sync.js
 	$(call stamp_link,tads3-sync)
 	$(call stamp_cc,tads3)
+	$(call stamp_cc,tadsos)
 
 $(BENCH)/tads2-check%js $(BENCH)/tads2-check%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) $(TADS2_ASYNC_LIST) | $(BENCH)
 	$(EMXX) $(LINK_tads2-check) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads2-check.js
 	$(call stamp_link,tads2-check)
 	$(call stamp_cc,tads2)
+	$(call stamp_cc,tadsos)
 
 $(BENCH)/tads3-check%js $(BENCH)/tads3-check%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) $(TADS3_ASYNC_LIST) | $(BENCH)
 	$(EMXX) $(LINK_tads3-check) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads3-check.js
 	$(call stamp_link,tads3-check)
 	$(call stamp_cc,tads3)
+	$(call stamp_cc,tadsos)
 
 # make asyncify-lists: regenerate tads/asyncify-tads{2,3}.txt (see "ASYNCIFY
 # for TADS"). For each interpreter: link it with every function instrumented
@@ -535,6 +551,7 @@ asyncify-lists: $(TADS2_OBJ) $(TADS3_OBJ) $(TADS_GLK_ASYNC) | $(BENCH)
 	$(call asyncify_list,3,$(TADS3_OBJ) $(TADS_GLK_ASYNC))
 	$(call stamp_cc,tads2)
 	$(call stamp_cc,tads3)
+	$(call stamp_cc,tadsos)
 
 asyncify-check: $(BENCH)/tads2-check.js $(BENCH)/tads2-check.wasm $(BENCH)/tads3-check.js \
                 $(BENCH)/tads3-check.wasm $(BENCH)/tads2-sync.js $(BENCH)/tads2-sync.wasm \
