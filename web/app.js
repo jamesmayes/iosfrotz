@@ -267,10 +267,37 @@ function withTimeout(promise, ms, what) {
 // IndexedDB is stuck (Safari can hold a lock for a suspended background
 // tab), give up after a few seconds. The file stays in MEMFS and goes to
 // IndexedDB with the next successful sync.
+let storageTrouble = null; // message for the Saves dialog, or null
+
+function noteStorage(promise) {
+  return promise.then(
+    (v) => { storageTrouble = null; return v; },
+    (e) => {
+      storageTrouble = "Browser storage did not respond, so saves are only " +
+        "kept until this page closes. Export any you need.";
+      throw e;
+    });
+}
+
 function persistSaves() {
   if (!Module) return Promise.resolve();
-  return withTimeout(pullMissingSaves().then(() => syncfs(false)), 5000, "Saving to browser storage");
+  return noteStorage(withTimeout(pullMissingSaves().then(() => syncfs(false)),
+    5000, "Saving to browser storage"));
 }
+
+// Copy saves that are only in IndexedDB into MEMFS, e.g. when loading them
+// at start timed out. Never deletes anything.
+function refreshSaves() {
+  if (!Module) return Promise.resolve();
+  return noteStorage(withTimeout(pullMissingSaves(), 3000, "Loading saves"));
+}
+
+// Close the IndexedDB connection when the page is hidden for good or put in
+// the back/forward cache, so a suspended page cannot hold the database for
+// the next one. IDBFS reopens it on the next sync.
+window.addEventListener("pagehide", () => {
+  if (Module && Module.IDBFS) Module.IDBFS.quit();
+});
 
 function listSaves() {
   if (!Module) return [];
@@ -313,14 +340,15 @@ function renderSaves() {
     li.append(label, exp);
     savesList.appendChild(li);
   }
-  importNote.textContent = saveName
-    ? `Import replaces ${saveName}; then type RESTORE in the game.`
-    : "";
+  importNote.textContent = (storageTrouble ? storageTrouble + " " : "") +
+    (saveName ? `Import replaces ${saveName}; then type RESTORE in the game.` : "");
 }
 
-savesBtn.addEventListener("click", () => {
+savesBtn.addEventListener("click", async () => {
   renderSaves();
   savesDialog.showModal();
+  try { await refreshSaves(); } catch (e) { console.warn("[frotz]", e); }
+  renderSaves();
 });
 
 importInput.addEventListener("change", async () => {
@@ -480,7 +508,7 @@ async function play(fileName, title, bytes) {
   Module.FS.mount(Module.IDBFS, {}, SAVE_DIR);
   try {
     // Load saves persisted by earlier visits.
-    await withTimeout(syncfs(true), 5000, "Loading saves");
+    await noteStorage(withTimeout(syncfs(true), 5000, "Loading saves"));
   } catch (e) {
     console.warn("[frotz] could not load saves from IndexedDB", e);
   }
