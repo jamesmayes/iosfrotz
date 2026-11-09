@@ -130,13 +130,20 @@ const PRE = String.raw`(function () {
   // deleted) and the stored bytes' length and FNV-1a hash (from the "saves"
   // store, so a byte change shows even if meta were stale).
   const fnv = (b) => { let h = 0x811c9dc5; for (let i = 0; i < b.length; i++) { h ^= b[i]; h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
+  // Any failure to read resolves { error }, never an empty result.
   window.__idb = () => new Promise(async (res) => {
-    const list = indexedDB.databases ? await indexedDB.databases() : [];
+    if (!indexedDB.databases) { res({ error: "indexedDB.databases() is missing" }); return; }
+    let list;
+    try { list = await indexedDB.databases(); } catch (e) { res({ error: "indexedDB.databases() failed: " + e }); return; }
     if (!list.some((d) => d.name === "web-frotz")) { res({}); return; }
-    const r = ro.call(indexedDB, "web-frotz", 1);
+    let r;
+    try { r = ro.call(indexedDB, "web-frotz", 1); } catch (e) { res({ error: "open threw: " + e }); return; }
     r.onsuccess = () => { const db = r.result; const out = {};
       if (!db.objectStoreNames.contains("meta") || !db.objectStoreNames.contains("saves")) { db.close(); res({}); return; }
-      const tx = db.transaction(["meta", "saves"], "readonly");
+      let tx;
+      try { tx = db.transaction(["meta", "saves"], "readonly"); } catch (e) { db.close(); res({ error: "transaction threw: " + e }); return; }
+      tx.onerror = () => res({ error: "read failed: " + tx.error });
+      tx.onabort = () => { db.close(); res({ error: "read aborted: " + tx.error }); };
       const c = tx.objectStore("meta").openCursor();
       c.onsuccess = () => { const k = c.result; if (!k) return;
         out[k.key] = Object.assign(out[k.key] || {}, { rev: k.value.rev, size: k.value.size, sha256: k.value.sha256 || null, deleted: !!k.value.deleted }); k.continue(); };
@@ -146,7 +153,8 @@ const PRE = String.raw`(function () {
         out[k.key] = Object.assign(out[k.key] || {}, { bytes: by ? by.length : null, fnv: by ? fnv(by) : null }); k.continue(); };
       tx.oncomplete = () => { db.close(); res(out); };
     };
-    r.onerror = () => res({ error: String(r.error) });
+    r.onerror = () => res({ error: "open failed: " + r.error });
+    r.onblocked = () => res({ error: "open blocked" });
   });
   // Every change of saves.mode(), from __watchMode() on: polled every 5 ms,
   // and every change of the Saves button's state attributes (set by each
@@ -226,6 +234,20 @@ const PRE = String.raw`(function () {
       i.value = line;
       document.getElementById("command-form").requestSubmit();
       return settle(len, ms || 15000);
+    },
+    // Submit a line that makes the game ask for a key: resolves once the
+    // input bar waits for a key (command-form data-waiting="key", set by
+    // app.js and glk.js), not at a ">" prompt.
+    async submitForKey(line, ms) {
+      const f = document.getElementById("command-form");
+      document.getElementById("command").value = line;
+      f.requestSubmit();
+      const end = Date.now() + ms;
+      while (Date.now() < end) {
+        if (f.dataset.waiting === "key") { await sleep(100); return { ok: true, tail: text().slice(-800) }; }
+        await sleep(50);
+      }
+      return { ok: false, waiting: f.dataset.waiting, tail: text().slice(-800) };
     },
     async key(k, ms) {
       const len = text().length;
@@ -482,6 +504,30 @@ async function start(tab, stem, interp, story) {
 }
 const status = (tab) => run(tab, "__T.status()");
 const idb = (tab) => run(tab, "__idb()");
+// Read the stored saves; a failed read is a FAIL record of its own (and the
+// result still carries the error, so no comparison can use it).
+async function readIdb(tab, label) {
+  const db = await idb(tab);
+  if (!db || db.error) fail(`IndexedDB read (${label})`, `tab ${tab}: ${db ? db.error : "no answer"}`);
+  return db || { error: "no answer" };
+}
+// One stored save, as read: ok only when the read succeeded and the record
+// exists, is not deleted, and has its revision, bytes and byte fingerprint.
+function storedSave(db, name) {
+  if (!db || db.error) return { ok: false, rec: null, text: `READ FAILED (${db ? db.error : "no answer"})` };
+  const r = db[name];
+  if (!r) return { ok: false, rec: null, text: `NO STORED ${name}` };
+  if (r.deleted || r.rev == null || !r.bytes || !r.fnv) return { ok: false, rec: r, text: `INCOMPLETE ${JSON.stringify(r)}` };
+  return { ok: true, rec: r, text: JSON.stringify(r) };
+}
+// "Unchanged" only between two good reads of an established stored save.
+function sameStored(dbBefore, dbAfter, name) {
+  const a = storedSave(dbBefore, name), b = storedSave(dbAfter, name);
+  if (!a.ok) return { ok: false, text: `not compared: before, ${a.text}` };
+  if (!b.ok) return { ok: false, text: `not compared: after, ${b.text}` };
+  const same = JSON.stringify(a.rec) === JSON.stringify(b.rec);
+  return { ok: same, text: `${b.text}${same ? " (unchanged)" : ` (CHANGED from ${a.text})`}` };
+}
 
 // The game state, observed: the whole status line (not clipped) and the
 // replies to LOOK and INVENTORY. Taking it costs turns, so it is taken at
@@ -492,13 +538,14 @@ const norm = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim();
 async function observe(tab) {
   const st = norm(await status(tab));
   const replies = [];
-  let ok = true;
+  let ok = true, why = null;
   for (const c of PROBES) {
     const t = await cmd(tab, c);
+    if (!t.ok && !why) why = `${c.toUpperCase()} reached no prompt: "${clip(t.tail, 80)}"`;
     ok = ok && t.ok;
     replies.push(norm(t.ok ? t.reply : `(no prompt) ${t.tail}`));
   }
-  return { ok, st, replies, key: JSON.stringify([st, replies]) };
+  return { ok, why, st, replies, key: JSON.stringify([st, replies]) };
 }
 const firstDiff = (a, b) => {
   for (let i = 0; i < Math.max(a.replies.length, b.replies.length); i++)
@@ -509,22 +556,30 @@ const firstDiff = (a, b) => {
 // SAVE, reload, RESTORE. The restore check passes only if the state after
 // RESTORE equals the state after SAVE (status line and probe replies), and
 // that state differs from the restarted story's, so equality shows that
-// RESTORE brought the save back and not that nothing changed.
+// RESTORE brought the save back and not that nothing changed. All three
+// observations must succeed: a failed one is a FAIL of its own and is never
+// compared (its timeout text could otherwise make the states differ).
 async function saveReloadRestore(tab, saveName, savedRe, restoredRe) {
   const s = await cmd(tab, "save");
   const ok1 = s.ok && savedRe.test(s.tail);
-  const db1 = await idb(tab);
-  const stored = db1[saveName] && !db1[saveName].deleted;
-  (ok1 && stored ? pass : fail)("save", `reply "${clip(s.tail, 60)}"; IndexedDB ${saveName}: ${JSON.stringify(db1[saveName] || null)}`);
-  const o1 = await observe(tab);
+  const db1 = await readIdb(tab, "after SAVE");
+  const stored = storedSave(db1, saveName);
+  (ok1 && stored.ok ? pass : fail)("save", `reply "${clip(s.tail, 60)}"; IndexedDB ${saveName}: ${stored.text}`);
+  const probed = (when, o) => { if (!o.ok) fail(`observe ${when}`, `failed, so not compared: ${o.why}`); return o; };
+  const o1 = probed("after SAVE", await observe(tab));
   await reload(tab);
   const r0 = await run(tab, "__T.waitReady(60000)", 65000);
   (r0.ok ? pass : fail)("reload", r0.ok ? `story restarted; status "${clip(await status(tab), 80)}"` : `no prompt after reload: "${clip(r0.tail)}"`);
-  const o0 = await observe(tab);
+  const o0 = probed("after the reload", await observe(tab));
   const r = await cmd(tab, "restore");
   const ok2 = r.ok && restoredRe.test(r.tail);
-  const o2 = await observe(tab);
-  const same = o1.ok && o2.ok && o2.key === o1.key;
+  const o2 = probed("after RESTORE", await observe(tab));
+  if (!(o1.ok && o0.ok && o2.ok)) {
+    const bad = [["after SAVE", o1], ["after the reload", o0], ["after RESTORE", o2]].filter(([, o]) => !o.ok).map(([w]) => w);
+    fail("restore", `reply "${clip(r.tail, 60)}"; not compared: the observation ${bad.join(", ")} failed (see its line)`);
+    return { o1, o2 };
+  }
+  const same = o2.key === o1.key;
   const distinct = o0.key !== o1.key;
   (ok2 && same && distinct ? pass : fail)("restore",
     `reply "${clip(r.tail, 60)}"; state after RESTORE ${same ? "equals" : "DIFFERS from"} the state after SAVE` +
@@ -578,12 +633,17 @@ const CHECKS = {
       fail("timer", "not run: needs bench/local/inputeventtest.ulx");
     } else {
       r = await start("A", "inputeventtest", null, null);
-      await cmd("A", "get char");
-      let k = await run("A", `__T.key("q", 10000)`, 15000);
-      (/dec\) 113/.test(k.tail) ? pass : fail)("char input: q", `"${clip(k.tail, 80)}"`);
-      await cmd("A", "get char");
-      k = await run("A", `__T.key("ArrowLeft", 10000)`, 15000);
-      (/FFFFFFFE/.test(k.tail) ? pass : fail)("char input: Left", `"${clip(k.tail, 80)}"`);
+      if (!r.ok) fail("start (InputEventTest)", `no prompt: "${clip(r.tail)}"`);
+      // "get char" asks for a key, so wait for the bar to take one (not
+      // for a ">" prompt), then send it.
+      const charTest = async (name, key, re) => {
+        const g = await run("A", `__T.submitForKey("get char", 10000)`, 15000);
+        if (!g.ok) return fail(name, `not run: "get char" never asked for a key (data-waiting "${g.waiting || ""}"): "${clip(g.tail, 80)}"`);
+        const k = await run("A", `__T.key(${JSON.stringify(key)}, 10000)`, 15000);
+        (k.ok && re.test(k.tail) ? pass : fail)(name, `"${clip(k.tail, 80)}"${k.ok ? "" : " (no prompt after the key)"}`);
+      };
+      await charTest("char input: q", "q", /dec\) 113/);
+      await charTest("char input: Left", "ArrowLeft", /FFFFFFFE/);
       const t0 = Date.now();
       const t = await cmd("A", "get timer", 15000);
       const dt = Date.now() - t0;
@@ -611,6 +671,13 @@ const CHECKS = {
     if (!r.ok) return fail("tab A start", clip(r.tail));
     const mA = await run("A", "__T.mode()");
     (mA === "writer" ? pass : fail)("tab A owns storage", `A mode ${mA}`);
+    // The stored save the "unchanged" checks below compare against: A, the
+    // writer, stores it here, so it exists whatever ran before.
+    const s0 = await cmd("A", "save");
+    const db0 = await readIdb("A", "A's save");
+    const stored0 = storedSave(db0, "Balances.sav");
+    (s0.ok && /Ok\./.test(s0.reply) && stored0.ok ? pass : fail)("tab A stores a save",
+      `reply "${clip(s0.tail, 60)}"; stored Balances.sav ${stored0.text}`);
     await openWindow("B");
     const hB = await waitHello("B", 0, 20000);
     if (hB.visible !== "visible") return fail("tab B opens", `tab B reports visibilityState "${hB.visible}"`);
@@ -621,17 +688,17 @@ const CHECKS = {
     // B's SAVE must succeed in the game, be held in B (MEMFS, dirty), say
     // it is session-only, and leave the stored record (meta and bytes) as
     // it was.
-    const before = await idb("B");
+    const before = await readIdb("B", "before B's save");
     const sB = await cmd("B", "save");
-    const after = await idb("B");
+    const after = await readIdb("B", "after B's save");
     const localB = await run("B", `__T.localSave("Balances.sav")`);
     const savedB = sB.ok && /Ok\./.test(sB.reply);
     const sessionB = sB.ok && sB.reply.includes(await run("B", "WebFrotzSaves.NOT_OWNER"));
-    const unchanged = JSON.stringify(before["Balances.sav"] || null) === JSON.stringify(after["Balances.sav"] || null);
-    (savedB && localB.dirty && localB.size > 0 && sessionB && unchanged ? pass : fail)("B's save stays in the tab",
+    const unchanged = sameStored(before, after, "Balances.sav");
+    (savedB && localB.dirty && localB.size > 0 && sessionB && unchanged.ok ? pass : fail)("B's save stays in the tab",
       `reply "${clip(sB.tail, 80)}" (${savedB ? "game saved" : "NO SUCCESS REPLY"}); in tab: ${localB.size == null ? "NO FILE" : `${localB.size} bytes`}, ` +
       `${localB.dirty ? "not in storage" : "NOT MARKED LOCAL"}; NOT_OWNER on the save ${sessionB ? "shown" : "MISSING"}; ` +
-      `stored Balances.sav ${JSON.stringify(after["Balances.sav"] || null)}${unchanged ? " (unchanged)" : " (CHANGED)"}`);
+      `stored Balances.sav ${unchanged.text}`);
     // Takeover: A leaves, B gets the lock.
     await go("A", "/__blank.html?t=A");
     let mB2 = null;
@@ -639,10 +706,10 @@ const CHECKS = {
     const nowOwner = await run("B", "__T.text().includes(WebFrotzSaves.NOW_OWNER)");
     (mB2 === "writer" && nowOwner ? pass : fail)("takeover when A closes", `B mode ${mB2}; NOW_OWNER notice ${nowOwner ? "shown" : "missing"}`);
     const s2 = await cmd("B", "save");
-    const db2 = await idb("B");
-    const rev2 = db2["Balances.sav"] && db2["Balances.sav"].rev;
-    const revBefore = after["Balances.sav"] ? after["Balances.sav"].rev : 0;
-    (rev2 > revBefore ? pass : fail)("B's next save is stored", `reply "${clip(s2.tail, 60)}"; rev ${revBefore} -> ${rev2}`);
+    const db2 = await readIdb("B", "after B's stored save");
+    const sv1 = storedSave(after, "Balances.sav"), sv2 = storedSave(db2, "Balances.sav");
+    (sv1.ok && sv2.ok && sv2.rec.rev > sv1.rec.rev ? pass : fail)("B's next save is stored",
+      `reply "${clip(s2.tail, 60)}"; ${sv1.ok && sv2.ok ? `rev ${sv1.rec.rev} -> ${sv2.rec.rev}` : `not compared: before ${sv1.text}, after ${sv2.text}`}`);
 
     // Queued-grant steal: B (writer) leaves; A, now a reader with its
     // IndexedDB opens gated, is granted the lock mid-snapshot; B's page
@@ -690,22 +757,22 @@ const CHECKS = {
       `steal: ${st}; A mode ${mA3}; A's notice ${lost ? "LOST_OWNER" : "NOT LOST_OWNER"}; NOW_OWNER ${now ? "SHOWN" : "not shown"}; ${qs2(q2)}`);
     // A's follow-up SAVE, while B holds the stolen lock: the game saves,
     // A keeps it (session-only, LOST_OWNER), storage is unchanged.
-    const before2 = await idb("A");
+    const before2 = await readIdb("A", "before A's save after the steal");
     const sA = await cmd("A", "save");
-    const after2 = await idb("A");
+    const after2 = await readIdb("A", "after A's save after the steal");
     const localA = await run("A", `__T.localSave("Balances.sav")`);
     const savedA = sA.ok && /Ok\./.test(sA.reply);
     const sessionA = sA.ok && sA.reply.includes(await run("A", "WebFrotzSaves.LOST_OWNER"));
-    const unchanged2 = JSON.stringify(before2["Balances.sav"] || null) === JSON.stringify(after2["Balances.sav"] || null);
-    (savedA && localA.dirty && localA.size > 0 && sessionA && unchanged2 ? pass : fail)("A's save after the steal stays in the tab",
+    const unchanged2 = sameStored(before2, after2, "Balances.sav");
+    (savedA && localA.dirty && localA.size > 0 && sessionA && unchanged2.ok ? pass : fail)("A's save after the steal stays in the tab",
       `reply "${clip(sA.tail, 80)}" (${savedA ? "game saved" : "NO SUCCESS REPLY"}); in tab: ${localA.size == null ? "NO FILE" : `${localA.size} bytes`}, ` +
       `${localA.dirty ? "not in storage" : "NOT MARKED LOCAL"}; LOST_OWNER on the save ${sessionA ? "shown" : "MISSING"}; ` +
-      `stored Balances.sav ${JSON.stringify(after2["Balances.sav"] || null)}${unchanged2 ? " (unchanged)" : " (CHANGED)"}`);
+      `stored Balances.sav ${unchanged2.text}`);
     await run("B", "__T.unsteal()");
     await new Promise((z) => setTimeout(z, 2000));
     const q3 = await run("A", "__locks()");
     const mA4 = await run("A", "__T.mode()");
-    const after3 = await idb("A");
+    const after3 = await readIdb("A", "after the thief let go");
     const log = await run("A", "window.__modeLog || []");
     // Any mode but reader, or the Saves button's label ever being other
     // than the reader's (a record's oldValue is the label before each set),
@@ -715,10 +782,10 @@ const CHECKS = {
     const READER_LABEL = "Saves: another tab owns browser storage";
     const everWriter = modes.some((m) => m !== "reader") || btn.some((e) => e.attr === "aria-label" && e.old !== READER_LABEL);
     const aQueued3 = q3.held.concat(q3.pending).some((l) => l.clientId === cidA);
-    const unchanged3 = JSON.stringify(before2["Balances.sav"] || null) === JSON.stringify(after3["Balances.sav"] || null);
-    (mA4 === "reader" && !everWriter && !aQueued3 && unchanged3 ? pass : fail)("A never writes and does not queue again",
+    const unchanged3 = sameStored(before2, after3, "Balances.sav");
+    (mA4 === "reader" && !everWriter && !aQueued3 && unchanged3.ok ? pass : fail)("A never writes and does not queue again",
       `2 s after the thief let go: A mode ${mA4}; ${qs2(q3)}; A's modes from before the grant: ${modes.join(" -> ") || "?"} ` +
-      `(${log.length} log entries, ${btn.length} Saves-button changes${everWriter ? ", LEFT SESSION-ONLY" : ""}); stored Balances.sav ${unchanged3 ? "unchanged" : "CHANGED"}`);
+      `(${log.length} log entries, ${btn.length} Saves-button changes${everWriter ? ", LEFT SESSION-ONLY" : ""}); stored Balances.sav ${unchanged3.text}`);
   },
 };
 
