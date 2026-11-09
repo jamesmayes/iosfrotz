@@ -387,6 +387,32 @@ static void tads_text(void)
     check(text_has(ida, "th\xC3\xA9") && !text_has(ida, "\xEF\xBF\xBD") && tadsweb_text_legacy(),
           "TADS 2: an unfinished UTF-8 prefix at a line request is Windows-1252");
 
+    /* Closing a stream counts the held bytes it flushes: TADS 2 writes
+       "caf" and holds 0xE9, which the close writes as Windows-1252, so
+       the result is 4 characters. Then the same for a window. */
+    {
+        char mem[16];
+        strid_t ms;
+        stream_result_t res;
+        winid_t w;
+        tadsweb_text_utf8(0);
+        memset(mem, 0, sizeof mem);
+        ms = glk_stream_open_memory(mem, sizeof mem, filemode_Write, 13);
+        glk_stream_set_current(ms);
+        os_put_buffer("caf\xE9", 4);
+        glk_stream_close(ms, &res);
+        check(res.writecount == 4 && memcmp(mem, "caf\xE9", 4) == 0,
+              "TADS 2: a memory stream's close counts the held byte it writes");
+        tadsweb_text_utf8(0);
+        w = glk_window_open(a, winmethod_Above | winmethod_Fixed, 3, wintype_TextBuffer, 14);
+        next_id += 2;
+        glk_set_window(w);
+        os_put_buffer("caf\xE9", 4);
+        glk_window_close(w, &res);
+        check(res.writecount == 4, "TADS 2: a window's close counts the held byte it writes");
+        glk_set_window(a);
+    }
+
     /* And at the end of the game: left held, for glk_main's caller to end
        the game (glkweb_finish); check-glk.js looks for it on the page. */
     tadsweb_text_utf8(0);

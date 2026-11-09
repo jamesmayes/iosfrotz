@@ -961,6 +961,10 @@ void glk_stream_close(strid_t str, stream_result_t *result)
         fprintf(stderr, "[glk] stream_close: cannot close a window stream\n");
         return;
     }
+    /* Text held back for the stream is written first, so the counts
+       include it. */
+    if (pending_hook)
+        (*pending_hook)(str);
     if (result) {
         result->readcount = str->readcount;
         result->writecount = str->writecount;
@@ -1278,6 +1282,9 @@ void glk_window_close(winid_t win, stream_result_t *result)
     window_t *pair, *sib, *grand;
     if (!win)
         return;
+    /* As in glk_stream_close: held-back text first, then the counts. */
+    if (pending_hook && win->str)
+        (*pending_hook)(win->str);
     if (result) {
         result->readcount = win->str ? win->str->readcount : 0;
         result->writecount = win->str ? win->str->writecount : 0;
