@@ -1,0 +1,239 @@
+# Commands for bench/run-bench.js on games/Advent.ulx (Colossal Cave,
+# Inform 6 port, Release 5 / 961209). One per line; '#' lines are skipped.
+# It is not a winning walkthrough: it plays the opening of the cave, with
+# looks, inventories, examines, a SAVE and a RESTORE, so every turn goes
+# through the parser, the world model and the status line.
+verbose
+look
+examine building
+in
+examine keys
+get keys
+get lamp
+get food
+get bottle
+inventory
+examine lamp
+examine bottle
+look
+out
+examine stream
+s
+look
+s
+look
+s
+examine grate
+unlock grate with keys
+open grate
+d
+look
+w
+get cage
+examine cage
+w
+turn on lamp
+look
+examine rod
+get rod
+inventory
+xyzzy
+look
+xyzzy
+look
+w
+look
+w
+examine bird
+drop rod
+get bird
+get rod
+inventory
+w
+look
+d
+look
+score
+s
+look
+get gold
+examine gold
+n
+look
+w
+look
+wave rod
+look
+w
+look
+get diamonds
+e
+e
+look
+inventory
+score
+n
+look
+get silver
+examine silver
+n
+look
+s
+s
+e
+look
+w
+w
+look
+n
+look
+s
+look
+e
+look
+w
+n
+look
+s
+w
+look
+e
+up
+look
+e
+look
+e
+look
+inventory
+e
+look
+up
+look
+w
+look
+d
+look
+w
+look
+s
+look
+n
+look
+e
+look
+sw
+look
+ne
+look
+d
+look
+w
+look
+e
+look
+n
+look
+s
+look
+inventory
+score
+save
+look
+w
+look
+restore
+look
+inventory
+drop gold
+drop diamonds
+get gold
+get diamonds
+inventory
+examine diamonds
+examine me
+wait
+wait
+listen
+smell
+look
+n
+look
+up
+look
+s
+look
+w
+look
+e
+look
+d
+look
+inventory
+score
+examine lamp
+turn off lamp
+look
+turn on lamp
+look
+drop food
+look
+get food
+inventory
+drop bottle
+get bottle
+drink water
+inventory
+look
+n
+look
+w
+look
+s
+look
+e
+look
+up
+look
+d
+look
+nw
+look
+se
+look
+ne
+look
+sw
+look
+in
+look
+out
+look
+score
+inventory
+examine cage
+examine bird
+look
+wait
+wait
+wait
+look
+inventory
+score
+n
+s
+e
+w
+up
+d
+look
+inventory
+score
+brief
+look
+verbose
+look
+examine gold
+examine silver
+inventory
+score
+look
