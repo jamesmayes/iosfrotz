@@ -14,8 +14,8 @@
 //   - adds the test stories to games/stories.json: errand.gam (TADS 2) and
 //     belfry.t3 (TADS 3) from bench/tads, Alabaster.gblorb from git/test,
 //     and inputeventtest.ulx from bench/local/ if it is there (Plotkin's
-//     glk-dev unit test; not shipped, so the char-input and timer checks
-//     SKIP without it).
+//     glk-dev unit test; not shipped: without it the char-input and timer
+//     checks FAIL as not run).
 // Safari only opens and closes windows, through AppleScript (`make new
 // document`, `close`). Input goes through the page's own form
 // (requestSubmit) and synthetic keydown events on the command field; no
@@ -26,8 +26,13 @@
 // held back, which is what invalidated earlier runs.
 //
 // Fails fast (exit 2, the report left untouched) when the screen is locked,
-// Safari does not answer AppleScript, or the page does not report in.
-// Otherwise exit 0 if no check failed, 1 if any did.
+// Safari does not answer AppleScript, or the page does not report in. An
+// abort after the checks have started prints the reason and the checks not
+// run, writes the report marked INCOMPLETE, and exits 2. Otherwise exit 0
+// only when every required check ran and passed (the report's verdict is
+// PASS); 1 if any check failed or did not run (a missing fixture, a missing
+// startup timing, a group that stopped part way, or --only leaving groups
+// out).
 
 "use strict";
 
@@ -121,19 +126,62 @@ const PRE = String.raw`(function () {
   };
   window.__gateOpens = () => { gated = []; window.__gatedCount = 0; return "gated"; };
   window.__openOpens = () => { const g = gated || []; gated = null; g.forEach((f) => f()); return "opened " + g.length; };
+  // The stored saves: per name, the meta record (rev, size, sha256,
+  // deleted) and the stored bytes' length and FNV-1a hash (from the "saves"
+  // store, so a byte change shows even if meta were stale).
+  const fnv = (b) => { let h = 0x811c9dc5; for (let i = 0; i < b.length; i++) { h ^= b[i]; h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
   window.__idb = () => new Promise(async (res) => {
     const list = indexedDB.databases ? await indexedDB.databases() : [];
     if (!list.some((d) => d.name === "web-frotz")) { res({}); return; }
     const r = ro.call(indexedDB, "web-frotz", 1);
     r.onsuccess = () => { const db = r.result; const out = {};
-      if (!db.objectStoreNames.contains("meta")) { db.close(); res({}); return; }
-      const tx = db.transaction(["meta"], "readonly");
+      if (!db.objectStoreNames.contains("meta") || !db.objectStoreNames.contains("saves")) { db.close(); res({}); return; }
+      const tx = db.transaction(["meta", "saves"], "readonly");
       const c = tx.objectStore("meta").openCursor();
-      c.onsuccess = () => { const k = c.result; if (!k) return; out[k.key] = { rev: k.value.rev, size: k.value.size, deleted: !!k.value.deleted }; k.continue(); };
+      c.onsuccess = () => { const k = c.result; if (!k) return;
+        out[k.key] = Object.assign(out[k.key] || {}, { rev: k.value.rev, size: k.value.size, sha256: k.value.sha256 || null, deleted: !!k.value.deleted }); k.continue(); };
+      const b = tx.objectStore("saves").openCursor();
+      b.onsuccess = () => { const k = b.result; if (!k) return;
+        const by = k.value && k.value.bytes ? new Uint8Array(k.value.bytes) : null;
+        out[k.key] = Object.assign(out[k.key] || {}, { bytes: by ? by.length : null, fnv: by ? fnv(by) : null }); k.continue(); };
       tx.oncomplete = () => { db.close(); res(out); };
     };
     r.onerror = () => res({ error: String(r.error) });
   });
+  // Every change of saves.mode(), from __watchMode() on: polled every 5 ms,
+  // and every change of the Saves button's state attributes (set by each
+  // mode change, delivered even for a state that lasts no time at all).
+  window.__watchMode = () => {
+    const log = window.__modeLog = [];
+    let last = mode();
+    log.push({ at: Date.now(), mode: last, via: "start" });
+    clearInterval(window.__modeTimer);
+    window.__modeTimer = setInterval(() => { const m = mode(); if (m !== last) { last = m; log.push({ at: Date.now(), mode: m, via: "poll" }); } }, 5);
+    if (window.__modeObs) window.__modeObs.disconnect();
+    const btn = document.getElementById("saves-button");
+    window.__modeObs = new MutationObserver((rs) => { for (const r of rs) log.push({ at: Date.now(), attr: r.attributeName, old: r.oldValue, now: btn.getAttribute(r.attributeName), mode: mode(), via: "button" }); });
+    if (btn) window.__modeObs.observe(btn, { attributes: true, attributeOldValue: true, attributeFilter: ["aria-label", "data-warning"] });
+    return log.length;
+  };
+  // This page's Web Locks client id: hold a uniquely named lock and find it
+  // in navigator.locks.query().
+  window.__clientId = () => new Promise((res) => {
+    if (window.__cid) return res(window.__cid);
+    const name = "safari-check-id-" + T + "-" + Math.random();
+    navigator.locks.request(name, async () => {
+      const q = await navigator.locks.query();
+      const h = q.held.find((l) => l.name === name);
+      window.__cid = h ? h.clientId : null;
+      res(window.__cid);
+    }).catch((e) => res("query failed " + e));
+  });
+  // The save lock's queue, as navigator.locks.query() reports it.
+  window.__locks = async () => {
+    const q = await navigator.locks.query();
+    const f = (l) => ({ mode: l.mode, clientId: l.clientId });
+    return { held: q.held.filter((l) => l.name === "webfrotz-saves").map(f),
+      pending: q.pending.filter((l) => l.name === "webfrotz-saves").map(f) };
+  };
   window.__wipe = () => new Promise((res) => {
     const r = indexedDB.deleteDatabase("web-frotz");
     r.onsuccess = () => res("wiped"); r.onerror = () => res("wipe failed " + r.error); r.onblocked = () => res("wipe blocked");
@@ -157,7 +205,7 @@ const PRE = String.raw`(function () {
     for (;;) {
       const t = text();
       const done = t.length > len && />\s*$/.test(t);
-      if (done && t === last) { if (Date.now() - since >= 300) return { ok: true, tail: t.slice(Math.max(len - 40, 0)).slice(-1500) }; }
+      if (done && t === last) { if (Date.now() - since >= 300) return { ok: true, tail: t.slice(Math.max(len - 40, 0)).slice(-1500), reply: t.slice(len).slice(-4000) }; }
       else { last = t; since = Date.now(); }
       if (Date.now() > end) return { ok: false, tail: t.slice(-800) };
       await sleep(50);
@@ -193,6 +241,13 @@ const PRE = String.raw`(function () {
         note: (document.getElementById("import-note") || {}).innerText || "" };
       d.close();
       return r;
+    },
+    // A save this tab holds itself: dirty (not known to be stored) and its
+    // size in MEMFS (null when there is no such file). Z-code page only.
+    localSave(name) {
+      let size = null;
+      try { size = Module.FS.stat("/saves/" + name).size; } catch (e) {}
+      return { dirty: saves.isDirty(name), size };
     },
     timing() {
       const res = performance.getEntriesByType("resource")
@@ -377,10 +432,21 @@ function screenLocked() {
     return /<key>CGSSessionScreenIsLocked<\/key>\s*<true\/>/.test(out);
   } catch (e) { return null; }
 }
-function abort(msg, partial) {
+// Stop now (exit 2), saying why and which checks did not run. Once the
+// checks have started, the report is written too, marked incomplete.
+let aborting = false;
+function abort(msg) {
+  if (aborting) return new Promise(() => {});
+  aborting = true;
   console.error(`safari-check: ABORTED: ${msg}`);
-  console.error(partial ? "The checks run so far are in bench/last-safari-check.md." :
-    "Nothing was checked; bench/last-safari-check.md is unchanged.");
+  const unrun = unrunChecks();
+  console.error(`safari-check: not run or not finished: ${unrun.length ? unrun.join(", ") : "none"}`);
+  if (runInfo.startedAt) {
+    try { writeReport(msg); } catch (e) { console.error(`safari-check: could not write the report: ${e.message}`); }
+    console.error("The checks run so far are in bench/last-safari-check.md, marked INCOMPLETE.");
+  } else {
+    console.error("Nothing was checked; bench/last-safari-check.md is unchanged.");
+  }
   closeOurWindows().finally(() => process.exit(2));
   return new Promise(() => {}); // `await abort(...)` stops the caller here
 }
@@ -388,6 +454,14 @@ function abort(msg, partial) {
 // ---- checks ----
 
 const results = []; // { group, name, status, obs }
+// Every check group a release needs, in order; "timings" is checked after
+// the others, from the timings they recorded. A group counts as run only if
+// it finished without throwing.
+const GROUPS = ["zcode", "glulx", "tads2", "tads3", "persistence", "timings"];
+const selected = () => GROUPS.filter((g) => !ONLY || ONLY.includes(g) || (g === "timings" && ONLY.some((o) => TIMED[o])));
+const finished = new Set();
+const runInfo = { ua: null, startedAt: null };
+const unrunChecks = () => selected().filter((g) => !finished.has(g)).concat(ONLY ? GROUPS.filter((g) => !selected().includes(g)).map((g) => `${g} (left out by --only)`) : []);
 let current = "";
 function rec(name, status, obs) {
   results.push({ group: current, name, status, obs });
@@ -395,7 +469,6 @@ function rec(name, status, obs) {
 }
 const pass = (n, o) => rec(n, "PASS", o);
 const fail = (n, o) => rec(n, "FAIL", o);
-const skip = (n, o) => rec(n, "SKIP", o);
 const clip = (s, n = 160) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().slice(-n);
 const timings = []; // { interp, story, t }
 const cmd = (tab, line, ms = 20000) => run(tab, `__T.cmd(${JSON.stringify(line)}, ${ms})`, ms + 5000);
@@ -410,23 +483,77 @@ async function start(tab, stem, interp, story) {
 const status = (tab) => run(tab, "__T.status()");
 const idb = (tab) => run(tab, "__idb()");
 
+// The game state, observed: the whole status line (not clipped) and the
+// replies to LOOK and INVENTORY. Taking it costs turns, so it is taken at
+// the same point each time: right after SAVE, right after the reload, and
+// right after RESTORE; the status line is read before the probes.
+const PROBES = ["look", "inventory"];
+const norm = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+async function observe(tab) {
+  const st = norm(await status(tab));
+  const replies = [];
+  let ok = true;
+  for (const c of PROBES) {
+    const t = await cmd(tab, c);
+    ok = ok && t.ok;
+    replies.push(norm(t.ok ? t.reply : `(no prompt) ${t.tail}`));
+  }
+  return { ok, st, replies, key: JSON.stringify([st, replies]) };
+}
+const firstDiff = (a, b) => {
+  for (let i = 0; i < Math.max(a.replies.length, b.replies.length); i++)
+    if (a.replies[i] !== b.replies[i]) return `${PROBES[i]}: "${clip(a.replies[i], 70)}" vs "${clip(b.replies[i], 70)}"`;
+  return a.st !== b.st ? `status "${clip(a.st, 70)}" vs "${clip(b.st, 70)}"` : "none";
+};
+
+// SAVE, reload, RESTORE. The restore check passes only if the state after
+// RESTORE equals the state after SAVE (status line and probe replies), and
+// that state differs from the restarted story's, so equality shows that
+// RESTORE brought the save back and not that nothing changed.
 async function saveReloadRestore(tab, saveName, savedRe, restoredRe) {
   const s = await cmd(tab, "save");
-  const st1 = clip(await status(tab), 80);
   const ok1 = s.ok && savedRe.test(s.tail);
   const db1 = await idb(tab);
   const stored = db1[saveName] && !db1[saveName].deleted;
   (ok1 && stored ? pass : fail)("save", `reply "${clip(s.tail, 60)}"; IndexedDB ${saveName}: ${JSON.stringify(db1[saveName] || null)}`);
+  const o1 = await observe(tab);
   await reload(tab);
   const r0 = await run(tab, "__T.waitReady(60000)", 65000);
-  const st0 = clip(await status(tab), 80);
-  (r0.ok ? pass : fail)("reload", r0.ok ? `story restarted; status "${st0}"` : `no prompt after reload: "${clip(r0.tail)}"`);
+  (r0.ok ? pass : fail)("reload", r0.ok ? `story restarted; status "${clip(await status(tab), 80)}"` : `no prompt after reload: "${clip(r0.tail)}"`);
+  const o0 = await observe(tab);
   const r = await cmd(tab, "restore");
-  const st2 = clip(await status(tab), 80);
-  const same = st2 === st1;
-  (r.ok && restoredRe.test(r.tail) ? pass : fail)("restore",
-    `reply "${clip(r.tail, 60)}"; status after save "${st1}", after restore "${st2}"${same ? " (same)" : " (DIFFERENT)"}`);
-  return { st1, st2 };
+  const ok2 = r.ok && restoredRe.test(r.tail);
+  const o2 = await observe(tab);
+  const same = o1.ok && o2.ok && o2.key === o1.key;
+  const distinct = o0.key !== o1.key;
+  (ok2 && same && distinct ? pass : fail)("restore",
+    `reply "${clip(r.tail, 60)}"; state after RESTORE ${same ? "equals" : "DIFFERS from"} the state after SAVE` +
+    `${same ? "" : ` (first difference ${firstDiff(o1, o2)})`}; saved state ${distinct ? "differs from" : "is INDISTINGUISHABLE from"} the restarted story` +
+    `; status after save "${clip(o1.st, 80)}", after restore "${clip(o2.st, 80)}"; probes: ${PROBES.join(", ")}`);
+  return { o1, o2 };
+}
+
+// The interpreter each group times, and the columns every timing must have.
+const TIMED = { zcode: "Z-code", glulx: "Glulx", tads2: "TADS 2", tads3: "TADS 3" };
+const ENGINE = { "Z-code": "frotz", Glulx: "git", "TADS 2": "tads2", "TADS 3": "tads3" };
+function timingCells(interp, t) {
+  const res = (re) => { const e = t.resources.find((x) => re.test(x.name)); return e ? `${e.end} (${Math.round(e.size / 1024)} KB)` : null; };
+  const k = ENGINE[interp];
+  return { js: res(new RegExp(`^${k}\\..*\\.js$`)), wasm: res(new RegExp(`^${k}\\..*\\.wasm$`)),
+    wasmReady: t.wasmReady, firstText: t.firstText, inputReady: t.inputReady };
+}
+// Each selected interpreter must have a complete timing row.
+function checkTimings() {
+  current = "Startup timings";
+  for (const [g, interp] of Object.entries(TIMED)) {
+    if (!selected().includes(g)) continue;
+    const row = timings.find((x) => x.interp === interp);
+    if (!row) { fail(interp, "no timing recorded (the story never started)"); continue; }
+    const c = timingCells(interp, row.t);
+    const missing = Object.keys(c).filter((k) => c[k] == null);
+    (missing.length ? fail : pass)(interp, missing.length ? `missing: ${missing.join(", ")}` :
+      `js ${c.js}, wasm ${c.wasm}, instantiated ${c.wasmReady}, first text ${c.firstText}, input ${c.inputReady} ms`);
+  }
 }
 
 const CHECKS = {
@@ -447,8 +574,8 @@ const CHECKS = {
     let r = await start("A", "glulxercise", "Glulx", "Glulxercise");
     (r.ok && /glulxercise/i.test(r.tail) ? pass : fail)("start (Glulxercise)", `"${clip(r.tail, 100)}"`);
     if (!hasStory("inputeventtest.ulx")) {
-      skip("char input", "bench/local/inputeventtest.ulx is missing (erkyrath/glk-dev, not shipped)");
-      skip("timer", "same: needs bench/local/inputeventtest.ulx");
+      fail("char input", "not run: bench/local/inputeventtest.ulx is missing (erkyrath/glk-dev, not shipped; a required fixture)");
+      fail("timer", "not run: needs bench/local/inputeventtest.ulx");
     } else {
       r = await start("A", "inputeventtest", null, null);
       await cmd("A", "get char");
@@ -462,7 +589,7 @@ const CHECKS = {
       const dt = Date.now() - t0;
       (/timer event/.test(t.tail) && /Done/.test(t.tail) ? pass : fail)("timer", `"${clip(t.tail, 80)}" after ${dt} ms (game waits 2 s)`);
     }
-    if (!hasStory("Alabaster.gblorb")) return skip("save/reload/restore", "git/test/Alabaster.gblorb missing");
+    if (!hasStory("Alabaster.gblorb")) return fail("save/reload/restore", "not run: git/test/Alabaster.gblorb is missing (a required fixture)");
     current = "Glulx (Alabaster)";
     r = await start("A", "Alabaster", null, null);
     if (!r.ok) return fail("start", `no prompt: "${clip(r.tail)}"`);
@@ -491,11 +618,20 @@ const CHECKS = {
     const mB = await run("B", "__T.mode()");
     const notOwner = await run("B", "__T.text().includes(WebFrotzSaves.NOT_OWNER)");
     (mB === "reader" && notOwner ? pass : fail)("tab B is session-only", `B mode ${mB}; NOT_OWNER notice ${notOwner ? "shown" : "missing"}`);
+    // B's SAVE must succeed in the game, be held in B (MEMFS, dirty), say
+    // it is session-only, and leave the stored record (meta and bytes) as
+    // it was.
     const before = await idb("B");
     const sB = await cmd("B", "save");
     const after = await idb("B");
+    const localB = await run("B", `__T.localSave("Balances.sav")`);
+    const savedB = sB.ok && /Ok\./.test(sB.reply);
+    const sessionB = sB.ok && sB.reply.includes(await run("B", "WebFrotzSaves.NOT_OWNER"));
     const unchanged = JSON.stringify(before["Balances.sav"] || null) === JSON.stringify(after["Balances.sav"] || null);
-    (unchanged ? pass : fail)("B's save stays in the tab", `reply "${clip(sB.tail, 80)}"; stored Balances.sav ${JSON.stringify(after["Balances.sav"] || null)}${unchanged ? " (unchanged)" : " (CHANGED)"}`);
+    (savedB && localB.dirty && localB.size > 0 && sessionB && unchanged ? pass : fail)("B's save stays in the tab",
+      `reply "${clip(sB.tail, 80)}" (${savedB ? "game saved" : "NO SUCCESS REPLY"}); in tab: ${localB.size == null ? "NO FILE" : `${localB.size} bytes`}, ` +
+      `${localB.dirty ? "not in storage" : "NOT MARKED LOCAL"}; NOT_OWNER on the save ${sessionB ? "shown" : "MISSING"}; ` +
+      `stored Balances.sav ${JSON.stringify(after["Balances.sav"] || null)}${unchanged ? " (unchanged)" : " (CHANGED)"}`);
     // Takeover: A leaves, B gets the lock.
     await go("A", "/__blank.html?t=A");
     let mB2 = null;
@@ -510,36 +646,85 @@ const CHECKS = {
 
     // Queued-grant steal: B (writer) leaves; A, now a reader with its
     // IndexedDB opens gated, is granted the lock mid-snapshot; B's page
-    // steals it. A must stay session-only and never become the writer.
+    // steals it. A must stay session-only and never become the writer: its
+    // mode is logged from before the grant (every change, not samples), the
+    // lock queue is read from navigator.locks.query() with each page's
+    // client id, and A's SAVE after the steal must leave storage alone.
     current = "Persistence (queued-grant steal)";
     r = await start("A", "Balances", null, null);
     const mA2 = await run("A", "__T.mode()");
     if (mA2 !== "reader") return fail("setup", `A should be a reader behind B, is ${mA2}`);
+    const cidA = await run("A", "__clientId()");
+    const cidB = await run("B", "__clientId()");
+    const q0 = await run("A", "__locks()");
+    const who = (c) => c === cidA ? "A" : c === cidB ? "B" : `other(${String(c).slice(0, 8)})`;
+    const qs = (q) => `held [${q.held.map((l) => who(l.clientId)).join(", ")}], pending [${q.pending.map((l) => who(l.clientId)).join(", ")}]`;
+    const queueOk = cidA && cidB && cidA !== cidB && q0.held.length === 1 && q0.held[0].clientId === cidB &&
+      q0.pending.length === 1 && q0.pending[0].clientId === cidA;
+    (queueOk ? pass : fail)("A waits in the lock queue", `client ids ${cidA ? "A ok" : "A MISSING"}, ${cidB ? "B ok" : "B MISSING"}; ${qs(q0)}`);
+    await run("A", "__watchMode()");
     await run("A", "__gateOpens()");
     await go("B", "/__blank.html?t=B");
+    const cidB2 = await run("B", "__clientId()"); // B's new page
+    const who2 = (c) => c === cidB2 ? "B" : who(c);
+    const qs2 = (q) => `held [${q.held.map((l) => who2(l.clientId)).join(", ")}], pending [${q.pending.map((l) => who2(l.clientId)).join(", ")}]`;
     let gatedN = 0;
     for (let i = 0; i < 40 && !gatedN; i++) { await new Promise((z) => setTimeout(z, 250)); gatedN = await run("A", "window.__gatedCount || 0"); }
     if (!gatedN) { await run("A", "__openOpens()"); return fail("grant reaches A", `A's snapshot never opened IndexedDB (mode ${await run("A", "__T.mode()")})`); }
-    pass("grant reaches A", `A's snapshot is held at ${gatedN} gated IndexedDB open(s); mode ${await run("A", "__T.mode()")}`);
+    const q1 = await run("A", "__locks()");
+    const granted = q1.held.length === 1 && q1.held[0].clientId === cidA && !q1.pending.some((l) => l.clientId === cidA);
+    (granted ? pass : fail)("grant reaches A", `A's snapshot is held at ${gatedN} gated IndexedDB open(s); mode ${await run("A", "__T.mode()")}; ${qs2(q1)}`);
     const st = await run("B", "__T.steal()");
     await new Promise((z) => setTimeout(z, 500));
     await run("A", "__openOpens()");
     await new Promise((z) => setTimeout(z, 2000));
+    const q2 = await run("A", "__locks()");
     const mA3 = await run("A", "__T.mode()");
-    const lost = await run("A", "__T.text().includes(WebFrotzSaves.LOST_OWNER)");
+    // The mode does not change (reader throughout), so the page prints no
+    // notice; the session's own notice is what changes.
+    const lost = await run("A", "saves.notice() === WebFrotzSaves.LOST_OWNER");
     const now = await run("A", "__T.text().includes(WebFrotzSaves.NOW_OWNER)");
-    (st === "stolen" && mA3 === "reader" && lost && !now ? pass : fail)("stolen grant revokes A",
-      `steal: ${st}; A mode ${mA3}; LOST_OWNER ${lost ? "shown" : "missing"}; NOW_OWNER ${now ? "SHOWN" : "not shown"}`);
+    const thiefHolds = q2.held.length === 1 && q2.held[0].clientId === cidB2;
+    const aQueued2 = q2.held.concat(q2.pending).some((l) => l.clientId === cidA);
+    (st === "stolen" && mA3 === "reader" && lost && !now && thiefHolds && !aQueued2 ? pass : fail)("stolen grant revokes A",
+      `steal: ${st}; A mode ${mA3}; A's notice ${lost ? "LOST_OWNER" : "NOT LOST_OWNER"}; NOW_OWNER ${now ? "SHOWN" : "not shown"}; ${qs2(q2)}`);
+    // A's follow-up SAVE, while B holds the stolen lock: the game saves,
+    // A keeps it (session-only, LOST_OWNER), storage is unchanged.
+    const before2 = await idb("A");
+    const sA = await cmd("A", "save");
+    const after2 = await idb("A");
+    const localA = await run("A", `__T.localSave("Balances.sav")`);
+    const savedA = sA.ok && /Ok\./.test(sA.reply);
+    const sessionA = sA.ok && sA.reply.includes(await run("A", "WebFrotzSaves.LOST_OWNER"));
+    const unchanged2 = JSON.stringify(before2["Balances.sav"] || null) === JSON.stringify(after2["Balances.sav"] || null);
+    (savedA && localA.dirty && localA.size > 0 && sessionA && unchanged2 ? pass : fail)("A's save after the steal stays in the tab",
+      `reply "${clip(sA.tail, 80)}" (${savedA ? "game saved" : "NO SUCCESS REPLY"}); in tab: ${localA.size == null ? "NO FILE" : `${localA.size} bytes`}, ` +
+      `${localA.dirty ? "not in storage" : "NOT MARKED LOCAL"}; LOST_OWNER on the save ${sessionA ? "shown" : "MISSING"}; ` +
+      `stored Balances.sav ${JSON.stringify(after2["Balances.sav"] || null)}${unchanged2 ? " (unchanged)" : " (CHANGED)"}`);
     await run("B", "__T.unsteal()");
     await new Promise((z) => setTimeout(z, 2000));
+    const q3 = await run("A", "__locks()");
     const mA4 = await run("A", "__T.mode()");
-    (mA4 === "reader" ? pass : fail)("A does not queue again", `2 s after the thief let go, A mode ${mA4}`);
+    const after3 = await idb("A");
+    const log = await run("A", "window.__modeLog || []");
+    // Any mode but reader, or the Saves button's label ever being other
+    // than the reader's (a record's oldValue is the label before each set),
+    // means A left session-only at some point.
+    const modes = log.filter((e) => e.mode).map((e) => e.mode).filter((m, i, a) => i === 0 || m !== a[i - 1]);
+    const btn = log.filter((e) => e.via === "button");
+    const READER_LABEL = "Saves: another tab owns browser storage";
+    const everWriter = modes.some((m) => m !== "reader") || btn.some((e) => e.attr === "aria-label" && e.old !== READER_LABEL);
+    const aQueued3 = q3.held.concat(q3.pending).some((l) => l.clientId === cidA);
+    const unchanged3 = JSON.stringify(before2["Balances.sav"] || null) === JSON.stringify(after3["Balances.sav"] || null);
+    (mA4 === "reader" && !everWriter && !aQueued3 && unchanged3 ? pass : fail)("A never writes and does not queue again",
+      `2 s after the thief let go: A mode ${mA4}; ${qs2(q3)}; A's modes from before the grant: ${modes.join(" -> ") || "?"} ` +
+      `(${log.length} log entries, ${btn.length} Saves-button changes${everWriter ? ", LEFT SESSION-ONLY" : ""}); stored Balances.sav ${unchanged3 ? "unchanged" : "CHANGED"}`);
   },
 };
 
 async function tads(name, stem, file, walk, savedRe, restoredRe) {
   current = name;
-  if (!hasStory(file)) return skip("all", `${file} missing`);
+  if (!hasStory(file)) return fail("all", `not run: ${file} is missing (a required fixture)`);
   const r = await start("A", stem, name, file);
   if (!r.ok) return fail("start", `no prompt: "${clip(r.tail)}"`);
   pass("start", `"${clip(r.tail, 100)}"`);
@@ -565,16 +750,31 @@ function gitHead() {
 function gitDirty() {
   try { return execFileSync("git", ["-C", REPO, "status", "--porcelain", "--", "web"], { encoding: "utf8" }).trim() !== ""; } catch (e) { return false; }
 }
-function writeReport(ua, startedAt) {
+// The verdict: PASS only when every required check group ran to the end
+// and nothing failed. Returns { pass, text }.
+function verdict(aborted) {
+  const failed = results.filter((r) => r.status === "FAIL").length;
+  const unrun = unrunChecks();
+  const why = [];
+  if (aborted) why.push(`aborted: ${aborted}`);
+  if (failed) why.push(`${failed} check${failed === 1 ? "" : "s"} failed`);
+  if (unrun.length) why.push(`not run or not finished: ${unrun.join(", ")}`);
+  if (!why.length) return { pass: true, text: "PASS (every required check ran and passed)" };
+  return { pass: false, text: `${aborted || unrun.length ? "INCOMPLETE, not release evidence" : "FAIL"}: ${why.join("; ")}` };
+}
+function writeReport(aborted) {
+  const { ua, startedAt } = runInfo;
   const n = (s) => results.filter((r) => r.status === s).length;
   const esc = (s) => String(s).replace(/\|/g, "\\|");
+  const v = verdict(aborted);
   const out = [];
   out.push("# Last Safari check", "");
+  out.push(`- **Verdict:** ${v.pass ? "**PASS**" : "**NOT PASSED**"}: ${esc(v.text)}`);
   out.push(`- **When:** ${startedAt.toISOString()}`);
   out.push(`- **Commit:** ${gitHead()}${gitDirty() ? " (web/ had uncommitted changes)" : ""}`);
   out.push(`- **Safari:** ${ua || "?"}`);
   out.push(`- **Served:** \`dist-site/\` on ${ORIGIN}, with the test stories: ${EXTRA.map((s) => s.file).join(", ")}`);
-  out.push(`- **Result:** ${n("PASS")} PASS, ${n("FAIL")} FAIL, ${n("SKIP")} SKIP`, "");
+  out.push(`- **Checks:** ${n("PASS")} PASS, ${n("FAIL")} FAIL`, "");
   out.push("Written by `make safari-check` (`bench/safari-check.js`); see the web README, \"Develop\".", "");
   out.push("| Check | | Observation |", "|---|---|---|");
   for (const r of results) out.push(`| ${esc(r.group)} / ${esc(r.name)} | **${r.status}** | ${esc(r.obs)} |`);
@@ -582,9 +782,9 @@ function writeReport(ua, startedAt) {
     "Milliseconds from navigation start, first start of each interpreter in this run, served from localhost with `Cache-Control: no-store` (so every asset is fetched).", "",
     "| Interpreter | Story | .js loaded | .wasm loaded | wasm instantiated | first text | ready for input |", "|---|---|---|---|---|---|---|");
   for (const { interp, story, t } of timings) {
-    const res = (re) => { const e = t.resources.find((x) => re.test(x.name)); return e ? `${e.end} (${Math.round(e.size / 1024)} KB)` : "?"; };
-    const k = { "Z-code": "frotz", Glulx: "git", "TADS 2": "tads2", "TADS 3": "tads3" }[interp];
-    out.push(`| ${interp} | ${story} | ${res(new RegExp(`^${k}\\..*\\.js$`))} | ${res(new RegExp(`^${k}\\..*\\.wasm$`))} | ${t.wasmReady ?? "?"} | ${t.firstText ?? "?"} | ${t.inputReady ?? "?"} |`);
+    const c = timingCells(interp, t);
+    const f = (x) => x == null ? "**missing**" : x;
+    out.push(`| ${interp} | ${story} | ${f(c.js)} | ${f(c.wasm)} | ${f(c.wasmReady)} | ${f(c.firstText)} | ${f(c.inputReady)} |`);
   }
   const ev = events.filter((e) => e.error || e.rejection || e.warn);
   out.push("", "## Page errors and warnings", "");
@@ -592,8 +792,9 @@ function writeReport(ua, startedAt) {
   for (const e of ev) out.push(`- tab ${e.t}: ${e.error ? "error" : e.rejection ? "unhandled rejection" : "warn"}: ${esc(clip(e.error || e.rejection || e.warn, 200))}`);
   out.push("");
   fs.writeFileSync(REPORT, out.join("\n"));
-  console.log(`\nReport: ${path.relative(process.cwd(), REPORT)} (${n("PASS")} PASS, ${n("FAIL")} FAIL, ${n("SKIP")} SKIP)`);
-  return n("FAIL");
+  console.log(`\nReport: ${path.relative(process.cwd(), REPORT)} (${n("PASS")} PASS, ${n("FAIL")} FAIL)`);
+  console.log(`safari-check: ${v.text}`);
+  return v.pass;
 }
 
 // ---- main ----
@@ -625,23 +826,27 @@ async function main() {
   if (hello.visible !== "visible") await abort(`the page reports visibilityState "${hello.visible}": the screen is locked or Safari is hidden.`);
   await run("A", "__wipe()", 10000).then((w) => console.log(`safari-check: browser storage for ${ORIGIN}: ${w}`));
 
-  const startedAt = new Date();
+  runInfo.ua = hello.ua;
+  runInfo.startedAt = new Date();
   for (const name of Object.keys(CHECKS)) {
-    if (ONLY && !ONLY.includes(name)) continue;
+    if (!selected().includes(name)) continue;
     try {
       await CHECKS[name]();
+      finished.add(name);
     } catch (e) {
-      rec("error", "FAIL", e.message);
+      rec("error", "FAIL", `stopped part way: ${e.message}`);
       if (/did not (answer|load)/.test(e.message)) {
         const v = await run("A", "__T.visible()", 5000).catch(() => "no answer");
-        if (v !== "visible" || screenLocked()) { writeReport(hello.ua, startedAt); await abort(`Safari stopped answering (page visibility: ${v}; screen ${screenLocked() ? "locked" : "unlocked"}).`, true); }
+        if (v !== "visible" || screenLocked())
+          await abort(`Safari stopped answering during ${name} (${e.message}; tab A visibility: ${v}; screen ${screenLocked() ? "locked" : "unlocked"}).`);
       }
     }
   }
-  const failed = writeReport(hello.ua, startedAt);
+  if (selected().includes("timings")) { checkTimings(); finished.add("timings"); }
+  const passed = writeReport(null);
   await closeOurWindows();
   server.close();
-  process.exit(failed ? 1 : 0);
+  process.exit(passed ? 0 : 1);
 }
 
-main().catch((e) => { console.error(e); process.exit(2); });
+main().catch((e) => abort(`internal error: ${e && e.stack || e}`));
