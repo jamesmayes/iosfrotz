@@ -8,7 +8,8 @@
 // Covered: no path hands an input method's uncommitted (preedit) text to a
 // char or line request, including a wait that starts after a timer or an
 // Arrange event ended the previous one; a line limit lowered under a pending
-// request trims the bar; a file deleted in another tab is removed from a
+// request trims the bar; cancelling a char request during a composition, or
+// a blur, leaves the next request able to take keys; a file deleted in another tab is removed from a
 // tab's clean MEMFS copy (tombstone, or no record at all), while a copy with
 // changes this tab could not store is kept and flagged. Exits 1 if any
 // check fails.
@@ -191,6 +192,39 @@ async function pageChecks() {
   form.fire("submit");
   ev = await p;
   ok(ev.type === 3 && ev.text === "ab", "the line respects the new limit");
+
+  // 5. The game cancels a char request during a composition that never
+  //    gets a compositionend: the next request must still take keys.
+  glkWeb.inputsBegin();
+  glkWeb.input(2, 2, null, 0, []);
+  p = glkWeb.wait(5);
+  input.fire("compositionstart", {});
+  input.value = "x"; // preedit
+  input.fire("input", { isComposing: true });
+  ev = await p;
+  glkWeb.cancelChar(2);
+  ok(ev.type === 1 && input.value === "", "cancelling a char request drops its preedit text");
+  glkWeb.inputsBegin();
+  glkWeb.input(2, 2, null, 0, []);
+  p = glkWeb.wait(-1);
+  input.fire("keydown", { key: "q" });
+  ev = await within(p, 20);
+  ok(ev && ev.type === 2 && ev.val1 === 0x71, "a new char request after the cancel receives keys");
+
+  // 6. A composition that never ends recovers on blur.
+  glkWeb.inputsBegin();
+  glkWeb.input(2, 2, null, 0, []);
+  p = glkWeb.wait(-1);
+  input.fire("compositionstart", {});
+  input.value = "y";
+  input.fire("input", { isComposing: true });
+  input.fire("keydown", { key: "z" });
+  ok((await within(p, 20)) === "pending", "keys are held during a composition");
+  input.fire("blur", {});
+  input.value = "";
+  input.fire("keydown", { key: "z" });
+  ev = await within(p, 20);
+  ok(ev && ev.type === 2 && ev.val1 === 0x7a, "after a blur the char request receives keys");
 }
 
 // ---- saves.js across tabs ----

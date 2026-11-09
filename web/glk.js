@@ -257,8 +257,17 @@ function inputReq(id, kind, initial, maxlen, terms) {
   }
 }
 
-// Put the target's own text in the bar: its line so far, or nothing.
+// The bar's text is being replaced or the request that owned it is gone:
+// an unfinished composition goes with it. Without this, a browser that never
+// sends compositionend would leave the next request deaf until a blur.
+function dropComposition() {
+  composing = false;
+}
+
+// Put the target's own text in the bar: its line so far, or nothing. Any
+// preedit text in the bar belonged to the old target, so it is dropped.
 function loadTarget() {
+  dropComposition();
   const r = target !== null ? requests.get(target) : null;
   input.value = r && r.kind === 1 ? r.partial : "";
   input.setSelectionRange(input.value.length, input.value.length);
@@ -375,6 +384,7 @@ function cancelLine(id) {
   if (target === id) {
     target = null;
     input.value = "";
+    dropComposition();
   }
   return t;
 }
@@ -383,7 +393,15 @@ function cancelChar(id) {
   const r = requests.get(id);
   if (!r || r.kind !== 2) return;
   requests.delete(id);
-  if (target === id) target = null;
+  if (target === id) {
+    target = null;
+    // Committed text typed ahead stays for the next request; preedit text
+    // (and the composition it belongs to) goes with this one.
+    if (composing) {
+      input.value = "";
+      dropComposition();
+    }
+  }
 }
 
 form.addEventListener("submit", (e) => {
