@@ -8,6 +8,7 @@
 
 #import "StoryMainViewController.h"
 #import "CompletionLabel.h"
+#import "FrotzKeyboardView.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -46,6 +47,7 @@ NS_ASSUME_NONNULL_BEGIN
 -(void)typeText:(NSString *)text;
 -(void)typeBackspace;
 -(void)typeReturn;
+-(void)typeSpecialKey:(FrotzKeyboardSpecialKey)key; // what the hardware arrow and escape keys do
 @end
 
 NS_ASSUME_NONNULL_END
