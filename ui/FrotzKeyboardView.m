@@ -5,7 +5,7 @@
 
 #import "FrotzKeyboardView.h"
 
-static const CGFloat kMinKeyHeight = 36, kMaxKeyHeight = 64;
+static const CGFloat kMinKeyHeight = 36, kMaxKeyHeight = 64, kMaxFillKeyHeight = 96;
 static const NSTimeInterval kRepeatDelay = 0.4, kRepeatInterval = 0.08;
 static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
 
@@ -186,6 +186,16 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
     return ceil(bezel.top + bezel.bottom + rows * keyHeight + (rows > 0 ? rows - 1 : 0) * gap);
 }
 
+-(void)setTopInset:(CGFloat)topInset {
+    _topInset = topInset;
+    [self setNeedsLayout];
+}
+
+-(void)setFillsHeight:(BOOL)fillsHeight {
+    _fillsHeight = fillsHeight;
+    [self setNeedsLayout];
+}
+
 #pragma mark Layers and shift
 
 -(void)setKeyLayer:(NSString *)layer {
@@ -235,10 +245,14 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
 -(void)layoutSubviews {
     [super layoutSubviews];
     CGRect rect = UIEdgeInsetsInsetRect(UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets), _skin.bezelInsets);
+    rect.origin.y += _topInset;
+    rect.size.height = MAX(0, rect.size.height - _topInset);
     CGFloat units = MAX(1, _layout.unitsPerRow), gap = _layout.gap;
     NSUInteger rows = MAX(1, _layout.maxRowCount);
     CGFloat unitWidth = (rect.size.width - (units - 1) * gap) / units;
     CGFloat keyHeight = (rect.size.height - (rows - 1) * gap) / rows;
+    if (_fillsHeight)
+        keyHeight = MIN(kMaxFillKeyHeight, keyHeight); // past this the keys stop looking like keys
     UIFont *font = [_skin fontForKeyHeight: keyHeight];
     BOOL chiclet = _skin.profile == FrotzKeyProfileChiclet;
 

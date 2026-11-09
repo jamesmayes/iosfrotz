@@ -23,7 +23,7 @@
 #import "FileBrowser.h"
 #import "NotesViewController.h"
 #import "FrotzPostureObserver.h"
-#import "FrotzKeyboardView.h"
+#import "FrotzKeyboardController.h"
 
 @class StoryBrowser;
 @class FrotzView;
@@ -61,7 +61,7 @@ extern StoryBrowser *theStoryBrowser;
 @interface StoryMainViewController : UIViewController <UITextViewDelegate, UITextFieldDelegate,
     TransitionViewDelegate, KeyboardOwner, FrotzSettingsStoryDelegate,
     InputHelperDelegate, UIScrollViewDelegate, RTSelected, FileSelected, TextFileBrowser,
-    LockableKeyboard, FrotzPostureObserverDelegate, FrotzKeyboardViewDelegate>
+    LockableKeyboard>
 {
     StoryView *m_storyView;
     StatusLine *m_statusLine;
@@ -120,7 +120,7 @@ extern StoryBrowser *theStoryBrowser;
     CGRect m_handledKbWillShowFrame, m_handledKbDidShowFrame; // keyboard end frames already laid out for
     FrotzPostureObserver *m_postureObserver;
     FrotzKeyboardSource m_keyboardSource;
-    FrotzKeyboardView *m_inAppKeyboard; // nil unless an in-app keyboard skin is selected
+    FrotzKeyboardController *m_keyboardController;
     NSTimeInterval m_animDuration;
     NSString *m_launchMessage;
 
