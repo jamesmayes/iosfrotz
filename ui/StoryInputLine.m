@@ -16,11 +16,7 @@
 @implementation StoryInputLine
 
 -(void)enterButtonPressed:(id)sender {
-    StoryMainViewController *storyController = (StoryMainViewController*)self.delegate;
-    if (self.text.length > 0) {
-        [self handleCompletion: @"\n"];
-        [storyController performSelector: @selector(textFieldFakeDidEndEditing:) withObject: self afterDelay: 0.02];
-    }
+    [self typeReturn];
 }
 
 -(void)clearButtonPressed:(id)sender {
@@ -433,7 +429,9 @@ const int kCompletionViewTag = 21;
     iosif_feed_input(text);
 }
 
--(BOOL)keyboardInput:(id)sender shouldInsertText:(NSString*)text isMarkedText:(BOOL)imt {
+// Everything a typed key does before it reaches the field, shared by the system keyboard
+// and typeText:.  NO means the key was consumed (paging or single-key input).
+-(BOOL)willInsertTypedText:(NSString*)text {
     if (!m_firstKeyPressed && self.text.length==0) {
         // the clearButtonMode set is done to work around a bug where the input line doesn't draw
         // properly right after an autorestore.  All it does it set the field and call setNeedsLayout,
@@ -476,7 +474,14 @@ const int kCompletionViewTag = 21;
     
     if ((ipzAllowInput & kIPZNoEcho) || cwin == 1)
         return NO;
+    return YES;
+}
 
+-(BOOL)keyboardInput:(id)sender shouldInsertText:(NSString*)text isMarkedText:(BOOL)imt {
+    if (![self willInsertTypedText: text])
+        return NO;
+
+    StoryMainViewController *storyController = (StoryMainViewController*)[self delegate];
     BOOL result = (BOOL)[super keyboardInput:sender shouldInsertText:text isMarkedText:imt];
 
     if (![storyController isCompletionEnabled])
@@ -487,6 +492,46 @@ const int kCompletionViewTag = 21;
     return result;
 }
 
+-(NSRange)selectedCharacterRange {
+    UITextRange *sel = self.selectedTextRange;
+    if (!sel)
+        return NSMakeRange(self.text.length, 0);
+    NSInteger start = [self offsetFromPosition: self.beginningOfDocument toPosition: sel.start];
+    NSInteger end = [self offsetFromPosition: self.beginningOfDocument toPosition: sel.end];
+    return NSMakeRange(start, end-start);
+}
+
+-(void)setCaretOffset:(NSUInteger)offset {
+    UITextPosition *pos = [self positionFromPosition: self.beginningOfDocument offset: offset];
+    if (pos)
+        self.selectedTextRange = [self textRangeFromPosition: pos toPosition: pos];
+}
+
+-(void)typeText:(NSString*)text {
+    if (![self willInsertTypedText: text])
+        return;
+    StoryMainViewController *storyController = (StoryMainViewController*)[self delegate];
+    // handleCompletion: expects the field as it was before the key, same as the system keyboard
+    if ([storyController isCompletionEnabled] && ![self handleCompletion: text])
+        return;
+
+    NSString *current = self.text ?: @"";
+    NSRange r = [self selectedCharacterRange];
+    NSString *newText = [current stringByReplacingCharactersInRange: r withString: text];
+    // setText: would take down the completion label we just put up
+    [self setTextKeepCompletion: newText];
+    iosif_feed_input_line(newText);
+    [self maybeShowEnterKey];
+    [self setCaretOffset: r.location + text.length];
+}
+
+-(void)typeReturn {
+    StoryMainViewController *storyController = (StoryMainViewController*)self.delegate;
+    if (self.text.length > 0) {
+        [self handleCompletion: @"\n"];
+        [storyController performSelector: @selector(textFieldFakeDidEndEditing:) withObject: self afterDelay: 0.02];
+    }
+}
 
 -(BOOL)handleCompletion:(NSString*)text {
     StoryMainViewController *storyController = (StoryMainViewController*)[self delegate];
@@ -550,7 +595,9 @@ const int kCompletionViewTag = 21;
     return result;
 }
 
--(BOOL)keyboardInputShouldDelete:(id)sender {
+// NO in single-key mode, where the backspace went to the interpreter rather than the field.
+-(BOOL)willDeleteTypedText {
+    BOOL singleKey = NO;
     if (m_completionLabel) {
         [m_completionLabel removeFromSuperview];
         [m_completionLabel setText: nil];
@@ -559,14 +606,32 @@ const int kCompletionViewTag = 21;
         if ((ipzAllowInput & kIPZNoEcho) || cwin == 1) {
             [self setText: @""];
             iosif_feed_input([NSString stringWithFormat:@"%c", ZC_BACKSPACE]);
+            singleKey = YES;
         }
         if (self.text.length == 1)
             m_lastCharDeleted = YES;
     	[self updatePosition];
     }
-  
+    return !singleKey;
+}
+
+-(BOOL)keyboardInputShouldDelete:(id)sender {
+    [self willDeleteTypedText];
     return (BOOL)[super keyboardInputShouldDelete:sender];
-    
+}
+
+-(void)typeBackspace {
+    if (![self willDeleteTypedText])
+        return;
+    NSString *current = self.text ?: @"";
+    NSRange r = [self selectedCharacterRange];
+    if (r.length == 0) {
+        if (r.location == 0)
+            return;
+        r = [current rangeOfComposedCharacterSequenceAtIndex: r.location-1];
+    }
+    [self setText: [current stringByReplacingCharactersInRange: r withString: @""]];
+    [self setCaretOffset: r.location];
 }
 
 - (NSArray *) keyCommands
