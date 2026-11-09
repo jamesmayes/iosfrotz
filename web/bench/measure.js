@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// web/bench/measure.js: ASYNCIFY vs plain build of git, same stories, same
-// commands. Each run is its own Node process (fresh JIT and heap); the two
-// builds alternate so drift hits both alike.
+// web/bench/measure.js: ASYNCIFY vs plain build of an interpreter on the
+// browser Glk, same stories, same commands. Each run is its own Node process
+// (fresh JIT and heap); the two builds alternate so drift hits both alike.
 //
-//   make bench && node bench/measure.js [--runs N]
+//   make bench && node bench/measure.js [--runs N]               (git)
+//   make bench-tads && node bench/measure.js --tads [--runs N]   (TADS 2, 3)
 //
 // Prints a Markdown table: medians over the runs of module load (compiling
 // and instantiating the wasm), startup (from before module load to the first
@@ -20,9 +21,13 @@
 // clearance"); put the IF Archive's advent.ulx at bench/local/Advent.ulx
 // (SHA-256 264236f2...387f8) to include it. Without it, only Alabaster runs.
 //
-// These figures are for git under Node. glulxe and TADS have their own
-// interpreter loops and Glk use, and need their own measurement, in Safari,
-// before their architecture is fixed.
+// --tads plays the TADS test games in bench/tads (written for this repo, see
+// README.md, "TADS") through dist/bench/tads{2,3}-{async,sync}.js, each with
+// two walkthroughs: a light one (the solution, SAVE, RESTORE, UNDO and
+// wandering), and a CPU-bound one where every other command is PONDER,
+// which makes the VM walk every object many times between two inputs.
+//
+// These figures are under Node; Safari's own have not been measured.
 
 "use strict";
 
@@ -33,11 +38,21 @@ const path = require("path");
 const web = path.join(__dirname, "..");
 const runsIdx = process.argv.indexOf("--runs");
 const RUNS = runsIdx > 0 ? parseInt(process.argv[runsIdx + 1], 10) : 7;
+const TADS = process.argv.includes("--tads");
 
-const ALL_STORIES = [
-  { name: "Advent.ulx (Inform 6)", story: "bench/local/Advent.ulx", walk: "bench/advent.walk",
+const ALL_STORIES = TADS ? [
+  { name: "errand.gam (TADS 2, adv.t)", engine: "tads2", story: "bench/tads/errand.gam",
+    walk: "bench/tads/errand.walk" },
+  { name: "errand.gam, CPU-bound (PONDER)", engine: "tads2", story: "bench/tads/errand.gam",
+    walk: "bench/tads/errand-cpu.walk" },
+  { name: "belfry.t3 (TADS 3, no library)", engine: "tads3", story: "bench/tads/belfry.t3",
+    walk: "bench/tads/belfry.walk" },
+  { name: "belfry.t3, CPU-bound (PONDER)", engine: "tads3", story: "bench/tads/belfry.t3",
+    walk: "bench/tads/belfry-cpu.walk" },
+] : [
+  { name: "Advent.ulx (Inform 6)", engine: "git", story: "bench/local/Advent.ulx", walk: "bench/advent.walk",
     optional: true },
-  { name: "Alabaster.gblorb (Inform 7)", story: "../git/test/Alabaster.gblorb",
+  { name: "Alabaster.gblorb (Inform 7)", engine: "git", story: "../git/test/Alabaster.gblorb",
     walk: "../git/test/Alabaster.walk" },
 ];
 const STORIES = ALL_STORIES.filter((st) => {
@@ -54,7 +69,7 @@ const median = (xs) => {
 
 function runOnce(build, st) {
   const out = execFileSync(process.execPath,
-    [path.join(__dirname, "run-bench.js"), build, st.story, st.walk],
+    [path.join(__dirname, "run-bench.js"), build, st.story, st.walk, "--engine", st.engine],
     { cwd: web, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   return JSON.parse(out.trim().split("\n").pop());
 }
@@ -106,8 +121,12 @@ for (const { st, sum, same, sameTurns, incomplete } of rows) {
       `${r.commandsUsed} of ${r.commandsTotal} commands`);
 }
 console.log("\n| File | Bytes |\n|---|---:|");
-for (const f of ["dist/bench/git-async.wasm", "dist/bench/git-sync.wasm", "dist/git.wasm",
-                 "dist/git.js", "dist/frotz.wasm"])
+const SIZES = TADS
+  ? ["dist/bench/tads2-async.wasm", "dist/bench/tads2-sync.wasm", "dist/tads2.wasm", "dist/tads2.js",
+     "dist/bench/tads3-async.wasm", "dist/bench/tads3-sync.wasm", "dist/tads3.wasm", "dist/tads3.js"]
+  : ["dist/bench/git-async.wasm", "dist/bench/git-sync.wasm", "dist/git.wasm", "dist/git.js",
+     "dist/frotz.wasm"];
+for (const f of SIZES)
   if (fs.existsSync(path.join(web, f))) console.log(`| ${f} | ${size(f)} |`);
 if (problems.length) {
   console.log("\n**The measurement is not valid:**");

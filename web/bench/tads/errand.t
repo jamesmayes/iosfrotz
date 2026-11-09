@@ -8,7 +8,8 @@
  *   It exercises what a TADS 2 game asks of the Glk port: the status line
  *   (room name, score and turns), a fuse and a daemon, a dark room and a
  *   light source, a locked door and its key, an openable container, a
- *   custom verb, SAVE, RESTORE and UNDO.
+ *   custom verb, SAVE, RESTORE and UNDO, and PONDER, a CPU-bound turn for
+ *   the measurement.
  *
  *   Build (the native compiler, scratch only; see the README):
  *     tadsc -i <tads/tads2> -o errand.gam errand.t
@@ -63,6 +64,35 @@ kettleFuse: function(parm)
 }
 
 /* ---- Verbs ---- */
+
+/*
+ *   PONDER: a CPU-bound turn for the measurement (bench/measure.js --tads,
+ *   errand-cpu.walk). It walks every object 300 times, as a library's scope
+ *   and disambiguation work does, so the interpreter loop does real work
+ *   between two inputs.
+ */
+ponderVerb: sysverb
+    verb = 'ponder'
+    sdesc = "ponder"
+    action(actor) =
+    {
+        local i, o, n, s;
+        n := 0;
+        for (i := 1 ; i <= 300 ; i++)
+        {
+            o := firstobj();
+            while (o <> nil)
+            {
+                if (isclass(o, item))
+                    n := n + 1;
+                o := nextobj(o);
+            }
+            s := cvtstr(i) + ':' + cvtstr(n);
+        }
+        "You think it over (<<n>>, <<s>>). ";
+        abort;
+    }
+;
 
 pourVerb: deepverb
     verb = 'pour' 'empty'

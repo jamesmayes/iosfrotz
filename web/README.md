@@ -187,7 +187,7 @@ The interpreters' own licences (Frotz, git, and the `glkios` files) apply to the
 
 Both interpreters block for input in C. With ASYNCIFY, the C function that waits awaits a JS Promise (`EM_ASYNC_JS`), the C stack is unwound so `callMain` returns to the browser, and it is rewound when the player acts. The alternative, the interpreter in a worker blocking on `Atomics.wait`, would need cross-origin isolation (COOP/COEP headers), a message protocol and a second JS context.
 
-**Decision: ASYNCIFY for every interpreter built so far.** Measured on git (below): turn time within 20% of a plain build (1.15× on *Adventure*, whose turns take 0.15 ms, so about 21 µs per turn; 0.92× on *Alabaster*, whose turns take 30–400 ms), 76 KB more wasm (`git.wasm` 267,216 vs 191,209 bytes), about 3 ms more startup, and at most 288 bytes of the 64 KB unwind buffer. That decision does not extend to glulxe or TADS without their own measurement.
+**Decision: ASYNCIFY for git (and Frotz).** Measured on git (below): turn time within 20% of a plain build (1.15× on *Adventure*, whose turns take 0.15 ms, so about 21 µs per turn; 0.92× on *Alabaster*, whose turns take 30–400 ms), 76 KB more wasm (`git.wasm` 267,216 vs 191,209 bytes), about 3 ms more startup, and at most 288 bytes of the 64 KB unwind buffer. TADS is measured below; its CPU-bound turns pay more (1.35–1.42×). glulxe still needs its own measurement.
 
 #### Measurement
 
@@ -209,7 +209,30 @@ Sizes: `git.wasm` is 267,216 bytes with ASYNCIFY and 191,209 bytes without (+40%
 - On *Adventure*, whose turns take a seventh of a millisecond, ASYNCIFY adds a fixed ~21 µs per turn for the unwind, the Promise and the rewind. That is 15% of almost nothing, and no player can see it. This ratio is the noisiest number in the table: earlier sets gave 1.19×, 1.17× and 1.14×.
 - On *Alabaster*, whose turns take 30–400 ms of interpreter work, the ASYNCIFY build was not slower. It was 5–9% faster in every set of runs, for reasons not investigated (the binary is laid out and optimised differently).
 - The costs that remain are 76 KB more wasm and about 3 ms more startup. Module load (compile and instantiate) is about 2.5 ms under Node for either build; Safari's has not been measured.
-- This holds for git only. It says nothing about glulxe or TADS (see "What glulxe and TADS need").
+- This holds for git only. TADS is measured separately (below); glulxe is not built.
+
+#### TADS 2 and TADS 3 (task 5)
+
+`make bench-tads && node bench/measure.js --tads --runs 9` measures the same way, on the two test games in `bench/tads`, each with two walkthroughs: a light one (the solution, SAVE, RESTORE, UNDO and wandering) and a CPU-bound one in which every other command is PONDER, which walks every object 300 (TADS 2) or 2,000 (TADS 3) times, the kind of work a library's scope and parsing do. Medians of 9 runs (Node 22.21.1, Apple Silicon); every run played every command, with the same transcript in both builds:
+
+| Story | Build | Turns | Module load ms | Startup ms | All turns ms | Mean turn ms | Slowest turn ms | Turn time vs plain | Asyncify buffer used |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| errand.gam (TADS 2) | (b) plain | 217 | 2.4 | 8.1 | 15.1 | 0.069 | 2.2 | 1× | – |
+| errand.gam (TADS 2) | (a) ASYNCIFY | 217 | 2.7 | 11.0 | 22.8 | 0.105 | 3.6 | 1.514× | 2572 B |
+| errand.gam, CPU-bound | (b) plain | 200 | 2.5 | 8.1 | 828.5 | 4.143 | 12.4 | 1× | – |
+| errand.gam, CPU-bound | (a) ASYNCIFY | 200 | 2.7 | 10.7 | 1119.5 | 5.598 | 14.6 | 1.351× | 556 B |
+| belfry.t3 (TADS 3) | (b) plain | 208 | 4.0 | 9.3 | 12.7 | 0.061 | 1.3 | 1× | – |
+| belfry.t3 (TADS 3) | (a) ASYNCIFY | 208 | 4.6 | 11.9 | 20.0 | 0.096 | 1.9 | 1.572× | 964 B |
+| belfry.t3, CPU-bound | (b) plain | 200 | 4.0 | 9.1 | 8709.2 | 43.546 | 96.1 | 1× | – |
+| belfry.t3, CPU-bound | (a) ASYNCIFY | 200 | 4.7 | 12.0 | 12327.9 | 61.640 | 137.7 | 1.415× | 964 B |
+
+Sizes: `tads2.wasm` 605,735 bytes with ASYNCIFY, 438,431 without (+38%); `tads3.wasm` 2,297,252 with, 1,512,166 without (+52%); `tads2.js` 76,600, `tads3.js` 97,193.
+
+- On the light walkthroughs a turn is 0.06–0.07 ms, and ASYNCIFY adds a fixed ~35 µs: 1.5× of nothing, as for *Adventure*.
+- Unlike git, CPU-bound TADS turns **are** slower under ASYNCIFY: 1.35× (TADS 2) and 1.42× (TADS 3; a PONDER turn is 87 ms plain, 123 ms under ASYNCIFY). The reason found: the wait is reached through indirect calls (TADS 3's built-in function tables, TADS 2's), so ASYNCIFY has to instrument nearly the whole VM. `-sASYNCIFY_ADVISE` lists 4,624 functions that may unwind in TADS 3 against 334 in git (counted before optimisation). `ASYNCIFY_IGNORE_INDIRECT` would drop that instrumentation, but also the path to the wait, so it cannot be used as it is; an explicit `ASYNCIFY_ONLY` list was not tried.
+- The deepest unwind is 2,572 bytes (TADS 2) and 964 bytes (TADS 3) of the 64 KB buffer.
+- Exceptions: with ASYNCIFY in both, the JS-`longjmp` TADS 3 build ran the CPU-bound walkthrough in 12.09 s against 12.30 s for wasm exceptions, and the light one in 18.5 against 20.0 ms (medians of 5), and it is 4% smaller.
+- These are Node figures; Safari's were not measured (see "TADS 2 and TADS 3").
 
 A worker with `SharedArrayBuffer` and `Atomics.wait` would also need the page to be cross-origin isolated (every response with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, which neither `python3 -m http.server` nor GitHub Pages can send), a message protocol and a second JS context. Nothing here justifies that. Revisit it only if an interpreter needs a stack deeper than ASYNCIFY can unwind cheaply, or if a large game shows a cost that this measurement did not.
 

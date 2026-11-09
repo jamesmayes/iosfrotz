@@ -14,7 +14,8 @@
  *   expressions, builds lists and strings, takes an undo savepoint and
  *   redraws the status line. It exercises SAVE (inputFile + saveGame),
  *   RESTORE (including a failed one, caught as a RuntimeError), UNDO, a
- *   dark room and a light source.
+ *   dark room and a light source. PONDER is a CPU-bound turn for the
+ *   measurement.
  *
  *   Build (the native compiler, scratch only; see the README; this tree's
  *   VM has no preinit, hence -nopre):
@@ -406,6 +407,27 @@ command(verb, noun)
         return;
     case 'save':
         doSave();
+        return;
+    case 'ponder':
+        /*
+         *   A CPU-bound turn for the measurement (bench/measure.js --tads,
+         *   belfry-cpu.walk): every object enumerated 2000 times, with
+         *   strings built and matched, as a library's scope, parsing and
+         *   message work does, so the VM does real work between inputs.
+         */
+        {
+            local n = 0;
+            local s = '';
+            for (local i = 1 ; i <= 2000 ; i++)
+            {
+                for (o = firstObj() ; o != nil ; o = nextObj(o))
+                    n++;
+                s = toString(i) + ':' + toString(n);
+                if (rexSearch('<digit>+:<digit>+', s) != nil)
+                    n++;
+            }
+            "You think it over (<<n>>, <<s>>). ";
+        }
         return;
     case 'restore':
         doRestore();
