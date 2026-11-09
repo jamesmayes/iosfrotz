@@ -52,7 +52,7 @@ make clean      # removes dist/ and dist-site/
 
 ### Before a release: `make safari-check`
 
-`make check` runs in Node; what only a real browser can show is in `make safari-check`. Run it on an unlocked Mac before any release, and commit the report it writes, `bench/last-safari-check.md`. It takes a few minutes and needs nothing from you once it starts: do not use Safari while it runs.
+`make check` runs in Node; what only a real browser can show is in `make safari-check`. Run it on an unlocked Mac before any release, and commit the report it writes, `bench/last-safari-check.md`. It takes a few minutes and needs nothing from you once it starts, but keep Safari in front and leave the Mac alone while it runs: a Safari window behind another app is hidden, and Safari then suspends its timers (task 2 round 6 lost its run that way).
 
 It builds the site (`make dist`), serves `dist-site/` on <http://127.0.0.1:8790> from `bench/safari-check.js` (Node, no packages), opens two Safari windows side by side, and runs these in order, each line PASS, FAIL or SKIP with what it saw:
 
@@ -152,6 +152,26 @@ A story that lacks any of these stays out of the catalogue.
 
 ## Status
 
+At a glance. **Works** means checked, in Safari where it says so and otherwise in Node (`make check`); **stubbed** means built but answering "not supported" (Glk gestalt false, or a no-op); **untested** means it may work but nothing has exercised it. The sections below have the detail.
+
+| | Z-code (Frotz) | Glulx (git) | TADS 2 | TADS 3 |
+|---|---|---|---|---|
+| Starts and plays | works (Safari) | works (Safari: *Glulxercise* `all`, *Alabaster*) | works (Safari: 14 commands of *Errand*) | works (Safari: 13 commands of *Belfry*) |
+| Status line / grid | works (Safari) | works (Safari) | works (Node; drawn in Safari) | works (Node; drawn in Safari) |
+| Char input | untested (timed `read_char`) | works (Safari) | untested (`os_getc`, non-ASCII keys arrive as `?`) | untested |
+| Timers / timed input | works (Node: timed `read`) | works (Safari) | untested (no TADS 2 timed line) | works (Node only) |
+| SAVE → reload → RESTORE | works (Safari) | works (Safari) | untested in Safari (Node, one instance) | untested in Safari (Node: a fresh instance on a fake IndexedDB) |
+| Two tabs: session-only, takeover | works (Safari, task 2 round 5, with a Z-code/Glulx pair) | works (same run) | shared code, untested | shared code, untested |
+| Stolen queued grant | partly in Safari (task 2 round 6: the revoke seen, not the follow-up save); Node harness | shared code | shared code | shared code |
+| Text styles / colours | works (Safari) | styles yes; style hints and colours stubbed | colours stubbed (game is told RGB works) | same as TADS 2 |
+| Graphics, sound, hyperlinks, mouse | stubbed | stubbed | stubbed | stubbed |
+| Custom banners / extra windows | n/a | works (any arrangement) | untested | untested (`bannerCreate`) |
+| iOS / iPadOS Safari | untested | untested | untested | untested |
+
+**Safari check: not run yet.** `make safari-check` (see "Before a release") was added at commit `6b79fb9` and has not been run end to end, because the screen was locked; its preflight and fail-fast paths were dry-run then. The last Safari runs of any kind were on 2026-11-08 (tasks 2–5); the TADS 3 and TADS 2 Safari runs since then were skipped for the same reason. After a run, `bench/last-safari-check.md` holds the result and commit; update this line to "last run at `<commit>`" with it.
+
+**How to deploy.** `make dist` writes `dist-site/`, the complete static site with content-hashed assets; upload that directory as it is. `make serve` serves it locally first. The headers a host must send and the GitHub Pages steps are in [`deploy/README.md`](deploy/README.md); see "Deploy" above.
+
 ### Z-code (Frotz)
 
 - Z-code v3–v8 text games (tested with `Balances.z5`, v5).
@@ -210,6 +230,8 @@ Desktop Safari windows sized to 390×844 and 430×932 (viewports 390×792 and 43
 A story is shipped only with its release, source, quoted permission and required notices recorded in [`games/LICENSES.md`](games/LICENSES.md) (the rules are under "Adding a story to the catalogue"). That holds *Balances* (the Inform example-game licence: unchanged copy, notices kept, no profit, which every host has to honour) and *Glulxercise* (public domain, stated in its source). The 20 other stories the iOS app bundles from `resources/Games` are not in the web client, because their terms have not been recorded for it; that is a hold on evidence, not a finding that their authors forbid it.
 
 **Pending: *Adventure*.** Plotkin's Glulx compile of Nelson's Inform *Advent* (`advent.ulx` from the IF Archive) is held back. The Inform licence covers copies "not substantially different from those archived by the author", and this file was archived by Plotkin, not Nelson, so whether it qualifies is unconfirmed. James decides (Ganglion need `iosfrotz-web-catalogue`; its recommended default is to ship only what is cleared). Until then the benchmark reads it from `bench/local/Advent.ulx`, ignored by git ("Measurement").
+
+**Pending: a TADS game for the catalogue.** The catalogue lists no TADS game. The test games in `bench/tads` are GPL v2 and could ship, but they are test fixtures, not games anyone would want to play; a real TADS 2 or TADS 3 game needs the same four records as any other story, and should be played through `make asyncify-check`'s build first ("TADS 2 and TADS 3"). James decides which game, if any (Ganglion need `iosfrotz-web-catalogue`, with *Adventure*).
 
 The interpreters' own licences (Frotz, git, and the `glkios` files) apply to the `.wasm` builds wherever the site is hosted.
 
