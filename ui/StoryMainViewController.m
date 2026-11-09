@@ -1773,14 +1773,17 @@ extern void gli_ios_set_focus(window_t *winNum);
 
 // Drives the keyboard's own key handling through the typing API, since the simulator can't be
 // tapped from a script. Each entry is "tap:<label>", "wait:<seconds>", "story:" (log the end of
-// the transcript), "select:last2" or "note:<text>".
+// the transcript), "select:last2", "type:<text>" (straight to typeText:, for what no Classic key types)
+// or "note:<text>".
 -(void)runKeyboardSelfTest {
     NSArray *script = @[ @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"tap:⌫", @"tap:⌫", @"tap:o", @"tap:k", @"tap:return", @"wait:2", @"story:",
                          @"tap:i", @"tap:n", @"tap:v", @"tap:space", @"tap:return", @"wait:2", @"story:",
                          @"tap:⇧", @"tap:N", @"tap:123", @"tap:1", @"tap:⌫", @"tap:⌫",
                          @"note:single-key: not exercised",
                          @"tap:ABC", @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"select:last2", @"tap:x",
-                         @"tap:⌫", @"tap:⌫", @"tap:⌫" ];
+                         @"tap:⌫", @"tap:⌫", @"tap:⌫",
+                         @"type:é", @"tap:⌫", @"type:e\u0301", @"tap:⌫",
+                         @"note:two touches at once: not scriptable, tapKeyWithLabel: presses one key at a time" ];
     [self keyboardSelfTestStep: 0 ofScript: script];
 }
 
@@ -1802,6 +1805,9 @@ extern void gli_ios_set_focus(window_t *winNum);
         UITextPosition *start = [m_inputLine positionFromPosition: end offset: -2];
         if (start)
             m_inputLine.selectedTextRange = [m_inputLine textRangeFromPosition: start toPosition: end];
+    } else if ([verb isEqualToString: @"type"]) {
+        [m_inputLine typeText: arg];
+        NSLog(@"kbselftest %d utf16 length=%lu", (int)step, (unsigned long)m_inputLine.text.length);
     } else if ([verb isEqualToString: @"wait"])
         next = [arg doubleValue];
     else if ([verb isEqualToString: @"story"]) {

@@ -8,13 +8,9 @@
 
 #import <UIKit/UIKit.h>
 #import "FrotzKeyboardLayout.h"
+#import "FrotzKeyboardTypes.h"
 
 NS_ASSUME_NONNULL_BEGIN
-
-typedef NS_ENUM(NSInteger, FrotzKeyboardSpecialKey) {
-    FrotzKeyboardSpecialKeyEscape, FrotzKeyboardSpecialKeyUp, FrotzKeyboardSpecialKeyDown,
-    FrotzKeyboardSpecialKeyLeft, FrotzKeyboardSpecialKeyRight
-};
 
 typedef NS_ENUM(NSInteger, FrotzKeyboardShiftState) {
     FrotzKeyboardShiftOff, FrotzKeyboardShiftOneShot, FrotzKeyboardShiftCapsLock

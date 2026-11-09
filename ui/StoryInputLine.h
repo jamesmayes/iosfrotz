@@ -8,7 +8,7 @@
 
 #import "StoryMainViewController.h"
 #import "CompletionLabel.h"
-#import "FrotzKeyboardView.h"
+#import "FrotzKeyboardTypes.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
