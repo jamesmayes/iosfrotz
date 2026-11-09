@@ -2,7 +2,7 @@
 
 Every story in this folder is listed here with its release, its source, the text of the permission that lets it be redistributed, and the notices that have to go with it. A story without all four is not shipped. See "Adding a story to the catalogue" in `../README.md`.
 
-The Z-code catalogue is *Balances* only, and the Glulx catalogue (`glulx-stories.json`) is *Glulxercise* only. *Adventure* (Glulx) is held back until its permission is cleared; see "Available after clearance" below. The 20 other stories that the iOS app bundles from `resources/Games` were removed from the web client, because their redistribution terms have not been recorded for it. That is a hold on evidence, not a finding that their authors forbid it.
+The catalogue (`stories.json`, one list for both interpreters) is *Balances* (Z-code) and *Glulxercise* (Glulx) only. *Adventure* (Glulx) is held back until its permission is cleared; see "Available after clearance" below. The 20 other stories that the iOS app bundles from `resources/Games` were removed from the web client, because their redistribution terms have not been recorded for it. That is a hold on evidence, not a finding that their authors forbid it.
 
 ## Balances (`Balances.z5`)
 
@@ -26,7 +26,7 @@ Inform software, its example games included, is supplied "as is" and carries no 
 
 ## Glulxercise (`glulxercise.ulx`, Glulx)
 
-The Glulx client (`../glulx.html`) catalogues this file through `glulx-stories.json`. It is Andrew Plotkin's unit test for Glulx interpreters, not a game: it offers named tests, and `all` runs every one.
+The start page (`../index.html`) catalogues this file through `stories.json`, with `"format": "glulx"`. It is Andrew Plotkin's unit test for Glulx interpreters, not a game: it offers named tests, and `all` runs every one.
 
 - **Release.** *Glulxercise*, "A Glulx interpreter unit test", Release 13 / Serial number 241202, compiled with Inform 6.43 (the banner reads "Release 13 / Serial number 241202 / Inform v6.43, compiler options S"; the same release and serial are in the file's header). SHA-256 `b732127fee4cb266a5330981c1111fdfaba237134525754e063e6dc5f449b348`, 231,680 bytes.
 - **Source.** `unittests/glulxercise.ulx` in Plotkin's [`erkyrath/glk-dev`](https://github.com/erkyrath/glk-dev) repository, at commit `a1f45c58d1b2be3555f53d293ce9ff953c59f413` (2024-12-02, "Version number."), the latest commit that touches the file. Downloaded on 2026-11-08 twice, through the GitHub API and from `raw.githubusercontent.com`; both copies were byte-identical to the file here.
@@ -36,7 +36,7 @@ The Glulx client (`../glulx.html`) catalogues this file through `glulx-stories.j
 
 ## Available after clearance
 
-These Glulx stories are not shipped in `web/`. Each needs a recorded decision before it is added to `glulx-stories.json`.
+These Glulx stories are not shipped in `web/`. Each needs a recorded decision before it is added to `stories.json`.
 
 ### Adventure (`Advent.ulx`) — condition (a) unconfirmed; James decides
 

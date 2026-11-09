@@ -1,5 +1,7 @@
 // web/glk.js: plain-DOM front end for Glulx stories (git compiled to
-// WebAssembly with the browser Glk in web/glk/glk_web.c).
+// WebAssembly with the browser Glk in web/glk/glk_web.c). main.js loads it,
+// with dist/git.js, when the first Glulx story starts; it registers with
+// web/ui.js as the "glulx" engine.
 //
 // The library owns the Glk window tree and lays it out in CSS pixels from
 // the font metrics this page measures; the page draws what it is told.
@@ -31,19 +33,17 @@
 //   setStory(stem, saveName)
 //   exit()               the game ended
 //
-// Saves use web/saves.js, the same per-file IndexedDB store as the Z-machine
-// client (database "web-frotz"). Glulx saves are named <story>.glksave.
+// Saves use web/saves.js through web/ui.js, the same per-file IndexedDB
+// store, Saves dialog and import as Z-code stories (database "web-frotz").
+// Glulx saves are named <story>.glksave.
 
 const glkRoot = document.getElementById("glk-root");
 const form = document.getElementById("command-form");
 const input = document.getElementById("command");
-const savesBtn = document.getElementById("saves-button");
 const savesDialog = document.getElementById("saves-dialog");
-const savesList = document.getElementById("saves-list");
-const importInput = document.getElementById("import-save");
-const importNote = document.getElementById("import-note");
+const UI = WebFrotzUI;
 
-const SAVE_DIR = "/saves";
+const SAVE_DIR = UI.SAVE_DIR;
 let Module = null;
 let saveName = null;  // <story>.glksave
 let storyFile = null; // recorded with each save
@@ -196,12 +196,7 @@ function mainBuffer() {
 function notice(msg) {
   const win = mainBuffer();
   if (!win) { console.warn("[glk]", msg); return; }
-  const span = document.createElement("span");
-  span.className = "notice";
-  const t = win.el.textContent;
-  span.textContent = (t && !t.endsWith("\n") ? "\n" : "") + msg + "\n";
-  win.el.appendChild(span);
-  scrollDown(win.el);
+  UI.appendNotice(win.el, msg);
 }
 
 // ---- Input ----
@@ -503,60 +498,28 @@ function pollArrange() {
   return p;
 }
 
-// ---- Saves (web/saves.js) ----
+// ---- Saves (web/saves.js, through web/ui.js) ----
 //
-// The same per-file, revisioned store and save session as the Z-machine
-// client: a write only replaces the revision this tab last saw, and a
-// conflict, failure or timeout keeps the file in memory, shows a notice and
-// badges the Saves button. Only the tab holding the Web Lock writes; the
+// The same per-file, revisioned store, save session and Saves dialog as
+// Z-code stories: a write only replaces the revision this tab last saw, and
+// a conflict, failure or timeout keeps the file in memory, shows a notice
+// and badges the Saves button. Only the tab holding the Web Lock writes; the
 // others are session-only until it closes.
 
-const MAX_SAVE_BYTES = 4 * 1024 * 1024;
-let store = null;
-try {
-  if (window.indexedDB) store = WebFrotzSaves.createSaveStore(window.indexedDB, { timeoutMs: 5000 });
-} catch (e) {
-  console.warn("[glk] IndexedDB unavailable", e);
-}
 const deleted = new Set(); // deleted by the game, but not in storage yet
 
 const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 
-const saves = WebFrotzSaves.createSaveSession({
-  store,
+const saves = UI.createSaves({
+  tag: "glk",
   fs: () => Module.FS,
-  dir: SAVE_DIR,
   story: () => storyFile,
+  saveName: () => saveName,
+  ready: () => !!Module,
+  notice,
   hidden: (n) => deleted.has(n),
-  locks: navigator.locks || null,
-  events: window,
-  onChange: savesChanged,
-  onMode: savesModeChanged,
-  log: { warn: (...a) => console.warn("[glk]", ...a) },
+  beforeImport: (n) => deleted.delete(n),
 });
-
-// Only one tab writes to browser storage (saves.js). Say so once when this
-// one cannot (because another tab owns it, or because this one lost it),
-// and again when it takes over; the dialog note and the badge keep saying
-// it meanwhile.
-function savesModeChanged(mode, previous) {
-  if (mode === "reader") notice(saves.notice());
-  else if (mode === "writer" && previous === "reader") notice(WebFrotzSaves.NOW_OWNER);
-}
-
-function savesChanged() {
-  if (saves.mode() === "reader") {
-    savesBtn.dataset.warning = "";
-    savesBtn.setAttribute("aria-label", "Saves: another tab owns browser storage");
-  } else if (saves.attention().length) {
-    savesBtn.dataset.warning = "";
-    savesBtn.setAttribute("aria-label", "Saves: a save is not in browser storage");
-  } else {
-    delete savesBtn.dataset.warning;
-    savesBtn.removeAttribute("aria-label");
-  }
-  if (savesDialog.open) renderSaves();
-}
 
 async function persistFile(path, report = notice) {
   deleted.delete(baseName(path));
@@ -584,72 +547,6 @@ async function deleteFile(path) {
   if (r.message) notice(r.message);
 }
 
-let importMessage = "";
-
-function renderSaves() {
-  WebFrotzSaves.renderSaveList(savesList, saves, (msg) => {
-    importMessage = msg;
-    renderSaves();
-  });
-  const parts = [];
-  if (importMessage) parts.push(importMessage);
-  const note = WebFrotzSaves.attentionText(saves, !!store);
-  if (note) parts.push(note);
-  if (saveName) parts.push(`Import replaces ${saveName}; then type RESTORE in the game.`);
-  importNote.textContent = parts.join(" ");
-}
-
-savesBtn.addEventListener("click", () => {
-  importMessage = "";
-  renderSaves();
-  savesDialog.showModal();
-  saves.refresh();
-});
-
-// Glulx saves are Quetzal files too: an IFF FORM of type IFZS.
-function isQuetzal(b) {
-  const tag = (i) => String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]);
-  return b.length >= 12 && tag(0) === "FORM" && tag(8) === "IFZS";
-}
-
-importInput.addEventListener("change", async () => {
-  const file = importInput.files && importInput.files[0];
-  importInput.value = "";
-  if (!file || !Module || !saveName) return;
-  if (file.size > MAX_SAVE_BYTES) {
-    importMessage = `${file.name} is too large for a save file (over 4 MB). Nothing was replaced.`;
-    return renderSaves();
-  }
-  let bytes;
-  try {
-    bytes = new Uint8Array(await file.arrayBuffer());
-  } catch (e) {
-    importMessage = `Could not read ${file.name}. Nothing was replaced.`;
-    return renderSaves();
-  }
-  if (!isQuetzal(bytes)) {
-    importMessage = `${file.name} is not a Quetzal save file. Nothing was replaced.`;
-    return renderSaves();
-  }
-  const path = `${SAVE_DIR}/${saveName}`;
-  deleted.delete(saveName);
-  let r;
-  try {
-    r = await saves.importBytes(path, bytes);
-  } catch (e) {
-    console.warn("[glk] import", e);
-    importMessage = `Could not write ${saveName}. Nothing was replaced.`;
-    return renderSaves();
-  }
-  importMessage = r.outcome === "persisted" ? `Imported ${file.name} as ${saveName}.` :
-    r.outcome === "conflict" ? `Imported ${file.name} as ${saveName} for this session only: ` +
-      "another tab saved a newer one to browser storage." :
-    r.outcome === "session" ? `Imported ${file.name} as ${saveName} for this session only: ` +
-      "another Frotz tab owns browser storage." :
-    `Imported ${file.name} as ${saveName}, for this session only.`;
-  renderSaves();
-});
-
 // ---- The bridge object ----
 
 const glkWeb = {
@@ -675,159 +572,25 @@ const glkWeb = {
   },
 };
 
-// ---- Mobile Safari: keep the input above the software keyboard ----
+// ---- Mobile Safari: re-arrange when the keyboard changes the page size ----
 
-function fitViewport() {
-  const vv = window.visualViewport;
-  if (!vv) return;
-  const root = document.documentElement.style;
-  root.setProperty("--app-height", `${vv.height}px`);
-  root.setProperty("--app-top", `${vv.offsetTop}px`);
-  if (window.innerHeight - vv.height > 120) document.body.dataset.keyboard = "";
-  else delete document.body.dataset.keyboard;
-  onResize();
-}
+UI.onViewport(onResize);
 
-if (window.visualViewport) {
-  window.visualViewport.addEventListener("resize", fitViewport);
-  window.visualViewport.addEventListener("scroll", fitViewport);
-  fitViewport();
-}
-
-// ---- Story picker ----
-//
-// games/glulx-stories.json lists the bundled Glulx stories. Picking one sets
-// #story=<name>; a story loads once per WebAssembly instance, so changing
-// story while one runs reloads the page.
-
-const pickerEl = document.getElementById("picker");
-const storyListEl = document.getElementById("story-list");
-const openInput = document.getElementById("open-story");
-const storiesBtn = document.getElementById("stories-button");
-const titleEl = document.getElementById("story-title");
-const pickerStatus = document.getElementById("picker-status");
-const APP_TITLE = "Web Glulx";
-let stories = [];
-let running = false;
-let loadToken = 0;
-
-const stem = (file) => file.replace(/\.[^.]*$/, "");
-
-function hashStory() {
-  const m = /(?:^|[#&])story=([^&]*)/i.exec(location.hash);
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[1]);
-  } catch (e) {
-    return null;
-  }
-}
-
-function findStory(id) {
-  if (!id) return null;
-  const k = id.toLowerCase();
-  return stories.find((s) => stem(s.file).toLowerCase() === k) || null;
-}
-
-function renderPicker() {
-  storyListEl.textContent = "";
-  for (const s of stories) {
-    const li = document.createElement("li");
-    const a = document.createElement("a");
-    a.href = `#story=${encodeURIComponent(stem(s.file))}`;
-    const t = document.createElement("span");
-    t.className = "story-name";
-    t.textContent = s.title;
-    const by = document.createElement("span");
-    by.className = "story-author";
-    by.textContent = s.author;
-    a.append(t, by);
-    li.appendChild(a);
-    storyListEl.appendChild(li);
-  }
-}
-
-function showPicker(message, isError) {
-  document.body.dataset.mode = "picker";
-  delete document.body.dataset.loading;
-  pickerEl.hidden = false;
-  titleEl.textContent = APP_TITLE;
-  document.title = APP_TITLE;
-  pickerStatus.textContent = message || "";
-  pickerStatus.className = isError ? "error" : "";
-}
-
-function onHashChange() {
-  if (running) return location.reload();
-  const s = findStory(hashStory());
-  if (s) loadStory(s.file, s.title, () => fetchBundled(s));
-  else showPicker();
-}
-
-async function fetchBundled(s) {
-  const resp = await fetch(`games/${encodeURIComponent(s.file)}`);
-  if (!resp.ok) throw new Error(`Could not load ${s.file}: ${resp.status}`);
-  return new Uint8Array(await resp.arrayBuffer());
-}
-
-async function loadStory(fileName, title, getBytes) {
-  if (running) return;
-  const token = ++loadToken;
-  document.body.dataset.loading = "";
-  pickerStatus.className = "";
-  pickerStatus.textContent = `Loading ${title}…`;
-  let bytes;
-  try {
-    bytes = await getBytes();
-  } catch (err) {
-    if (token === loadToken) loadFailed(err);
-    return;
-  }
-  if (token !== loadToken || running) return;
-  try {
-    await play(fileName, title, bytes);
-  } catch (err) {
-    Module = null;
-    running = false;
-    loadFailed(err);
-  }
-}
-
-function loadFailed(err) {
-  console.warn("[glk] load failed", err);
-  history.replaceState(null, "", location.pathname + location.search);
-  showPicker(String(err && err.message ? err.message : err), true);
-}
-
-openInput.addEventListener("change", () => {
-  const file = openInput.files && openInput.files[0];
-  openInput.value = "";
-  if (!file || running) return;
-  history.replaceState(null, "", location.pathname + location.search);
-  loadStory(file.name, stem(file.name), async () => new Uint8Array(await file.arrayBuffer()));
-});
-
-storiesBtn.addEventListener("click", () => {
-  if (running) location.replace(location.pathname + location.search);
-});
+// ---- Start (main.js calls this once per page) ----
 
 async function play(fileName, title, bytes) {
-  running = true;
-  pickerEl.hidden = true;
-  delete document.body.dataset.loading;
-  document.body.dataset.mode = "game";
-  titleEl.textContent = title;
-  document.title = `${title} · ${APP_TITLE}`;
   const name = fileName.replace(/[\/]/g, "_");
   try {
     Module = await createGit({
       glkWeb,
+      locateFile: UI.locateFile,
       print: (t) => console.log("[git]", t),
       printErr: (t) => console.warn("[git]", t),
     });
     Module.FS.mkdir("/games");
     Module.FS.writeFile(`/games/${name}`, bytes);
   } catch (err) {
+    Module = null;
     throw new Error(`Could not start ${title}: ${err && err.message ? err.message : err}`);
   }
   storyFile = fileName;
@@ -838,18 +601,4 @@ async function play(fileName, title, bytes) {
   input.focus({ preventScroll: true });
 }
 
-async function init() {
-  window.addEventListener("hashchange", onHashChange);
-  try {
-    const resp = await fetch("games/glulx-stories.json");
-    stories = resp.ok ? await resp.json() : [];
-  } catch (e) {
-    stories = [];
-  }
-  renderPicker();
-  const s = findStory(hashStory());
-  if (s) loadStory(s.file, s.title, () => fetchBundled(s));
-  else showPicker(stories.length ? "" : "Could not load the story list. Open a story file instead.", !stories.length);
-}
-
-init();
+UI.registerEngine("glulx", { start: play });

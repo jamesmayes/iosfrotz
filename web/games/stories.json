@@ -1,3 +1,4 @@
 [
-  { "file": "Balances.z5", "title": "Balances", "author": "Graham Nelson" }
+  { "file": "Balances.z5", "title": "Balances", "author": "Graham Nelson", "format": "zcode" },
+  { "file": "glulxercise.ulx", "title": "Glulxercise", "author": "Andrew Plotkin (a Glulx interpreter unit test)", "format": "glulx" }
 ]

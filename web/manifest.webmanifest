@@ -1,7 +1,7 @@
 {
   "name": "Web Frotz",
   "short_name": "Frotz",
-  "description": "Play Z-machine interactive fiction in the browser.",
+  "description": "Play Z-machine and Glulx interactive fiction in the browser.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

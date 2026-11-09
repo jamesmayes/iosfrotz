@@ -14,7 +14,12 @@
   <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#161617" media="(prefers-color-scheme: dark)">
   <style>
-    /* Page colours, and the Z-machine colour table (2 black, 3 red,
+    /* One page for both interpreters: body[data-format] is "zcode" (the
+       transcript and upper-window grid, app.js) or "glulx" (the Glk
+       windows, glk.js); the toolbar, picker, command bar, Saves dialog and
+       notices are shared (ui.js, main.js).
+
+       Page colours, and the Z-machine colour table (2 black, 3 red,
        4 green, 5 yellow, 6 blue, 7 magenta, 8 cyan, 9 white, 10-12 greys)
        tuned for each scheme. Colour 1 ("default") is --fg / --screen-bg. */
     :root {
@@ -66,7 +71,7 @@
     * { box-sizing: border-box; }
     html, body { margin: 0; }
     html { height: 100%; -webkit-text-size-adjust: 100%; }
-    /* The body is pinned to the visual viewport (app.js sets --app-top and
+    /* The body is pinned to the visual viewport (ui.js sets --app-top and
        --app-height from window.visualViewport), so on iOS the input stays
        docked just above the software keyboard instead of under it. */
     body {
@@ -145,8 +150,8 @@
     #saves-list li.empty { color: var(--muted); }
     .dialog-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
-    /* Storage notices in the transcript (app.js), apart from the game's text. */
-    #transcript .notice {
+    /* Storage notices in the story (ui.js), apart from the game's text. */
+    .notice {
       font: 14px/1.4 -apple-system, system-ui, sans-serif;
       color: var(--warn);
     }
@@ -175,7 +180,11 @@
     body[data-mode="picker"] #saves-button { visibility: hidden; }
     body[data-mode="picker"] #status,
     body[data-mode="picker"] #transcript,
+    body[data-mode="picker"] #glk-root,
     body[data-mode="picker"] #command-form { display: none; }
+    body:not([data-format="zcode"]) #status,
+    body:not([data-format="zcode"]) #transcript,
+    body:not([data-format="glulx"]) #glk-root { display: none; }
     #picker {
       flex: 1;
       min-height: 0;
@@ -199,6 +208,7 @@
       text-decoration: none;
     }
     #story-list a:hover .story-name { text-decoration: underline; }
+    .note a { color: inherit; }
     .story-author { color: var(--muted); font-size: 15px; }
     #picker-status:empty { display: none; }
     #picker-status { margin: 0 0 12px; }
@@ -248,6 +258,65 @@
     .s-fixed { font-family: ui-monospace, Menlo, monospace; }
     #transcript .s-fixed { font-size: 0.9em; }
     /* .s-reverse colours are set inline from the attribute (app.js). */
+
+    /* ---- Glk windows ----
+       glk_web.c lays the window tree out in px from the metrics glk.js
+       measures with .glk-probe; each leaf window is absolutely placed in
+       #glk-root. The paddings here must match GRID_PAD / BUFFER_PAD in
+       glk.js. (glk_web.c and bench/glk-check.c still call this page
+       glulx.html, its name before the two clients were merged.) */
+    #glk-root {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+      width: 100%;
+      max-width: 52rem;
+      align-self: center;
+    }
+    .glk-win { position: absolute; overflow: hidden; }
+    /* With input pending in several windows, the one the command bar serves
+       (glk.js; tap another to switch). */
+    .glk-win[data-target] { box-shadow: inset 0 0 0 2px var(--rule); }
+    .glk-buffer {
+      padding: 8px 16px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      font: 17px/1.5 Georgia, "Iowan Old Style", serif;
+    }
+    .glk-grid {
+      padding: 2px 6px;
+      white-space: pre;
+      font: 15px/1.25 ui-monospace, Menlo, monospace;
+      background: var(--chrome-bg);
+      color: var(--chrome-fg);
+    }
+    .glk-grid-row { height: 1.25em; }
+    .glk-probe {
+      position: absolute;
+      visibility: hidden;
+      white-space: pre;
+      padding: 0;
+      background: none;
+    }
+    /* The 11 Glk styles. In grids every span keeps the grid font, so columns
+       line up; glk_style_distinguish in glk_web.c reports the same groups. */
+    .gs-1 { font-style: italic; }                                  /* Emphasized */
+    .glk-buffer .gs-2 { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; } /* Preformatted */
+    .gs-3 { font-weight: bold; }                                   /* Header */
+    .glk-buffer .gs-3 { font-size: 1.2em; }
+    .gs-4 { font-weight: bold; }                                   /* Subheader */
+    .gs-5 { font-weight: bold; }                                   /* Alert */
+    .glk-buffer .gs-5 { color: var(--warn); }
+    .gs-6 { font-style: italic; }                                  /* Note */
+    .glk-buffer .gs-6 { color: var(--muted); }
+    .glk-buffer .gs-7 { padding-left: 1.5em; color: var(--muted); } /* BlockQuote */
+    .gs-8 { font-weight: bold; }                                   /* Input */
+    /* .gs-0 Normal, .gs-9 User1, .gs-10 User2: plain text */
+    .glk-grid span { font-family: inherit; font-size: inherit; }
+
     /* Full width, so its own surface covers the bar; the field lines up
        with the 48rem reading column. */
     #command-form {
@@ -272,6 +341,7 @@
       border: none;
       outline: none;
     }
+    #command-form[data-waiting="key"] #command::placeholder { color: var(--muted); }
   </style>
 </head>
 <body data-mode="picker">
@@ -286,14 +356,15 @@
     <ul id="story-list"></ul>
     <label class="file-button">Open a story file…
       <input id="open-story" type="file"
-             accept=".z3,.z4,.z5,.z7,.z8,.zblorb,.zlb,.z6">
+             accept=".z3,.z4,.z5,.z6,.z7,.z8,.zblorb,.zlb,.ulx,.gblorb,.blb">
     </label>
-    <p class="note">Your own Z-code files (.z3–.z8, .zblorb) stay on this device;
-      nothing is uploaded. V6 graphics games are not supported.</p>
-    <p class="note"><a href="glulx.html" style="color: inherit">Glulx stories (.ulx, .gblorb)</a></p>
+    <p class="note">Z-code (.z3–.z8, .zblorb) and Glulx (.ulx, .gblorb) files
+      you open stay on this device; nothing is uploaded. V6 graphics games are
+      not supported, and Glulx pictures and sound are not supported yet.</p>
   </section>
   <div id="status" role="status" hidden></div>
   <div id="transcript" aria-live="polite"></div>
+  <div id="glk-root"></div>
   <form id="command-form" autocomplete="off">
     <input id="command" type="text" autocapitalize="off" autocorrect="off"
            spellcheck="false" enterkeyhint="send" aria-label="Command">
@@ -304,7 +375,7 @@
       <ul id="saves-list"></ul>
       <div class="dialog-actions">
         <label class="file-button">Import save…
-          <input id="import-save" type="file" accept=".sav,.qzl,application/octet-stream">
+          <input id="import-save" type="file" accept=".sav,.qzl,.glksave,application/octet-stream">
         </label>
         <button value="close">Done</button>
       </div>
@@ -313,8 +384,10 @@
         them after 7 days without a visit, so export the ones you care about.</p>
     </form>
   </dialog>
-  <script src="dist/frotz.js"></script>
+  <!-- The interpreter (dist/frotz.js + app.js, or dist/git.js + glk.js) is
+       loaded by main.js when a story starts. -->
   <script src="saves.js"></script>
-  <script src="app.js"></script>
+  <script src="ui.js"></script>
+  <script src="main.js"></script>
 </body>
 </html>

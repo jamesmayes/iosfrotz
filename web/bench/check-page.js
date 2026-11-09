@@ -5,6 +5,11 @@
 //
 //   node bench/check-page.js   (part of `make check`; needs no build)
 //
+// The page is run as index.html runs it: saves.js, ui.js and main.js, which
+// fetches the catalogue, detects the story's format from its bytes and
+// loads glk.js (dist/git.js is the fake createGit below). Also covered:
+// WebFrotzUI.detectFormat on Z-code, Glulx, Blorb and other files.
+//
 // Covered: no path hands an input method's uncommitted (preedit) text to a
 // char or line request, including a wait that starts after a timer or an
 // Arrange event ended the previous one; a line limit lowered under a pending
@@ -71,6 +76,21 @@ class El {
 }
 
 let rootWidth = 800;
+// main.js loads the interpreter with <script> elements; the fake body runs
+// the front end (glk.js) in the page's context, and the fake createGit
+// stands in for dist/git.js.
+const scriptsLoaded = [];
+class Body extends El {
+  appendChild(c) {
+    if (c.tag !== "script") return super.appendChild(c);
+    scriptsLoaded.push(c.src);
+    setTimeout(() => {
+      if (!c.src.startsWith("dist/")) vm.runInContext(fs.readFileSync(path.join(WEB, c.src), "utf8"), ctx);
+      c.onload();
+    }, 0);
+    return c;
+  }
+}
 const ids = {};
 for (const id of ["glk-root", "command-form", "command", "saves-button", "saves-dialog", "saves-list",
   "import-save", "import-note", "picker", "story-list", "open-story", "stories-button", "story-title",
@@ -82,7 +102,7 @@ const document = {
   createElement: (t) => new El(t),
   createDocumentFragment: () => new El("#frag"),
   documentElement: { style: { setProperty() {} } },
-  body: new El("body"),
+  body: new Body("body"),
   title: "",
 };
 let glkWeb = null;
@@ -95,11 +115,11 @@ const ctx = {
     indexedDB: null,
     innerHeight: 600,
   },
-  location: { hash: "#story=x", pathname: "/glulx.html", search: "", reload() {}, replace() {} },
+  location: { hash: "#story=x", pathname: "/index.html", search: "", reload() {}, replace() {} },
   history: { replaceState() {} },
   fetch: async (u) => (u.endsWith(".json")
-    ? { ok: true, json: async () => [{ file: "x.ulx", title: "X", author: "A" }] }
-    : { ok: true, arrayBuffer: async () => new ArrayBuffer(8) }),
+    ? { ok: true, json: async () => [{ file: "x.ulx", title: "X", author: "A", format: "glulx" }] }
+    : { ok: true, arrayBuffer: async () => new Uint8Array([0x47, 0x6c, 0x75, 0x6c, 0, 3, 1, 3]).buffer }),
   WebFrotzSaves: Saves,
   createGit: async (opts) => {
     glkWeb = opts.glkWeb;
@@ -107,7 +127,7 @@ const ctx = {
   },
 };
 vm.createContext(ctx);
-vm.runInContext(fs.readFileSync(path.join(WEB, "glk.js"), "utf8"), ctx);
+for (const f of ["ui.js", "main.js"]) vm.runInContext(fs.readFileSync(path.join(WEB, f), "utf8"), ctx);
 
 const input = ids.command;
 const form = ids["command-form"];
@@ -118,6 +138,8 @@ const within = (p, ms) => Promise.race([p, sleep(ms).then(() => "pending")]);
 async function pageChecks() {
   for (let i = 0; i < 20 && !glkWeb; i++) await tick();
   ok(!!glkWeb, "page started a (fake) game");
+  ok(scriptsLoaded.join(" ") === "dist/git.js glk.js" && document.body.dataset.format === "glulx",
+    "a Glulx story loads git and glk.js, and only those");
   glkWeb.layout([1, 3, 0, 0, 800, 500, 2, 4, 0, 500, 800, 100], 2);
   glkWeb.metrics(); // the page records its size, for the resize check
 
@@ -225,6 +247,35 @@ async function pageChecks() {
   input.fire("keydown", { key: "z" });
   ev = await within(p, 20);
   ok(ev && ev.type === 2 && ev.val1 === 0x7a, "after a blur the char request receives keys");
+}
+
+// ---- story formats (ui.js) ----
+
+function formatChecks() {
+  const UI = require(path.join(WEB, "ui.js"));
+  const b4 = (t) => [...t].map((c) => c.charCodeAt(0));
+  const be32 = (n) => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  const chunk = (t, body) => [...b4(t), ...be32(body.length), ...body, ...(body.length & 1 ? [0] : [])];
+  const blorb = (...chunks) => {
+    const body = [...b4("IFRS"), ...chunks.flat()];
+    return Uint8Array.from([...b4("FORM"), ...be32(body.length), ...body]);
+  };
+  const fmt = (b) => UI.detectFormat(b).format || "error";
+  const balances = new Uint8Array(fs.readFileSync(path.join(WEB, "games", "Balances.z5")));
+  const glulx = new Uint8Array(fs.readFileSync(path.join(WEB, "games", "glulxercise.ulx")));
+  ok(fmt(balances) === "zcode", "Balances.z5 is Z-code");
+  ok(fmt(glulx) === "glulx", "glulxercise.ulx is Glulx");
+  const ridx = chunk("RIdx", [0, 0, 0, 1, ...b4("Exec"), 0, 0, 0, 0, 0, 0, 0, 24]);
+  ok(fmt(blorb(ridx, chunk("ZCOD", [...balances.slice(0, 101)]))) === "zcode", "a Blorb with a ZCOD chunk is Z-code");
+  ok(fmt(blorb(ridx, chunk("GLUL", [...glulx.slice(0, 64)]))) === "glulx", "a Blorb with a GLUL chunk is Glulx");
+  ok(fmt(blorb(ridx, chunk("Pict", [1, 2, 3]))) === "error", "a Blorb without a story is refused");
+  ok(fmt(Uint8Array.from([...b4("FORM"), 0, 0, 0, 4, ...b4("IFZS")])) === "error", "a Quetzal save is refused");
+  ok(fmt(new TextEncoder().encode("<!doctype html><html><body>not a story</body></html>".repeat(3))) === "error",
+    "an HTML file is refused");
+  ok(fmt(new Uint8Array(0)) === "error" && fmt(balances.slice(0, 40)) === "error", "empty and truncated files are refused");
+  const bogus = balances.slice(); bogus[0] = 9;
+  ok(fmt(bogus) === "error", "a Z-code header with version 9 is refused");
+  ok(/not a Z-code or Glulx story/.test(UI.detectFormat(new Uint8Array(100)).error), "the error says what is wrong");
 }
 
 // ---- saves.js across tabs ----
@@ -391,6 +442,7 @@ async function saveChecks() {
 }
 
 (async () => {
+  formatChecks();
   await pageChecks();
   await saveChecks();
   console.log(failed ? `${failed} of ${total} failed` : `all ${total} passed`);

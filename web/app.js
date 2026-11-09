@@ -1,4 +1,7 @@
-// web/app.js: plain-DOM front end for the WebAssembly Frotz spike.
+// web/app.js: plain-DOM front end for Z-code stories (Frotz compiled to
+// WebAssembly with the browser OS layer in web/src/web_os.c). main.js loads
+// it, with dist/frotz.js, when the first Z-code story starts; it registers
+// with web/ui.js as the "zcode" engine.
 //
 // The C side (web/src/web_os.c) calls into Module.webFrotz:
 //   output(text, attr)   append text to the main window
@@ -27,13 +30,9 @@ const transcriptEl = document.getElementById("transcript");
 const upperEl = document.getElementById("status");
 const form = document.getElementById("command-form");
 const input = document.getElementById("command");
-const savesBtn = document.getElementById("saves-button");
-const savesDialog = document.getElementById("saves-dialog");
-const savesList = document.getElementById("saves-list");
-const importInput = document.getElementById("import-save");
-const importNote = document.getElementById("import-note");
+const UI = WebFrotzUI;
 
-const SAVE_DIR = "/saves";
+const SAVE_DIR = UI.SAVE_DIR;
 let Module = null;
 let saveName = null; // the <story>.sav name the core uses for this story
 let storyFile = null; // the story's file name, recorded with each save
@@ -275,69 +274,24 @@ const webFrotz = {
   },
 };
 
-// ---- Persistent saves (web/saves.js) ----
+// ---- Persistent saves (web/saves.js, through web/ui.js) ----
 //
-// /saves is plain MEMFS. A SAVE (or an auxiliary save) writes that one file
-// to IndexedDB; a RESTORE first brings that one file in. Each stored file
-// has a revision, and a write only replaces the revision this tab last saw,
-// so a tab never overwrites another tab's newer save: it gets a conflict,
-// keeps its own save in memory, and says so. Where Web Locks exist, only
-// one tab (the first) writes at all; the others keep their saves for the
-// session and say so (saves.js has the details).
+// /saves is plain MEMFS; a SAVE (or auxiliary save) writes that one file to
+// IndexedDB and a RESTORE first brings that one file in. ui.js has the
+// Saves button, dialog and import, and the single-writer rule.
 
-const MAX_SAVE_BYTES = 4 * 1024 * 1024;
-
-let store = null;
-try {
-  if (window.indexedDB) store = WebFrotzSaves.createSaveStore(window.indexedDB, { timeoutMs: 5000 });
-} catch (e) {
-  console.warn("[frotz] IndexedDB unavailable", e);
-}
-
-const saves = WebFrotzSaves.createSaveSession({
-  store,
+const saves = UI.createSaves({
+  tag: "frotz",
   fs: () => Module.FS,
-  dir: SAVE_DIR,
   story: () => storyFile,
-  locks: navigator.locks || null,
-  events: window,
-  onChange: savesChanged,
-  onMode: savesModeChanged,
-  log: { warn: (...a) => console.warn("[frotz]", ...a) },
+  saveName: () => saveName,
+  ready: () => !!Module,
+  notice: transcriptNotice,
 });
-
-// Only one tab writes to browser storage (saves.js). Say so once when this
-// one cannot (because another tab owns it, or because this one lost it),
-// and again when it takes over; the dialog note and the badge keep saying
-// it meanwhile.
-function savesModeChanged(mode, previous) {
-  if (mode === "reader") transcriptNotice(saves.notice());
-  else if (mode === "writer" && previous === "reader") transcriptNotice(WebFrotzSaves.NOW_OWNER);
-}
-
-// The badge stays on while any save this tab made is not in storage.
-function savesChanged() {
-  if (saves.mode() === "reader") {
-    savesBtn.dataset.warning = "";
-    savesBtn.setAttribute("aria-label", "Saves: another tab owns browser storage");
-  } else if (saves.attention().length) {
-    savesBtn.dataset.warning = "";
-    savesBtn.setAttribute("aria-label", "Saves: a save is not in browser storage");
-  } else {
-    delete savesBtn.dataset.warning;
-    savesBtn.removeAttribute("aria-label");
-  }
-  if (savesDialog.open) renderSaves();
-}
 
 // A line of its own in the transcript, styled apart from the game's text.
 function transcriptNotice(msg) {
-  const text = transcriptEl.textContent;
-  const span = document.createElement("span");
-  span.className = "notice";
-  span.textContent = (text && !text.endsWith("\n") ? "\n" : "") + msg + "\n";
-  transcriptEl.appendChild(span);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  UI.appendNotice(transcriptEl, msg);
 }
 
 // Write one MEMFS file to IndexedDB. Never throws: a conflict, failure or
@@ -357,71 +311,6 @@ async function loadSave(path) {
   else if (r === "local") transcriptNotice(`Restoring this tab's own ${name}, which is not in browser storage.`);
   else if (r === "deleted") transcriptNotice(`${name} was deleted in another tab.`);
 }
-
-let importMessage = "";
-
-function renderSaves() {
-  WebFrotzSaves.renderSaveList(savesList, saves, (msg) => {
-    importMessage = msg;
-    renderSaves();
-  });
-  const parts = [];
-  if (importMessage) parts.push(importMessage);
-  const note = WebFrotzSaves.attentionText(saves, !!store);
-  if (note) parts.push(note);
-  if (saveName) parts.push(`Import replaces ${saveName}; then type RESTORE in the game.`);
-  importNote.textContent = parts.join(" ");
-}
-
-savesBtn.addEventListener("click", () => {
-  importMessage = "";
-  renderSaves();
-  savesDialog.showModal();
-  saves.refresh();
-});
-
-// A Quetzal save is an IFF FORM of type IFZS.
-function isQuetzal(b) {
-  const tag = (i) => String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]);
-  return b.length >= 12 && tag(0) === "FORM" && tag(8) === "IFZS";
-}
-
-importInput.addEventListener("change", async () => {
-  const file = importInput.files && importInput.files[0];
-  importInput.value = "";
-  if (!file || !Module || !saveName) return;
-  // Anything invalid leaves the current save as it is.
-  if (file.size > MAX_SAVE_BYTES) {
-    importMessage = `${file.name} is too large for a save file (over 4 MB). Nothing was replaced.`;
-    return renderSaves();
-  }
-  let bytes;
-  try {
-    bytes = new Uint8Array(await file.arrayBuffer());
-  } catch (e) {
-    importMessage = `Could not read ${file.name}. Nothing was replaced.`;
-    return renderSaves();
-  }
-  if (!isQuetzal(bytes)) {
-    importMessage = `${file.name} is not a Quetzal save file. Nothing was replaced.`;
-    return renderSaves();
-  }
-  let r;
-  try {
-    r = await saves.importBytes(`${SAVE_DIR}/${saveName}`, bytes);
-  } catch (e) {
-    console.warn("[frotz] import", e);
-    importMessage = `Could not write ${saveName}. Nothing was replaced.`;
-    return renderSaves();
-  }
-  importMessage = r.outcome === "persisted" ? `Imported ${file.name} as ${saveName}.` :
-    r.outcome === "conflict" ? `Imported ${file.name} as ${saveName} for this session only: ` +
-      "another tab saved a newer one to browser storage." :
-    r.outcome === "session" ? `Imported ${file.name} as ${saveName} for this session only: ` +
-      "another Frotz tab owns browser storage." :
-    `Imported ${file.name} as ${saveName}, for this session only.`;
-  renderSaves();
-});
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -446,174 +335,23 @@ input.addEventListener("keydown", (e) => {
   if (e.key.length === 1) settle(e.key.codePointAt(0));
 });
 
-// ---- Mobile Safari: keep the input above the software keyboard ----
-//
-// iOS does not shrink the layout viewport for the keyboard; it shrinks and
-// scrolls the visual viewport. Pinning the body to the visual viewport keeps
-// the input docked just above the keyboard and the transcript filling the
-// rest.
+// ---- Mobile Safari: keep the latest text in view as the keyboard moves ----
 
-function fitViewport() {
-  const vv = window.visualViewport;
-  if (!vv) return;
-  const root = document.documentElement.style;
-  root.setProperty("--app-height", `${vv.height}px`);
-  root.setProperty("--app-top", `${vv.offsetTop}px`);
-  if (window.innerHeight - vv.height > 120) document.body.dataset.keyboard = "";
-  else delete document.body.dataset.keyboard;
+UI.onViewport(() => {
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
-}
+});
 
-if (window.visualViewport) {
-  window.visualViewport.addEventListener("resize", fitViewport);
-  window.visualViewport.addEventListener("scroll", fitViewport);
-  fitViewport();
-}
-
-// ---- Story picker ----
+// ---- Start (main.js calls this once per page) ----
 //
-// The start screen lists games/stories.json. Picking one sets the URL hash
-// (#story=Balances) so a link can be shared; the hash selects the story at
-// load. A story can only be loaded once per Module, so changing story while
-// one is running reloads the page.
-
-const pickerEl = document.getElementById("picker");
-const storyListEl = document.getElementById("story-list");
-const openInput = document.getElementById("open-story");
-const storiesBtn = document.getElementById("stories-button");
-const titleEl = document.getElementById("story-title");
-const pickerStatus = document.getElementById("picker-status");
-let stories = [];
-// A story can only be loaded once per Module. `running` is set when play()
-// starts creating one; from then on, picking another story reloads the
-// page. Before that, a newer pick supersedes an older one: each load takes
-// a token, and a fetch that completes after a newer pick is dropped.
-let running = false;
-let loadToken = 0;
-
-const stem = (file) => file.replace(/\.[^.]*$/, "");
-
-// #story=<id>, the parameter name in any case. Malformed escapes mean no
-// story (the picker), never an error.
-function hashStory() {
-  const m = /(?:^|[#&])story=([^&]*)/i.exec(location.hash);
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[1]);
-  } catch (e) {
-    return null;
-  }
-}
-
-function findStory(id) {
-  if (!id) return null;
-  const k = id.toLowerCase();
-  return stories.find((s) => stem(s.file).toLowerCase() === k) || null;
-}
-
-function renderPicker() {
-  storyListEl.textContent = "";
-  for (const s of stories) {
-    const li = document.createElement("li");
-    const a = document.createElement("a");
-    a.href = `#story=${encodeURIComponent(stem(s.file))}`;
-    const t = document.createElement("span");
-    t.className = "story-name";
-    t.textContent = s.title;
-    const by = document.createElement("span");
-    by.className = "story-author";
-    by.textContent = s.author;
-    a.append(t, by);
-    li.appendChild(a);
-    storyListEl.appendChild(li);
-  }
-}
-
-function showPicker(message, isError) {
-  document.body.dataset.mode = "picker";
-  delete document.body.dataset.loading;
-  pickerEl.hidden = false;
-  titleEl.textContent = "Web Frotz";
-  document.title = "Web Frotz";
-  pickerStatus.textContent = message || "";
-  pickerStatus.className = isError ? "error" : "";
-}
-
-function onHashChange() {
-  if (running) return location.reload();
-  const s = findStory(hashStory());
-  if (s) loadStory(s.file, s.title, () => fetchBundled(s));
-  else showPicker();
-}
-
-async function fetchBundled(s) {
-  const resp = await fetch(`games/${encodeURIComponent(s.file)}`);
-  if (!resp.ok) throw new Error(`Could not load ${s.file}: ${resp.status}`);
-  return new Uint8Array(await resp.arrayBuffer());
-}
-
-// Claims the loading state before the first await. Failures put the picker
-// back with the error shown.
-async function loadStory(fileName, title, getBytes) {
-  if (running) return;
-  const token = ++loadToken;
-  document.body.dataset.loading = "";
-  pickerStatus.className = "";
-  pickerStatus.textContent = `Loading ${title}…`;
-  let bytes;
-  try {
-    bytes = await getBytes();
-  } catch (err) {
-    if (token === loadToken) loadFailed(err);
-    return;
-  }
-  if (token !== loadToken || running) return; // a later pick won
-  try {
-    await play(fileName, title, bytes);
-  } catch (err) {
-    // createFrotz or the file system failed before the game started.
-    Module = null;
-    running = false;
-    loadFailed(err);
-  }
-}
-
-function loadFailed(err) {
-  console.warn("[frotz] load failed", err);
-  // Drop the hash so picking the same story again is a new hashchange.
-  history.replaceState(null, "", location.pathname + location.search);
-  showPicker(String(err && err.message ? err.message : err), true);
-}
-
-openInput.addEventListener("change", () => {
-  const file = openInput.files && openInput.files[0];
-  openInput.value = "";
-  if (!file || running) return;
-  // A local file cannot be linked to, so drop any #story= from the URL.
-  history.replaceState(null, "", location.pathname + location.search);
-  loadStory(file.name, stem(file.name), async () => new Uint8Array(await file.arrayBuffer()));
-});
-
-storiesBtn.addEventListener("click", () => {
-  // A URL without a fragment is always a full load, which ends the game.
-  if (running) location.replace(location.pathname + location.search);
-});
-
 // The core tells the page its <story>.sav name (setSaveName), and
 // fastmem.c detects a Blorb (FORM/IFRS + ZCOD chunk) itself, so a .zblorb
 // can be written to MEMFS as is.
 async function play(fileName, title, bytes) {
-  running = true;
-  pickerEl.hidden = true;
-  delete document.body.dataset.loading;
-  document.body.dataset.mode = "game";
-  titleEl.textContent = title;
-  document.title = `${title} · Web Frotz`;
   const name = fileName.replace(/[\/]/g, "_");
-
   try {
     Module = await createFrotz({
       webFrotz,
+      locateFile: UI.locateFile,
       print: (t) => console.log("[frotz]", t),
       printErr: (t) => console.warn("[frotz]", t),
     });
@@ -621,6 +359,7 @@ async function play(fileName, title, bytes) {
     Module.FS.mkdir(SAVE_DIR);
     Module.FS.writeFile(`/games/${name}`, bytes);
   } catch (err) {
+    Module = null;
     throw new Error(`Could not start ${title}: ${err && err.message ? err.message : err}`);
   }
   // Saves are read from IndexedDB one file at a time, at RESTORE; this only
@@ -633,18 +372,4 @@ async function play(fileName, title, bytes) {
   input.focus({ preventScroll: true });
 }
 
-async function init() {
-  window.addEventListener("hashchange", onHashChange);
-  try {
-    const resp = await fetch("games/stories.json");
-    stories = resp.ok ? await resp.json() : [];
-  } catch (e) {
-    stories = [];
-  }
-  renderPicker();
-  const s = findStory(hashStory());
-  if (s) loadStory(s.file, s.title, () => fetchBundled(s));
-  else showPicker(stories.length ? "" : "Could not load the story list. Open a story file instead.", !stories.length);
-}
-
-init();
+UI.registerEngine("zcode", { start: play });
