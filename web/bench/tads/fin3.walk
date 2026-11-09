@@ -1,0 +1,25 @@
+# fin3.t: finalizers that wait. Each command drops finalizable objects and
+# makes the garbage collector run; the lines after it answer the finalizers.
+gc
+L1
+gckey
+@timer
+gcfile
+gcerr
+E1
+after
+new
+N1
+str
+S1
+list
+T1
+map
+M1
+sub
+B1
+save
+V1
+restore
+R1
+echo

@@ -33,3 +33,8 @@ CVmObj*::static_getp_*
 CVmQSort*::*
 # Hash table enumeration with a callback (Dictionary.forEachWord, ...).
 CVmHashTable::enum_entries*
+# Finalizers: the garbage collector (t3RunGC, saveGame, restoreGame, or any
+# allocation past the collector's threshold, through CVmObjTable::alloc_obj)
+# runs each finalizer through the virtual invoke_finalizer
+# (bench/tads/fin3.t).
+CVmObj*::invoke_finalizer(*)

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // web/bench/check-asyncify.js: make asyncify-check. Plays every TADS
-// walkthrough (bench/tads: the two test games, light and CPU-bound, and the
-// two stress games) on dist/bench/tads{2,3}-check.js, the ASYNCIFY_ONLY
+// walkthrough (bench/tads: the two test games, light and CPU-bound, the
+// two stress games, and fin3, whose finalizers wait) on dist/bench/tads{2,3}-check.js, the ASYNCIFY_ONLY
 // builds linked with -sASSERTIONS=2, and on the plain builds
 // dist/bench/tads{2,3}-sync.js, and checks that each plays to the end with
 // the same transcript.
@@ -25,6 +25,7 @@ const RUNS = [
   ["tads3", "belfry.t3", "belfry"],
   ["tads3", "belfry.t3", "belfry-cpu"],
   ["tads3", "stress3.t3", "stress3"],
+  ["tads3", "fin3.t3", "fin3"],
 ];
 
 function play(engine, story, walk, build, module) {

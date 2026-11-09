@@ -11,7 +11,8 @@
 #   make tads2      -> dist/tads2.js + dist/tads2.wasm (TADS 2, tads/tads2 on
 #                      the browser Glk, through tads/osglk.c and web/tads/)
 #   make tads3      -> dist/tads3.js + dist/tads3.wasm (TADS 3, tads/tads3,
-#                      C++, longjmp through JS as for TADS 2)
+#                      C++, longjmp through emscripten's JS wrappers; TADS 2
+#                      uses wasm setjmp instead)
 #   make bench-tads -> dist/bench/tads{2,3}-{async,sync}.{js,wasm}, Node
 #                      builds for bench/measure.js --tads
 #   make asyncify-lists -> regenerates tads/asyncify-tads{2,3}.txt, the
@@ -35,6 +36,16 @@
 #                      the headers deploy/README.md asks for (deploy/serve.py)
 #   make serve-dev  -> python3 -m http.server on :8000 from web/ (unhashed)
 #   make clean      -> removes dist/ and dist-site/
+#
+# Flag changes. Every link records the flags it was made with
+# (dist/obj/<output>.ldflags) and relinks when they change. Every TADS
+# object is in one compile-flag group (TADS_CFLAGS, TADS_CXXFLAGS,
+# WEB_CFLAGS, TADS2_SJLJ, TADS3_CXXFLAGS/TADS3_EH, in the combinations listed
+# under "Compile flags of the TADS objects" below) with its own stamp,
+# dist/obj/<group>.ccflags, so changing a flag rebuilds exactly the TADS
+# objects built with it. The Frotz, git and Glk objects have no compile
+# stamp: after changing CFLAGS, CORE_CFLAGS, GIT_CFLAGS or WEB_CFLAGS for
+# them, run make clean.
 
 EMCC    ?= emcc
 ROOT    := ..
@@ -164,13 +175,14 @@ EMXX ?= em++
 #
 # TADS 3 raises its errors with setjmp/longjmp (err_try, tads3/vmerr.h); it
 # throws no C++ exceptions. TADS3_EH is empty, so longjmp is emscripten's
-# default JS invoke_ wrappers, as for TADS 2. -fwasm-exceptions also works
+# default JS invoke_ wrappers (TADS 2 differs: wasm setjmp, TADS2_SJLJ, for
+# the reason given under "TADS 2"). -fwasm-exceptions also works
 # (README.md, "How TADS 3 is built") but is 4% larger, no faster, and emcc
 # warns that it does not mix with ASYNCIFY (an await inside a C++ catch
 # traps). Every TADS 3 object is compiled with TADS3_CXXFLAGS; when they
-# change (TADS3_EH=-fwasm-exceptions, an edit here), the stamp below
-# rebuilds them all. The Glk and plain C objects have no setjmp and are
-# shared with TADS 2.
+# change (TADS3_EH=-fwasm-exceptions, an edit here), the tads3 and tads3web
+# stamps below rebuild them all. The Glk and plain C objects have no setjmp
+# and are shared with TADS 2.
 TADS3_SRC := charmap md5 osifcnet rcmain resload resnoexe sha2 std_dbg std \
              tccmdutl tcerr tcerrmsg tcgen tcglob tchostsi tclibprs tcmain \
              tcprs_rt tcprs tcprsnf tcprsnl tcprsstm tcsrc tct3_d tct3 tct3nl \
@@ -206,11 +218,12 @@ TADS3_HEADERS := $(TADS_HEADERS) $(wildcard $(TADS)/tads3/*.h $(TADS)/tads3/unix
 # code, are left alone. The lists are generated, not written by hand
 # (make asyncify-lists, below), from
 #   - the wasm frames seen on the stack whenever the C code awaits, playing
-#     every TADS walkthrough, including the stress games bench/tads/stress2
-#     and stress3 (a build with --profiling-funcs, bench/run-bench.js
-#     --frames);
+#     every TADS walkthrough, including the stress games bench/tads/stress2,
+#     stress3 and fin3 (finalizers that wait; a build with --profiling-funcs,
+#     bench/run-bench.js --frames);
 #   - seeds written by hand, tads/asyncify-seeds-tads{2,3}.txt: the
-#     dispatchers (builtin tables, metaclass methods, comparators) through
+#     dispatchers (builtin tables, metaclass methods, comparators, the
+#     garbage collector's call of a finalizer) through
 #     which code the walkthroughs do not run could reach the wait;
 #   - every direct caller of those, and their callers, which emcc's
 #     ASYNCIFY_ADVISE finds (with ASYNCIFY_IGNORE_INDIRECT, so that indirect
@@ -347,29 +360,57 @@ stale_link = $(shell printf '%s\n' '$(LINK_$(1))' | cmp -s - $(OBJDIR)/$(1).ldfl
 $(foreach n,$(LINK_OUTPUTS),$(if $(call stale_link,$(n)),$(eval $(OUT_$(n)).js $(OUT_$(n)).wasm: FORCE)))
 # Recipe line: record the flags an output was just linked with.
 stamp_link = printf '%s\n' '$(LINK_$(1))' > $(OBJDIR)/$(1).ldflags
-# Compile flags of the TADS objects that depend on the longjmp mode, the
-# same way: dist/obj/tads2.ccflags and tads3.ccflags hold the flags they
-# were last built with, and every link of a TADS 2 or TADS 3 output writes
-# its own (after all its objects were compiled). If one differs, all of
-# those objects are rebuilt, so objects built for two longjmp modes are
-# never linked together: the TADS 3 objects (TADS3_EH) and the TADS 2 ones
-# in TADS2_SJLJ_OBJ. The objects both link (dist/obj/tads: the Glk OS
-# layer and web/tads/; and the four shared tads/tads2 files) have no setjmp
-# and are built with TADS_CFLAGS (and WEB_CFLAGS for web/tads/) alone;
-# dist/obj/tadsos.ccflags stamps those flags for them (and for
-# tads3_web.o, the one TADS 3 object that also gets WEB_CFLAGS), so a
-# change to TADS_CFLAGS or WEB_CFLAGS rebuilds them too.
-CC_tads2 := $(TADS_CFLAGS) $(TADS2_SJLJ)
-CC_tads3 := $(TADS3_CXXFLAGS)
-CC_tadsos := $(TADS_CFLAGS) $(WEB_CFLAGS)
-CCOBJ_tads2 := $(TADS2_SJLJ_OBJ)
-CCOBJ_tads3 := $(filter $(OBJDIR)/tads3/%,$(TADS3_OBJ))
-CCOBJ_tadsos := $(filter $(OBJDIR)/tads/%,$(TADS2_OBJ) $(TADS3_OBJ)) \
-                $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,$(TADS2_SHARED))) \
-                $(OBJDIR)/tads3/tads3_web.o
+# Compile flags of the TADS objects, the same way. Every TADS object is in
+# exactly one group below; a group's objects are compiled with the same
+# flag variables (CC_<group>) and linked by the same programs.
+# dist/obj/<group>.ccflags holds the flags the group was last built with,
+# and every link of a TADS 2 or TADS 3 output writes the stamp of each group
+# it links (TADS2_CC_GROUPS, TADS3_CC_GROUPS), after all its objects were
+# compiled. If a group's flags differ from its stamp, that group, and only
+# that group, is rebuilt. So objects built for two longjmp modes are never
+# linked together, and a change to TADS_CFLAGS, TADS_CXXFLAGS, WEB_CFLAGS,
+# TADS2_SJLJ, TADS3_EH or TADS3_CXXFLAGS rebuilds every object built with
+# it and nothing else:
+#   tads2     tads/tads2 objects only TADS 2 links    TADS_CFLAGS TADS2_SJLJ
+#   tads2cxx  tads2/osportable.cc for TADS 2          TADS_CXXFLAGS TADS2_SJLJ
+#   tads2os   t2askf.c, t2indlg.c                     TADS_CFLAGS
+#   tads2web  web/tads/tads2_web.c                    TADS_CFLAGS WEB_CFLAGS
+#   tads3     tads/tads3 (and the TADS 3 builds of
+#             osportable, vmuni_cs, t3askf, t3indlg)   TADS3_CXXFLAGS
+#   tads3web  web/tads/tads3_web.cpp                  TADS3_CXXFLAGS WEB_CFLAGS
+#   tadsos    the Glk OS layer (tads/*.c) and the
+#             four shared tads/tads2 files: both link  TADS_CFLAGS
+#   tadsweb   web/tads/tads_web.c, tads_text.c: both  TADS_CFLAGS WEB_CFLAGS
+# A group only one interpreter links is stamped only by that interpreter's
+# links: otherwise a TADS 3 link after a flag change would stamp, unbuilt,
+# objects that only TADS 2 links. Flags written into a single rule (osansi1's
+# -include, sha2's -D__GNU_LIBRARY__, tads3_web's -Wno-unused-parameter) are
+# not stamped: like any other edit to a recipe, changing them needs a clean
+# build.
+CC_tads2    := $(TADS_CFLAGS) $(TADS2_SJLJ)
+CC_tads2cxx := $(TADS_CXXFLAGS) $(TADS2_SJLJ)
+CC_tads2os  := $(TADS_CFLAGS)
+CC_tads2web := $(TADS_CFLAGS) $(WEB_CFLAGS)
+CC_tads3    := $(TADS3_CXXFLAGS)
+CC_tads3web := $(TADS3_CXXFLAGS) $(WEB_CFLAGS)
+CC_tadsos   := $(TADS_CFLAGS)
+CC_tadsweb  := $(TADS_CFLAGS) $(WEB_CFLAGS)
+CCOBJ_tads2    := $(filter-out $(OBJDIR)/tads2/osportable.o,$(TADS2_SJLJ_OBJ))
+CCOBJ_tads2cxx := $(OBJDIR)/tads2/osportable.o
+CCOBJ_tads2os  := $(OBJDIR)/tads/t2askf.o $(OBJDIR)/tads/t2indlg.o
+CCOBJ_tads2web := $(OBJDIR)/tads/tads2_web.o
+CCOBJ_tads3    := $(filter-out $(OBJDIR)/tads3/tads3_web.o,$(filter $(OBJDIR)/tads3/%,$(TADS3_OBJ)))
+CCOBJ_tads3web := $(OBJDIR)/tads3/tads3_web.o
+CCOBJ_tadsos   := $(addprefix $(OBJDIR)/tads/,$(addsuffix .o,$(TADS_OS_SRC))) \
+                  $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,$(TADS2_SHARED)))
+CCOBJ_tadsweb  := $(OBJDIR)/tads/tads_web.o $(OBJDIR)/tads/tads_text.o
+TADS2_CC_GROUPS := tads2 tads2cxx tads2os tads2web tadsos tadsweb
+TADS3_CC_GROUPS := tads3 tads3web tadsos tadsweb
 stale_cc = $(shell printf '%s\n' '$(CC_$(1))' | cmp -s - $(OBJDIR)/$(1).ccflags 2>/dev/null || echo stale)
-$(foreach n,tads2 tads3 tadsos,$(if $(call stale_cc,$(n)),$(eval $(CCOBJ_$(n)): FORCE)))
+$(foreach n,$(sort $(TADS2_CC_GROUPS) $(TADS3_CC_GROUPS)),$(if $(call stale_cc,$(n)),$(eval $(CCOBJ_$(n)): FORCE)))
 stamp_cc = printf '%s\n' '$(CC_$(1))' > $(OBJDIR)/$(1).ccflags
+# Recipe line: stamp every compile-flag group of TADS 2 ($(1) = 2) or 3.
+stamp_tads_cc = $(foreach g,$(TADS$(1)_CC_GROUPS),$(call stamp_cc,$(g)) &&) true
 FORCE:
 
 $(OBJDIR)/%.o: $(CORE)/%.c $(HEADERS) | $(OBJDIR)
@@ -475,50 +516,42 @@ $(BENCH)/glk-check%js $(BENCH)/glk-check%wasm: $(CHECK_OBJ) | $(BENCH)
 $(DIST)/tads2%js $(DIST)/tads2%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) $(TADS2_ASYNC_LIST) | $(OBJDIR)
 	$(EMXX) $(LINK_tads2) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(DIST)/tads2.js
 	$(call stamp_link,tads2)
-	$(call stamp_cc,tads2)
-	$(call stamp_cc,tadsos)
+	$(call stamp_tads_cc,2)
 
 $(BENCH)/tads2-async%js $(BENCH)/tads2-async%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) $(TADS2_ASYNC_LIST) | $(BENCH)
 	$(EMXX) $(LINK_tads2-async) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads2-async.js
 	$(call stamp_link,tads2-async)
-	$(call stamp_cc,tads2)
-	$(call stamp_cc,tadsos)
+	$(call stamp_tads_cc,2)
 
 $(BENCH)/tads2-sync%js $(BENCH)/tads2-sync%wasm: $(TADS2_OBJ) $(TADS_GLK_SYNC) | $(BENCH)
 	$(EMXX) $(LINK_tads2-sync) $(TADS2_OBJ) $(TADS_GLK_SYNC) -o $(BENCH)/tads2-sync.js
 	$(call stamp_link,tads2-sync)
-	$(call stamp_cc,tads2)
-	$(call stamp_cc,tadsos)
+	$(call stamp_tads_cc,2)
 
 $(DIST)/tads3%js $(DIST)/tads3%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) $(TADS3_ASYNC_LIST) | $(OBJDIR)
 	$(EMXX) $(LINK_tads3) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(DIST)/tads3.js
 	$(call stamp_link,tads3)
-	$(call stamp_cc,tads3)
-	$(call stamp_cc,tadsos)
+	$(call stamp_tads_cc,3)
 
 $(BENCH)/tads3-async%js $(BENCH)/tads3-async%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) $(TADS3_ASYNC_LIST) | $(BENCH)
 	$(EMXX) $(LINK_tads3-async) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads3-async.js
 	$(call stamp_link,tads3-async)
-	$(call stamp_cc,tads3)
-	$(call stamp_cc,tadsos)
+	$(call stamp_tads_cc,3)
 
 $(BENCH)/tads3-sync%js $(BENCH)/tads3-sync%wasm: $(TADS3_OBJ) $(TADS_GLK_SYNC) | $(BENCH)
 	$(EMXX) $(LINK_tads3-sync) $(TADS3_OBJ) $(TADS_GLK_SYNC) -o $(BENCH)/tads3-sync.js
 	$(call stamp_link,tads3-sync)
-	$(call stamp_cc,tads3)
-	$(call stamp_cc,tadsos)
+	$(call stamp_tads_cc,3)
 
 $(BENCH)/tads2-check%js $(BENCH)/tads2-check%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) $(TADS2_ASYNC_LIST) | $(BENCH)
 	$(EMXX) $(LINK_tads2-check) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads2-check.js
 	$(call stamp_link,tads2-check)
-	$(call stamp_cc,tads2)
-	$(call stamp_cc,tadsos)
+	$(call stamp_tads_cc,2)
 
 $(BENCH)/tads3-check%js $(BENCH)/tads3-check%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) $(TADS3_ASYNC_LIST) | $(BENCH)
 	$(EMXX) $(LINK_tads3-check) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads3-check.js
 	$(call stamp_link,tads3-check)
-	$(call stamp_cc,tads3)
-	$(call stamp_cc,tadsos)
+	$(call stamp_tads_cc,3)
 
 # make asyncify-lists: regenerate tads/asyncify-tads{2,3}.txt (see "ASYNCIFY
 # for TADS"). For each interpreter: link it with every function instrumented
@@ -530,7 +563,7 @@ $(BENCH)/tads3-check%js $(BENCH)/tads3-check%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC
 # target always redoes them. Then `git diff tads/asyncify-*.txt` shows what
 # changed, and make asyncify-check tests the result.
 TADS2_WALKS := errand.gam:errand errand.gam:errand-cpu stress2.gam:stress2
-TADS3_WALKS := belfry.t3:belfry belfry.t3:belfry-cpu stress3.t3:stress3
+TADS3_WALKS := belfry.t3:belfry belfry.t3:belfry-cpu stress3.t3:stress3 fin3.t3:fin3
 define asyncify_list
 	$(EMXX) $(TADS$(1)_FULL) --profiling-funcs $(2) -o $(BENCH)/tads$(1)-names.js
 	rm -f $(OBJDIR)/tads$(1)-frames.txt
@@ -549,9 +582,8 @@ endef
 asyncify-lists: $(TADS2_OBJ) $(TADS3_OBJ) $(TADS_GLK_ASYNC) | $(BENCH)
 	$(call asyncify_list,2,$(TADS2_OBJ) $(TADS_GLK_ASYNC))
 	$(call asyncify_list,3,$(TADS3_OBJ) $(TADS_GLK_ASYNC))
-	$(call stamp_cc,tads2)
-	$(call stamp_cc,tads3)
-	$(call stamp_cc,tadsos)
+	$(call stamp_tads_cc,2)
+	$(call stamp_tads_cc,3)
 
 asyncify-check: $(BENCH)/tads2-check.js $(BENCH)/tads2-check.wasm $(BENCH)/tads3-check.js \
                 $(BENCH)/tads3-check.wasm $(BENCH)/tads2-sync.js $(BENCH)/tads2-sync.wasm \
