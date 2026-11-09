@@ -1,0 +1,6 @@
+{ "id": "classic", "name": "Classic", "profile": "rounded",
+  "case": { "light": "#D1D5DB", "dark": "#1C1C1E" },
+  "bezel": { "top": 8, "bottom": 8, "sides": 4 },
+  "key": { "radius": 6, "light": "#FFFFFF", "dark": "#6B6B6E", "textLight": "#000000", "textDark": "#FFFFFF",
+           "font": "system", "fontSize": 22, "shadow": true, "pressedLight": "#C8CCD2", "pressedDark": "#9A9A9E" },
+  "groups": { "mod": { "light": "#ABB1BA", "dark": "#464649" }, "return": { "light": "#ABB1BA", "dark": "#464649" } } }

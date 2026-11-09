@@ -347,6 +347,9 @@
 		44EDC1032494267B0074E8B0 /* Launch Screen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 44EDC1022494267B0074E8B0 /* Launch Screen.storyboard */; };
 		44F2F5B811447AE0001AE868 /* CompletionLabel.m in Sources */ = {isa = PBXBuildFile; fileRef = 44F2F5B711447AE0001AE868 /* CompletionLabel.m */; };
 		F7A3C2E14B9D0A6E00C1D203 /* FrotzPostureObserver.m in Sources */ = {isa = PBXBuildFile; fileRef = F7A3C2E14B9D0A6E00C1D202 /* FrotzPostureObserver.m */; };
+		6504CC755AE88CA78EE858B3 /* FrotzKeyboardLayout.m in Sources */ = {isa = PBXBuildFile; fileRef = A6855C81C4EAAAABFD9F4334 /* FrotzKeyboardLayout.m */; };
+		85060105417650D969B4B2EA /* FrotzKeyboardView.m in Sources */ = {isa = PBXBuildFile; fileRef = ABB43E3E2F7B64F142B43BBB /* FrotzKeyboardView.m */; };
+		88A9FAE3C2059E8452ACF56A /* keyboards in Resources */ = {isa = PBXBuildFile; fileRef = AA42488D14CF8C9B9A9E1371 /* keyboards */; };
 		44F35FED2511B15400807420 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44F35FEC2511B15400807420 /* AVFoundation.framework */; };
 		44F35FEF2511DFF100807420 /* Speech.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44F35FEE2511DFF100807420 /* Speech.framework */; };
 		44F7B0FF1B20134A00DDD2A3 /* libtads.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4454850C1B1FBAB900E8EE7B /* libtads.a */; };
@@ -1188,6 +1191,11 @@
 		44F2F5B711447AE0001AE868 /* CompletionLabel.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = CompletionLabel.m; sourceTree = "<group>"; };
 		F7A3C2E14B9D0A6E00C1D201 /* FrotzPostureObserver.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = FrotzPostureObserver.h; sourceTree = "<group>"; };
 		F7A3C2E14B9D0A6E00C1D202 /* FrotzPostureObserver.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = FrotzPostureObserver.m; sourceTree = "<group>"; };
+		31A37B2AB4B2B8CB6FE9AE26 /* FrotzKeyboardLayout.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = FrotzKeyboardLayout.h; sourceTree = "<group>"; };
+		A6855C81C4EAAAABFD9F4334 /* FrotzKeyboardLayout.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = FrotzKeyboardLayout.m; sourceTree = "<group>"; };
+		DB1D207F27A5508E67172048 /* FrotzKeyboardView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = FrotzKeyboardView.h; sourceTree = "<group>"; };
+		ABB43E3E2F7B64F142B43BBB /* FrotzKeyboardView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = FrotzKeyboardView.m; sourceTree = "<group>"; };
+		AA42488D14CF8C9B9A9E1371 /* keyboards */ = {isa = PBXFileReference; lastKnownFileType = folder; name = keyboards; path = resources/keyboards; sourceTree = SOURCE_ROOT; };
 		44F2FABF11460EF6001AE868 /* WordSelectionProtocol.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WordSelectionProtocol.h; sourceTree = "<group>"; };
 		44F35FEC2511B15400807420 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		44F35FEE2511DFF100807420 /* Speech.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Speech.framework; path = System/Library/Frameworks/Speech.framework; sourceTree = SDKROOT; };
@@ -1312,6 +1320,10 @@
 				44F2F5B711447AE0001AE868 /* CompletionLabel.m */,
 				F7A3C2E14B9D0A6E00C1D201 /* FrotzPostureObserver.h */,
 				F7A3C2E14B9D0A6E00C1D202 /* FrotzPostureObserver.m */,
+				31A37B2AB4B2B8CB6FE9AE26 /* FrotzKeyboardLayout.h */,
+				A6855C81C4EAAAABFD9F4334 /* FrotzKeyboardLayout.m */,
+				DB1D207F27A5508E67172048 /* FrotzKeyboardView.h */,
+				ABB43E3E2F7B64F142B43BBB /* FrotzKeyboardView.m */,
 				446B9EA50E2075D1002BDD65 /* FileBrowser.h */,
 				446B9EA60E2075D1002BDD65 /* FileBrowser.m */,
 				44B6DD370F7C74E500EBE1BD /* FileTransferInfo.h */,
@@ -1441,6 +1453,7 @@
 				445484C71B1D04C200E8EE7B /* Images.xcassets */,
 				44AF586A19491BB900E3EF8A /* locale */,
 				446B9D960E2059E3002BDD65 /* Games */,
+				AA42488D14CF8C9B9A9E1371 /* keyboards */,
 				8D1107310486CEB800E47090 /* Info.plist */,
 				44D71CE019882F5300F4AD9A /* Frotz-60x60.png */,
 				44418F7D124576E800F49BC4 /* flip.png */,
@@ -2483,6 +2496,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				446B9DA00E2059E3002BDD65 /* Games in Resources */,
+				88A9FAE3C2059E8452ACF56A /* keyboards in Resources */,
 				4436611D1F8355C8004F8871 /* StoryStoryboard.storyboard in Resources */,
 				4472003D1F67A13900DAB193 /* Frotz-2048x2048.png in Resources */,
 				443C9DE30E46DD59003A44D4 /* metadata.plist in Resources */,
@@ -2652,6 +2666,8 @@
 				44FB39FA0E62406C00142D85 /* ColorPicker.m in Sources */,
 				44F2F5B811447AE0001AE868 /* CompletionLabel.m in Sources */,
 				F7A3C2E14B9D0A6E00C1D203 /* FrotzPostureObserver.m in Sources */,
+				6504CC755AE88CA78EE858B3 /* FrotzKeyboardLayout.m in Sources */,
+				85060105417650D969B4B2EA /* FrotzKeyboardView.m in Sources */,
 				446B9EAB0E2075D1002BDD65 /* FileBrowser.m in Sources */,
 				44B6DD390F7C74E500EBE1BD /* FileTransferInfo.m in Sources */,
 				448167DD0E7259280022EDC0 /* FontPicker.m in Sources */,
