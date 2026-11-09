@@ -36,7 +36,9 @@ extern NSString *const FrotzKeyboardLayerSymbols;
 @property (nonatomic, readonly) CGFloat width;
 @property (nonatomic, readonly, copy) NSString *group;
 @property (nonatomic, readonly) BOOL repeats;
-@property (nonatomic, readonly, copy, nullable) NSString *sublabel;
+@property (nonatomic, readonly, copy, nullable) NSString *sublabel;    // a second legend, where the skin's sublabelPosition puts it
+@property (nonatomic, readonly, copy, nullable) NSString *shiftLabel;  // the shifted character, top right on the key top
+@property (nonatomic, readonly, copy) NSString *accessibilityName;     // "a11y", else the label
 @end
 
 @interface FrotzKeyboardRow : NSObject

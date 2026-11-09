@@ -119,14 +119,16 @@ static UIColor *DynamicColor(NSDictionary *dict, NSString *lightKey, NSString *d
 
 @interface FrotzKeyboardKey ()
 -(instancetype)initWithLabel:(NSString *)label text:(NSString *)text action:(FrotzKeyAction)action width:(CGFloat)width
-                       group:(NSString *)group repeats:(BOOL)repeats sublabel:(nullable NSString *)sublabel NS_DESIGNATED_INITIALIZER;
+                       group:(NSString *)group repeats:(BOOL)repeats sublabel:(nullable NSString *)sublabel
+                  shiftLabel:(nullable NSString *)shiftLabel accessibilityName:(NSString *)accessibilityName NS_DESIGNATED_INITIALIZER;
 -(instancetype)init NS_UNAVAILABLE;
 @end
 
 @implementation FrotzKeyboardKey
 
 -(instancetype)initWithLabel:(NSString *)label text:(NSString *)text action:(FrotzKeyAction)action width:(CGFloat)width
-                       group:(NSString *)group repeats:(BOOL)repeats sublabel:(NSString *)sublabel {
+                       group:(NSString *)group repeats:(BOOL)repeats sublabel:(NSString *)sublabel
+                  shiftLabel:(NSString *)shiftLabel accessibilityName:(NSString *)accessibilityName {
     if ((self = [super init])) {
         _label = [label copy];
         _text = [text copy];
@@ -135,6 +137,8 @@ static UIColor *DynamicColor(NSDictionary *dict, NSString *lightKey, NSString *d
         _group = [group copy];
         _repeats = repeats;
         _sublabel = [sublabel copy];
+        _shiftLabel = [shiftLabel copy];
+        _accessibilityName = [accessibilityName copy];
     }
     return self;
 }
@@ -177,19 +181,27 @@ static UIColor *DynamicColor(NSDictionary *dict, NSString *lightKey, NSString *d
         Fail(error, @"a key has a width of zero or less");
     NSString *group = Optional(dict, @"group", [NSString class], error) ?: @"alpha";
     NSString *sublabel = Optional(dict, @"sublabel", [NSString class], error);
+    NSString *shiftLabel = Optional(dict, @"shiftLabel", [NSString class], error);
+    // What VoiceOver says: a faithful legend is often a symbol or half a name ("HOME" for CLR/HOME).
+    NSString *a11y = Optional(dict, @"a11y", [NSString class], error);
+    if (!a11y.length)
+        a11y = label.length || a != FrotzKeyActionSpace ? label : @"space"; // a faithful space bar is blank
     if (*error) {
         *error = [NSString stringWithFormat: @"key \"%@\": %@", label, *error];
         return nil;
     }
     return [[self alloc] initWithLabel: label text: text action: a width: width group: group
-                               repeats: repeats ? [repeats boolValue] : repeatsByDefault sublabel: sublabel];
+                               repeats: repeats ? [repeats boolValue] : repeatsByDefault sublabel: sublabel
+                            shiftLabel: shiftLabel accessibilityName: a11y];
 }
 
 -(FrotzKeyboardKey *)upperCasedKey {
     if (_action != FrotzKeyActionText)
         return self;
+    NSString *name = [_accessibilityName isEqualToString: _label] ? [_label uppercaseString] : _accessibilityName;
     return [[FrotzKeyboardKey alloc] initWithLabel: [_label uppercaseString] text: [_text uppercaseString] action: _action
-                                             width: _width group: _group repeats: _repeats sublabel: _sublabel];
+                                             width: _width group: _group repeats: _repeats sublabel: _sublabel
+                                        shiftLabel: _shiftLabel accessibilityName: name];
 }
 
 @end

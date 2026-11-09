@@ -1807,7 +1807,8 @@ extern void gli_ios_set_focus(window_t *winNum);
 // Drives the keyboard's own key handling through the typing API, since the simulator can't be
 // tapped from a script. Each entry is "tap:<label>", "wait:<seconds>", "story:" (log the end of
 // the transcript), "select:last2", "type:<text>" (straight to typeText:, for what no Classic key types),
-// "clear:", "hit:<label>" (which view a real touch at that key's centre would reach), "notes:show|hide"
+// "clear:", "hit:<label>" (which view a real touch at that key's centre would reach), "hold:<label>:<seconds>"
+// (held as a finger would, so it repeats; logs "kbhold" on release), "a11y:" (the keys' VoiceOver names), "notes:show|hide"
 // (the notes page programmatically), "notes:edit" (raise the notes keyboard), "kb:show|hide", "state:" (keyboard source and region) or "note:<text>".
 -(void)runKeyboardSelfTest {
     for (NSString *skinID in [FrotzKeyboardSkin availableSkinIDs]) {
@@ -1823,7 +1824,9 @@ extern void gli_ios_set_focus(window_t *winNum);
                           @"tap:SHIFT", @"tap:N", @"tap:g", @"tap:←", @"tap:ESC", @"tap:RESET" ],
         @"c64": @[ @"DEL", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:Q", @"tap:£", @"tap:SHIFT", @"tap:1", @"tap:←", @"tap:↑",
                    @"tap:LOCK", @"tap:A", @"tap:B", @"tap:LOCK", @"tap:c", @"clear:", @"tap:f1", @"tap:f3", @"tap:SHIFT", @"tap:⇕",
-                   @"tap:⇕", @"tap:x", @"clear:", @"tap:STOP", @"tap:RESTORE", @"tap:C=", @"tap:CTRL" ],
+                   @"tap:⇕", @"tap:x", @"clear:", @"tap:STOP", @"tap:RESTORE", @"tap:C=", @"tap:CTRL",
+                   @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"tap:SHIFT", @"a11y:", @"hold:⇔:1.5", @"wait:1", @"tap:X", @"wait:0.6",
+                   @"tap:y", @"hold:⇔:1", @"wait:1.3", @"clear:", @"tap:SHIFT", @"hold:⇕:1.2", @"wait:1.5", @"tap:z" ],
         @"ibmpc": @[ @"⌫", @"↵", @"⇧", @"tap:⇧", @"tap:Q", @"tap:\\", @"tap:⇧", @"tap:1", @"tap:`", @"tap:*",
                      @"tap:Caps Lock", @"tap:A", @"tap:Caps Lock", @"tap:b", @"clear:", @"tap:F1", @"tap:F2",
                      @"tap:Esc", @"tap:⇥", @"tap:Ctrl", @"tap:Alt", @"tap:Num Lock", @"tap:F10" ],
@@ -1847,6 +1850,7 @@ extern void gli_ios_set_focus(window_t *winNum);
         NSString *bs = [@"tap:" stringByAppendingString: keys[0]], *ret = [@"tap:" stringByAppendingString: keys[1]];
         NSMutableArray *script = [@[ @"tap:l", @"tap:o", @"tap:o", @"tap:k", bs, bs, @"tap:o", @"tap:k", ret, @"wait:2", @"story:",
                                      [@"tap:" stringByAppendingString: keys[2]], @"tap:L", bs ] mutableCopy];
+        [script addObject: @"a11y:"];
         [script addObjectsFromArray: [keys subarrayWithRange: NSMakeRange(3, keys.count - 3)]];
         [script addObject: @"clear:"];
         [self keyboardSelfTestStep: 0 ofScript: script];
@@ -1855,6 +1859,7 @@ extern void gli_ios_set_focus(window_t *winNum);
     NSArray *script = @[ @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"tap:⌫", @"tap:⌫", @"tap:o", @"tap:k", @"tap:return", @"wait:2", @"story:",
                          @"tap:i", @"tap:n", @"tap:v", @"tap:space", @"tap:return", @"wait:2", @"story:",
                          @"tap:⇧", @"tap:N", @"tap:123", @"tap:1", @"tap:⌫", @"tap:⌫",
+                         @"tap:ABC", @"tap:⇧", @"tap:123", @"tap:←", @"tap:ABC", @"tap:Q", @"tap:⌫", @"tap:123",
                          @"note:single-key: not exercised",
                          @"tap:ABC", @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"select:last2", @"tap:x",
                          @"tap:⌫", @"tap:⌫", @"tap:⌫",
@@ -1883,6 +1888,16 @@ extern void gli_ios_set_focus(window_t *winNum);
         FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
         if (![keyboard tapKeyWithLabel: arg])
             NSLog(@"kbselftest %d no key \"%@\" in layer %@", (int)step, arg, keyboard.keyLayer);
+    } else if ([verb isEqualToString: @"hold"]) {
+        NSRange last = [arg rangeOfString: @":" options: NSBackwardsSearch];
+        NSString *label = [arg substringToIndex: last.location];
+        FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
+        if (![keyboard holdKeyWithLabel: label forSeconds: [[arg substringFromIndex: NSMaxRange(last)] doubleValue]])
+            NSLog(@"kbselftest %d no key \"%@\" in layer %@", (int)step, label, keyboard.keyLayer);
+    } else if ([verb isEqualToString: @"a11y"]) {
+        FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
+        NSLog(@"kbselftest %d a11y layer=%@ %@", (int)step, keyboard.keyLayer,
+              [[keyboard.accessibilityElements valueForKey: @"accessibilityLabel"] componentsJoinedByString: @" | "]);
     } else if ([verb isEqualToString: @"select"]) {
         UITextPosition *end = m_inputLine.endOfDocument;
         UITextPosition *start = [m_inputLine positionFromPosition: end offset: -2];

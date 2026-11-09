@@ -17,11 +17,13 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 @property (nonatomic, strong) FrotzKeyboardKey *key;
 @property (nonatomic) BOOL pressed;
 @property (nonatomic) BOOL latched; // shift held on for the next key or caps lock
+@property (nonatomic) BOOL joinsBelow; // the top half of a two-row key: no front face or legends of its own
+@property (nonatomic, weak) FrotzKeyView *joinedKey; // the other half, which lights with this one
 @end
 
 @implementation FrotzKeyView {
     FrotzKeyboardSkin *m_skin;
-    UILabel *m_label, *m_sublabel;
+    UILabel *m_label, *m_sublabel, *m_shiftLabel;
     UIFont *m_sublabelFont;
     CAShapeLayer *m_bevel;
     CALayer *m_bottomEdge;
@@ -47,6 +49,14 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
             m_sublabel.adjustsFontSizeToFitWidth = YES;
             m_sublabel.minimumScaleFactor = 0.5;
             [self addSubview: m_sublabel];
+        }
+        if (key.shiftLabel) {
+            m_shiftLabel = [[UILabel alloc] init];
+            m_shiftLabel.text = key.shiftLabel;
+            m_shiftLabel.textAlignment = NSTextAlignmentRight;
+            m_shiftLabel.adjustsFontSizeToFitWidth = YES;
+            m_shiftLabel.minimumScaleFactor = 0.5;
+            [self addSubview: m_shiftLabel];
         }
         self.layer.cornerRadius = skin.cornerRadius;
         if (skin.shadow) {
@@ -76,6 +86,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     self.backgroundColor = (_pressed || _latched) ? [m_skin pressedColorForGroup: group] : [m_skin keyColorForGroup: group];
     m_label.textColor = [m_skin textColorForGroup: group];
     m_sublabel.textColor = m_label.textColor;
+    m_shiftLabel.textColor = m_label.textColor;
 }
 
 -(void)setPressed:(BOOL)pressed {
@@ -86,6 +97,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
         [UIView performWithoutAnimation: ^{ [self updateColors]; }];
     else
         [UIView animateWithDuration: 0.12 animations: ^{ [self updateColors]; }];
+    self.joinedKey.pressed = pressed;
 }
 
 -(void)setLatched:(BOOL)latched {
@@ -98,36 +110,44 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     m_label.font = _key.label.length > 2 ? [font fontWithSize: round(font.pointSize * 0.65)] : font;
     m_sublabelFont = [font fontWithSize: round(font.pointSize * 0.45)];
     m_sublabel.font = m_sublabelFont;
+    m_shiftLabel.font = m_sublabelFont;
 }
 
 -(void)layoutSubviews {
     [super layoutSubviews];
     CGRect b = self.bounds;
-    CGFloat edge = m_bevel ? MAX(2, round(b.size.height * 0.08)) : 0;
+    CGFloat edge = m_bevel && !_joinsBelow ? MAX(2, round(b.size.height * 0.08)) : 0;
     FrotzSublabelPosition position = m_skin.sublabelPosition;
     if (position == FrotzSublabelPositionFront) {
         // Front-printed legends (the C64's graphics) need a front face deep enough to hold them,
         // on every key so the row looks even; a key with no front face takes them underneath.
         if (m_bevel)
-            edge = MAX(edge, ceil(m_sublabelFont.lineHeight) + 2);
+            edge = _joinsBelow ? 0 : MAX(edge, ceil(m_sublabelFont.lineHeight) + 2);
         else
             position = FrotzSublabelPositionBottom;
     }
-    CGFloat w = b.size.width - 4;
+    m_bottomEdge.hidden = _joinsBelow;
+    m_label.hidden = m_skin.blankCaps || _joinsBelow;
+    m_sublabel.hidden = m_shiftLabel.hidden = _joinsBelow;
+    CGFloat w = b.size.width - 4, subHeight = ceil(m_sublabelFont.lineHeight);
+    // The shifted character sits top right, as printed over the digits; a top sublabel shares the line, on the left.
+    BOOL topLine = m_shiftLabel || (m_sublabel && position == FrotzSublabelPositionTop);
+    CGFloat labelTop = topLine ? subHeight : 0;
+    m_shiftLabel.frame = CGRectMake(2, 2, w, subHeight);
     if (m_sublabel) {
-        CGFloat subHeight = ceil(m_sublabelFont.lineHeight);
         if (position == FrotzSublabelPositionTop) {
-            m_sublabel.frame = CGRectMake(2, 2, w, subHeight);
-            m_label.frame = CGRectMake(2, subHeight, w, b.size.height - subHeight - 2);
+            m_sublabel.textAlignment = m_shiftLabel ? NSTextAlignmentLeft : NSTextAlignmentCenter;
+            m_sublabel.frame = CGRectMake(2, 2, m_shiftLabel ? w * 0.6 : w, subHeight);
+            m_label.frame = CGRectMake(2, labelTop, w, b.size.height - labelTop - 2);
         } else if (position == FrotzSublabelPositionFront) {
             m_sublabel.frame = CGRectMake(2, b.size.height - edge + 1, w, subHeight);
-            m_label.frame = CGRectMake(2, 0, w, b.size.height - edge);
+            m_label.frame = CGRectMake(2, labelTop, w, b.size.height - edge - labelTop);
         } else {
             m_sublabel.frame = CGRectMake(2, b.size.height - edge - subHeight - 2, w, subHeight);
-            m_label.frame = CGRectMake(2, 0, w, b.size.height - edge - subHeight - 2);
+            m_label.frame = CGRectMake(2, labelTop, w, b.size.height - edge - subHeight - 2 - labelTop);
         }
-    } else if (position == FrotzSublabelPositionFront)
-        m_label.frame = CGRectMake(2, 0, w, b.size.height - edge);
+    } else if (position == FrotzSublabelPositionFront || m_shiftLabel)
+        m_label.frame = CGRectMake(2, labelTop, w, b.size.height - edge - labelTop);
     else
         m_label.frame = CGRectInset(b, 2, 0);
     if (self.layer.shadowOpacity > 0)
@@ -182,6 +202,12 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     BOOL m_keysRebuilt;        // tell VoiceOver once the new elements are in place
     NSTimeInterval m_lastShiftTap;
     UIImpactFeedbackGenerator *m_feedback;
+    UITouch *m_layerTouch;      // a held key that used up a one-shot shift keeps its layer until it lets go,
+    NSString *m_pendingLayer;   // so it can still repeat; this is the layer to show then
+    BOOL m_inTouchDown;
+#if DEBUG
+    NSMutableArray<NSString *> *m_heldActions;
+#endif
 }
 
 -(instancetype)initWithLayout:(FrotzKeyboardLayout *)layout skin:(FrotzKeyboardSkin *)skin {
@@ -233,10 +259,24 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 #pragma mark Layers and shift
 
 -(void)setKeyLayer:(NSString *)layer {
-    if ([layer isEqualToString: _keyLayer] || !_layout.layers[layer])
+    if (!_layout.layers[layer])
+        return;
+    if (m_layerTouch || m_inTouchDown) {
+        m_pendingLayer = [layer isEqualToString: _keyLayer] ? nil : [layer copy];
+        return;
+    }
+    if ([layer isEqualToString: _keyLayer])
         return;
     _keyLayer = [layer copy];
     [self rebuildKeys];
+}
+
+-(void)showPendingLayer {
+    m_layerTouch = nil;
+    NSString *layer = m_pendingLayer;
+    m_pendingLayer = nil;
+    if (layer)
+        self.keyLayer = layer;
 }
 
 -(void)setShiftState:(FrotzKeyboardShiftState)shiftState {
@@ -258,6 +298,12 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 
 -(void)rebuildKeys {
     [self stopRepeat];
+    // The touches are dropped with the keys, so nothing is left to wait for.
+    m_layerTouch = nil;
+    if (m_pendingLayer) {
+        _keyLayer = m_pendingLayer;
+        m_pendingLayer = nil;
+    }
     for (FrotzKeyView *kv in m_keyViews)
         [kv removeFromSuperview];
     [m_keyViews removeAllObjects];
@@ -291,6 +337,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     BOOL chiclet = _skin.profile == FrotzKeyProfileChiclet;
 
     NSMutableArray *elements = [NSMutableArray arrayWithCapacity: m_keyViews.count];
+    NSMutableArray<FrotzKeyAccessibilityElement *> *aboveRow = [NSMutableArray array], *thisRow = [NSMutableArray array];
     NSUInteger i = 0;
     CGFloat y = rect.origin.y;
     for (FrotzKeyboardRow *row in _layout.layers[_keyLayer]) {
@@ -306,13 +353,19 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 
             FrotzKeyAccessibilityElement *element = [[FrotzKeyAccessibilityElement alloc] initWithAccessibilityContainer: self];
             element.keyView = kv;
-            // A faithful space bar is blank.
-            element.accessibilityLabel = key.label.length || key.action != FrotzKeyActionSpace ? key.label : @"space";
+            element.accessibilityLabel = key.accessibilityName;
             element.accessibilityTraits = UIAccessibilityTraitKeyboardKey;
             element.accessibilityFrameInContainerSpace = frame;
-            [elements addObject: element];
+            [thisRow addObject: element];
+            FrotzKeyAccessibilityElement *upper = [self joinReturnKey: kv toRowAbove: aboveRow];
+            if (upper)
+                upper.accessibilityFrameInContainerSpace = CGRectUnion(upper.keyView.frame, frame);
+            else
+                [elements addObject: element];
             x += w + gap;
         }
+        aboveRow = thisRow;
+        thisRow = [NSMutableArray array];
         y += keyHeight + gap;
     }
     self.accessibilityElements = elements;
@@ -320,6 +373,37 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
         m_keysRebuilt = NO;
         UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, nil);
     }
+}
+
+// Two "return" group keys stacked in neighbouring rows with their right edges in line are one
+// key, as the IBM's tall Return: the upper half reaches down over the gap and the pair lights as one.
+-(nullable FrotzKeyAccessibilityElement *)joinReturnKey:(FrotzKeyView *)lower toRowAbove:(NSArray<FrotzKeyAccessibilityElement *> *)aboveRow {
+    lower.joinedKey = nil;
+    lower.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+    if (![lower.key.group isEqualToString: @"return"])
+        return nil;
+    for (FrotzKeyAccessibilityElement *element in aboveRow) {
+        FrotzKeyView *upper = element.keyView;
+        if (![upper.key.group isEqualToString: @"return"] || upper.key.action != lower.key.action
+            || fabs(CGRectGetMaxX(upper.frame) - CGRectGetMaxX(lower.frame)) > 1)
+            continue;
+        upper.joinsBelow = YES;
+        upper.joinedKey = lower;
+        lower.joinedKey = upper;
+        // Down past the lower half's top highlight, so no seam shows.
+        CGRect frame = upper.frame;
+        frame.size.height = CGRectGetMinY(lower.frame) + 2 - frame.origin.y;
+        upper.frame = frame;
+        upper.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
+        CACornerMask lowerCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+        if (CGRectGetMinX(lower.frame) < CGRectGetMinX(upper.frame) - 1)
+            lowerCorners |= kCALayerMinXMinYCorner; // an L: the lower half sticks out on the left
+        lower.layer.maskedCorners = lowerCorners;
+        [self bringSubviewToFront: upper];
+        [upper setNeedsLayout];
+        return element;
+    }
+    return nil;
 }
 
 -(void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
@@ -426,11 +510,13 @@ static NSString *PhaseName(UITouchPhase phase) {
 // don't put each other's highlight out.
 -(void)updatePressedForKey:(FrotzKeyView *)keyView {
     BOOL pressed = NO;
-    for (UITouch *touch in m_touchKeys)
-        if ([m_touchKeys objectForKey: touch] == keyView && [self touch: touch isOnKey: keyView]) {
+    for (UITouch *touch in m_touchKeys) {
+        FrotzKeyView *kv = [m_touchKeys objectForKey: touch];
+        if ((kv == keyView || kv == keyView.joinedKey) && [self touch: touch isOnKey: kv]) {
             pressed = YES;
             break;
         }
+    }
     keyView.pressed = pressed;
 }
 
@@ -440,6 +526,7 @@ static NSString *PhaseName(UITouchPhase phase) {
     [m_touchKeys removeAllObjects];
     for (FrotzKeyView *kv in m_keyViews)
         kv.pressed = NO;
+    [self showPendingLayer];
 }
 
 -(void)setHidden:(BOOL)hidden {
@@ -474,14 +561,38 @@ static BOOL ActsOnTouchDown(FrotzKeyAction action) {
     }
 }
 
+// While a held key keeps the old layer on screen, another key types what the new layer has there.
+-(FrotzKeyboardKey *)keyForView:(FrotzKeyView *)keyView {
+    if (!m_pendingLayer)
+        return keyView.key;
+    NSArray<FrotzKeyboardRow *> *shown = _layout.layers[_keyLayer], *pending = _layout.layers[m_pendingLayer];
+    NSUInteger i = 0, index = [m_keyViews indexOfObject: keyView];
+    for (NSUInteger r = 0; r < shown.count; r++) {
+        NSArray<FrotzKeyboardKey *> *keys = shown[r].keys;
+        if (index < i + keys.count) {
+            NSArray<FrotzKeyboardKey *> *other = r < pending.count ? pending[r].keys : nil;
+            NSUInteger k = index - i;
+            return k < other.count && other[k].width == keys[k].width ? other[k] : keyView.key;
+        }
+        i += keys.count;
+    }
+    return keyView.key;
+}
+
 // touch is nil for accessibility and DEBUG taps, which press and release at once.
 -(void)keyTouchDown:(FrotzKeyView *)keyView touch:(UITouch *)touch {
     keyView.pressed = YES;
     [m_feedback impactOccurred];
-    FrotzKeyboardKey *key = keyView.key;
+    FrotzKeyboardKey *key = [self keyForView: keyView];
     if (!ActsOnTouchDown(key.action))
         return;
+    // A key that uses up a one-shot shift resolves as shifted now and keeps its layer (and so
+    // its touch and repeat) on screen until it lets go.
+    m_inTouchDown = touch != nil;
     [self performKey: key];
+    m_inTouchDown = NO;
+    if (m_pendingLayer && !m_layerTouch)
+        m_layerTouch = touch;
     // One repeat at a time, and it belongs to the touch that started it; a second finger
     // types its key once rather than take the repeat over. (A key that changed the layer is gone.)
     if (key.repeats && !m_repeatTimer && [m_keyViews containsObject: keyView]) {
@@ -513,8 +624,11 @@ static BOOL ActsOnTouchDown(FrotzKeyAction action) {
     if (keyView == m_repeatKey && touch == m_repeatTouch)
         [self stopRepeat];
     [self updatePressedForKey: keyView];
-    if (inside && !ActsOnTouchDown(keyView.key.action))
-        [self performKey: keyView.key];
+    FrotzKeyboardKey *key = [self keyForView: keyView];
+    if (inside && !ActsOnTouchDown(key.action))
+        [self performKey: key];
+    if (touch && touch == m_layerTouch)
+        [self showPendingLayer];
 }
 
 static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
@@ -528,6 +642,9 @@ static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
 
 -(void)performKey:(FrotzKeyboardKey *)key {
     id<FrotzKeyboardViewDelegate> delegate = self.delegate;
+#if DEBUG
+    [m_heldActions addObject: key.action == FrotzKeyActionText ? key.text : [key.accessibilityName lowercaseString]];
+#endif
     switch (key.action) {
         case FrotzKeyActionText:
         case FrotzKeyActionSpace:
@@ -569,8 +686,9 @@ static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
         case FrotzKeyActionLeft:
         case FrotzKeyActionRight:
             [delegate keyboardView: self didPressSpecialKey: SpecialKeyForArrow(key.action)];
-            // A shifted cursor key (the C64's up and left) uses the shift up, as a letter does.
-            if (_shiftState == FrotzKeyboardShiftOneShot)
+            // A shifted cursor key (the C64's up and left) uses the shift up, as a letter does; an
+            // arrow off the shift layer (Classic's, in its symbols) leaves it for the next letter.
+            if (_shiftState == FrotzKeyboardShiftOneShot && [_keyLayer isEqualToString: FrotzKeyboardLayerShift])
                 self.shiftState = FrotzKeyboardShiftOff;
             break;
         case FrotzKeyActionNone:
@@ -588,6 +706,38 @@ static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
 
 -(nullable NSString *)labelOfKeyAtPoint:(CGPoint)pt {
     return [self keyViewAtPoint: pt].key.label;
+}
+
+-(BOOL)holdKeyWithLabel:(NSString *)label forSeconds:(NSTimeInterval)seconds {
+    for (FrotzKeyView *kv in m_keyViews) {
+        if (![kv.key.label isEqualToString: label])
+            continue;
+        // A stand-in for a finger: it owns the press, and so the repeat, until it lets go.
+        UITouch *touch = [[UITouch alloc] init];
+        m_heldActions = [NSMutableArray array];
+        [m_touchKeys setObject: kv forKey: touch];
+        [self keyTouchDown: kv touch: touch];
+        __weak FrotzKeyboardView *weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf releaseHeldKey: kv touch: touch label: label];
+        });
+        return YES;
+    }
+    return NO;
+}
+
+-(void)releaseHeldKey:(FrotzKeyView *)keyView touch:(UITouch *)touch label:(NSString *)label {
+    BOOL stillDown = [m_touchKeys objectForKey: touch] == keyView;
+    [m_touchKeys removeObjectForKey: touch];
+    if (stillDown)
+        [self keyTouchUp: keyView touch: touch inside: YES];
+    NSCountedSet *counts = [[NSCountedSet alloc] initWithArray: m_heldActions];
+    NSMutableArray *parts = [NSMutableArray array];
+    for (NSString *action in counts)
+        [parts addObject: [NSString stringWithFormat: @"%@ x%lu", action, (unsigned long)[counts countForObject: action]]];
+    NSLog(@"kbhold %@ released%@: %@; layer=%@ shift=%d", label, stillDown ? @"" : @" (already let go by a rebuild)",
+          [parts componentsJoinedByString: @", "], _keyLayer, (int)_shiftState);
+    m_heldActions = nil;
 }
 
 -(BOOL)tapKeyWithLabel:(NSString *)label {
