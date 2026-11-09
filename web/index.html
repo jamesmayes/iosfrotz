@@ -113,6 +113,12 @@
       cursor: pointer;
     }
     .file-button { display: inline-block; }
+    /* Touch screens: 44px targets (Apple's minimum). The file labels centre
+       their text like the buttons do. */
+    @media (pointer: coarse) {
+      button, .file-button { min-height: 44px; }
+      .file-button { display: inline-flex; align-items: center; }
+    }
     /* Visually hidden but still focusable, so the file pickers work from
        the keyboard; the label shows the focus ring. */
     .file-button input {
@@ -144,9 +150,16 @@
     dialog h2 { font-size: 17px; margin: 0 0 8px; }
     #saves-list { list-style: none; margin: 0 0 12px; padding: 0; }
     #saves-list li {
-      display: flex; justify-content: space-between; align-items: center;
+      display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
       gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--rule);
     }
+    /* On a phone a label keeps at least 12rem, and a save that is only in
+       this tab (data-local: its longer label, and maybe a second button,
+       Keep this one) has its label on a line of its own with the buttons
+       together below, instead of buttons squeezed onto two lines each. */
+    #saves-list li > span { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
+    #saves-list li[data-local] > span { flex-basis: 100%; }
+    #saves-list button { white-space: nowrap; }
     #saves-list li.empty { color: var(--muted); }
     .dialog-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
@@ -340,6 +353,10 @@
       background: transparent;
       border: none;
       outline: none;
+      /* The field covers the bar's height (44px), not just its text line,
+         so a tap anywhere on the bar reaches it; the bar stays the same. */
+      margin: -8px 0;
+      padding: 9px 0;
     }
     #command-form[data-waiting="key"] #command::placeholder { color: var(--muted); }
   </style>
