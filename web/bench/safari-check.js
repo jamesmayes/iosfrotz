@@ -206,14 +206,15 @@ const PRE = String.raw`(function () {
     [...document.querySelectorAll(".glk-grid")].map((e) => e.innerText).join("\n");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // Wait until the text has grown past len and ends at a prompt, unchanged
-  // for 300 ms. Resolves { ok, tail }.
+  // for 300 ms. Resolves { ok, at, tail, reply }: at is when that final
+  // text first appeared (Date.now()), reply the text after len.
   async function settle(len, ms) {
     const end = Date.now() + ms;
     let last = null, since = 0;
     for (;;) {
       const t = text();
       const done = t.length > len && />\s*$/.test(t);
-      if (done && t === last) { if (Date.now() - since >= 300) return { ok: true, tail: t.slice(Math.max(len - 40, 0)).slice(-1500), reply: t.slice(len).slice(-4000) }; }
+      if (done && t === last) { if (Date.now() - since >= 300) return { ok: true, at: since, tail: t.slice(Math.max(len - 40, 0)).slice(-1500), reply: t.slice(len).slice(-4000) }; }
       else { last = t; since = Date.now(); }
       if (Date.now() > end) return { ok: false, tail: t.slice(-800) };
       await sleep(50);
@@ -232,8 +233,12 @@ const PRE = String.raw`(function () {
       const len = text().length;
       const i = document.getElementById("command");
       i.value = line;
+      // ms in the result: from the submit to the prompt's first appearance.
+      const t0 = Date.now();
       document.getElementById("command-form").requestSubmit();
-      return settle(len, ms || 15000);
+      const r = await settle(len, ms || 15000);
+      if (r.ok) r.ms = r.at - t0;
+      return r;
     },
     // Submit a line that makes the game ask for a key: resolves once the
     // input bar waits for a key (command-form data-waiting="key", set by
@@ -426,15 +431,86 @@ function osa(script, ms = 15000) {
   });
 }
 // Side by side, so neither window covers the other: WebKit treats a fully
-// covered window as hidden and throttles it.
-const BOUNDS = { A: "{0, 30, 700, 860}", B: "{710, 30, 1410, 860}" };
+// covered window as hidden and throttles it. The two halves of the main
+// display's visible area (without the menu bar and Dock), read before the
+// first window opens, so they fit whatever the display is; bothOnScreen()
+// then checks where the windows actually are.
+let FRAME = null; // { left, top, right, bottom }, AppleScript's coordinates
+let BOUNDS = null; // { A: [l, t, r, b], B: [...] }
+function readScreenFrame() {
+  // NSScreen through osascript's JavaScript bridge: no Automation permission.
+  // Cocoa puts the origin at the bottom left of the main display;
+  // AppleScript's window bounds put it at the top left.
+  const js = `ObjC.import("AppKit");
+    const s = $.NSScreen.screens.objectAtIndex(0), f = s.frame, v = s.visibleFrame;
+    JSON.stringify({ h: f.size.height, x: v.origin.x, y: v.origin.y, w: v.size.width, vh: v.size.height });`;
+  const d = JSON.parse(execFileSync("osascript", ["-l", "JavaScript", "-e", js], { encoding: "utf8", timeout: 10000 }));
+  const fr = { left: Math.ceil(d.x), top: Math.ceil(d.h - (d.y + d.vh)), right: Math.floor(d.x + d.w), bottom: Math.floor(d.h - d.y) };
+  if (!(fr.right - fr.left > 0 && fr.bottom - fr.top > 0)) throw new Error(`no usable area: ${JSON.stringify(d)}`);
+  return fr;
+}
+function splitFrame(fr) {
+  const gap = 10, half = Math.floor((fr.right - fr.left - gap) / 2);
+  return { A: [fr.left, fr.top, fr.left + half, fr.bottom], B: [fr.left + half + gap, fr.top, fr.right, fr.bottom] };
+}
 const openWindow = (tab) => osa(`tell application "Safari"
   activate
   make new document with properties {URL:"${ORIGIN}/__blank.html?t=${tab}"}
   try
-    set bounds of front window to ${BOUNDS[tab] || BOUNDS.A}
+    set bounds of front window to {${(BOUNDS[tab] || BOUNDS.A).join(", ")}}
   end try
 end tell`);
+// Where our Safari windows are: per tab (the t= of its page), bounds,
+// visible, miniaturized.
+async function ourWindows() {
+  const out = await osa(`tell application "Safari"
+  set r to ""
+  repeat with w in (every window)
+    try
+      set u to URL of current tab of w
+      if u starts with "${ORIGIN}" then
+        set b to bounds of w
+        set r to r & u & "|" & (item 1 of b) & "," & (item 2 of b) & "," & (item 3 of b) & "," & (item 4 of b) & "|" & (visible of w) & "|" & (miniaturized of w) & linefeed
+      end if
+    end try
+  end repeat
+  return r
+end tell`);
+  return out.split("\n").filter(Boolean).map((l) => {
+    const [u, b, vis, min] = l.split("|");
+    let tab = null;
+    try { tab = new URL(u).searchParams.get("t"); } catch (e) {}
+    return { tab, bounds: b.split(",").map(Number), visible: vis === "true", miniaturized: min === "true" };
+  });
+}
+// Both windows (A and B) must be on the display, inside its visible area,
+// not overlapping, not minimized, and both pages must report "visible";
+// otherwise one of them may be throttled and the contention checks would
+// measure that. A FAIL record when not; returns whether they are.
+async function bothOnScreen() {
+  const ws = await ourWindows();
+  const bad = [];
+  const box = {};
+  for (const tab of ["A", "B"]) {
+    const mine = ws.filter((w) => w.tab === tab);
+    if (mine.length !== 1) { bad.push(`tab ${tab}: ${mine.length} windows`); continue; }
+    const w = mine[0], [l, t, r, b] = w.bounds;
+    box[tab] = w.bounds;
+    const inside = l >= FRAME.left - 1 && t >= FRAME.top - 1 && r <= FRAME.right + 1 && b <= FRAME.bottom + 1 && r > l && b > t;
+    if (!inside) bad.push(`tab ${tab} at {${w.bounds.join(", ")}} is outside the visible area {${[FRAME.left, FRAME.top, FRAME.right, FRAME.bottom].join(", ")}}`);
+    if (!w.visible || w.miniaturized) bad.push(`tab ${tab}: window ${w.visible ? "" : "not visible"}${w.miniaturized ? " minimized" : ""}`);
+    const v = await run(tab, "__T.visible()", 5000).catch(() => "no answer");
+    if (v !== "visible") bad.push(`tab ${tab} page reports visibilityState "${v}"`);
+  }
+  if (box.A && box.B) {
+    const [a, b] = [box.A, box.B];
+    const apart = a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1];
+    if (!apart) bad.push(`the windows overlap: A {${a.join(", ")}}, B {${b.join(", ")}}`);
+  }
+  (bad.length ? fail : pass)("both windows on screen", bad.length ? bad.join("; ") :
+    `A {${box.A.join(", ")}}, B {${box.B.join(", ")}} inside {${[FRAME.left, FRAME.top, FRAME.right, FRAME.bottom].join(", ")}}, both pages visible`);
+  return !bad.length;
+}
 function closeOurWindows() {
   if (!safariAnswers) return Promise.resolve();
   return osa(`tell application "Safari"
@@ -644,10 +720,19 @@ const CHECKS = {
       };
       await charTest("char input: q", "q", /dec\) 113/);
       await charTest("char input: Left", "ArrowLeft", /FFFFFFFE/);
-      const t0 = Date.now();
+      // The game waits 2 s for a timer event, then prints it and "Done".
+      // Pass only on this command's own reply reaching a prompt, saying both,
+      // between the advertised delay and a sane upper bound after the submit
+      // (t.ms, measured in the page).
+      const TIMER_MS = 2000, TIMER_MAX = 8000;
       const t = await cmd("A", "get timer", 15000);
-      const dt = Date.now() - t0;
-      (/timer event/.test(t.tail) && /Done/.test(t.tail) ? pass : fail)("timer", `"${clip(t.tail, 80)}" after ${dt} ms (game waits 2 s)`);
+      if (!t.ok) fail("timer", `"get timer" reached no prompt within 15 s: "${clip(t.tail, 80)}"`);
+      else {
+        const said = /timer event/.test(t.reply) && /Done/.test(t.reply);
+        const timed = typeof t.ms === "number" && t.ms >= TIMER_MS && t.ms <= TIMER_MAX;
+        (said && timed ? pass : fail)("timer", `reply "${clip(t.reply, 80)}"${said ? "" : " (NO \"timer event\" and \"Done\")"}; ` +
+          `prompt ${t.ms} ms after the command${timed ? "" : " (OUT OF RANGE)"}; must be ${TIMER_MS}-${TIMER_MAX} ms (game waits ${TIMER_MS / 1000} s)`);
+      }
     }
     if (!hasStory("Alabaster.gblorb")) return fail("save/reload/restore", "not run: git/test/Alabaster.gblorb is missing (a required fixture)");
     current = "Glulx (Alabaster)";
@@ -681,6 +766,7 @@ const CHECKS = {
     await openWindow("B");
     const hB = await waitHello("B", 0, 20000);
     if (hB.visible !== "visible") return fail("tab B opens", `tab B reports visibilityState "${hB.visible}"`);
+    if (!(await bothOnScreen())) return;
     r = await start("B", "Balances", null, null);
     const mB = await run("B", "__T.mode()");
     const notOwner = await run("B", "__T.text().includes(WebFrotzSaves.NOT_OWNER)");
@@ -719,6 +805,7 @@ const CHECKS = {
     // client id, and A's SAVE after the steal must leave storage alone.
     current = "Persistence (queued-grant steal)";
     r = await start("A", "Balances", null, null);
+    if (!(await bothOnScreen())) return;
     const mA2 = await run("A", "__T.mode()");
     if (mA2 !== "reader") return fail("setup", `A should be a reader behind B, is ${mA2}`);
     const cidA = await run("A", "__clientId()");
@@ -880,6 +967,10 @@ async function main() {
   if (locked) await abort("the screen is locked. Safari holds back timers and storage in a hidden page, so nothing it reports would count. Unlock the Mac and run it again.");
   console.log(`safari-check: screen ${SERVE_ONLY ? "not checked (--serve-only)" : NO_LOCK_CHECK ? "lock check skipped (--no-lock-check)" : locked === null ? "lock state unknown (ioreg failed)" : "unlocked"}`);
   if (SERVE_ONLY) { console.log(`safari-check: --serve-only: open ${ORIGIN}/index.html?t=A; Ctrl-C to stop.`); return; }
+  try { FRAME = readScreenFrame(); } catch (e) { await abort(`could not read the display's visible area: ${e.message}`); }
+  BOUNDS = splitFrame(FRAME);
+  console.log(`safari-check: display visible area {${[FRAME.left, FRAME.top, FRAME.right, FRAME.bottom].join(", ")}}; ` +
+    `windows A {${BOUNDS.A.join(", ")}}, B {${BOUNDS.B.join(", ")}}`);
   if (DRY) { console.log("safari-check: --dry-run, stopping before Safari."); server.close(); return; }
 
   try { await openWindow("A"); } catch (e) {
@@ -902,10 +993,13 @@ async function main() {
       finished.add(name);
     } catch (e) {
       rec("error", "FAIL", `stopped part way: ${e.message}`);
-      if (/did not (answer|load)/.test(e.message)) {
-        const v = await run("A", "__T.visible()", 5000).catch(() => "no answer");
+      // Diagnose the tab that timed out, not always A.
+      const m = /tab (\S+) did not (answer|load)/.exec(e.message);
+      if (m) {
+        const tab = m[1];
+        const v = await run(tab, "__T.visible()", 5000).catch(() => "no answer");
         if (v !== "visible" || screenLocked())
-          await abort(`Safari stopped answering during ${name} (${e.message}; tab A visibility: ${v}; screen ${screenLocked() ? "locked" : "unlocked"}).`);
+          await abort(`Safari stopped answering during ${name} (${e.message}; tab ${tab} visibility: ${v}; screen ${screenLocked() ? "locked" : "unlocked"}).`);
       }
     }
   }
