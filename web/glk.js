@@ -470,7 +470,8 @@ function pollArrange() {
 // The same per-file, revisioned store and save session as the Z-machine
 // client: a write only replaces the revision this tab last saw, and a
 // conflict, failure or timeout keeps the file in memory, shows a notice and
-// badges the Saves button.
+// badges the Saves button. Only the tab holding the Web Lock writes; the
+// others are session-only until it closes.
 
 const MAX_SAVE_BYTES = 4 * 1024 * 1024;
 let store = null;
@@ -489,12 +490,25 @@ const saves = WebFrotzSaves.createSaveSession({
   dir: SAVE_DIR,
   story: () => storyFile,
   hidden: (n) => deleted.has(n),
+  locks: navigator.locks || null,
   onChange: savesChanged,
+  onMode: savesModeChanged,
   log: { warn: (...a) => console.warn("[glk]", ...a) },
 });
 
+// Only one tab writes to browser storage (saves.js). Say so once when this
+// one cannot, and again when it takes over; the dialog note and the badge
+// keep saying it meanwhile.
+function savesModeChanged(mode, previous) {
+  if (mode === "reader") notice(WebFrotzSaves.NOT_OWNER);
+  else if (mode === "writer" && previous === "reader") notice(WebFrotzSaves.NOW_OWNER);
+}
+
 function savesChanged() {
-  if (saves.attention().length) {
+  if (saves.mode() === "reader") {
+    savesBtn.dataset.warning = "";
+    savesBtn.setAttribute("aria-label", "Saves: another tab owns browser storage");
+  } else if (saves.attention().length) {
     savesBtn.dataset.warning = "";
     savesBtn.setAttribute("aria-label", "Saves: a save is not in browser storage");
   } else {
@@ -589,6 +603,8 @@ importInput.addEventListener("change", async () => {
   importMessage = r.outcome === "persisted" ? `Imported ${file.name} as ${saveName}.` :
     r.outcome === "conflict" ? `Imported ${file.name} as ${saveName} for this session only: ` +
       "another tab saved a newer one to browser storage." :
+    r.outcome === "session" ? `Imported ${file.name} as ${saveName} for this session only: ` +
+      "another Frotz tab owns browser storage." :
     `Imported ${file.name} as ${saveName}, for this session only.`;
   renderSaves();
 });

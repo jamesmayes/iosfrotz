@@ -15,25 +15,52 @@
 //   store "meta":  key = file name, value = { size, mtime, story, rev, sha256 }
 // put() writes both in the same transaction, so they always agree.
 //
+// One writer at a time (Web Locks). A page asks for the exclusive lock
+// "webfrotz-saves" (both pages share the database, so they share the
+// lock). The page that gets it holds it until it closes and is the only one
+// that writes to browser storage. A page that does not get it is in
+// session-only mode: its saves stay in MEMFS, a notice says another Frotz
+// tab owns browser storage, RESTORE still reads stored files, and nothing
+// is ever written. It keeps waiting for the lock in the background; when the
+// owner closes, the waiting page takes it and starts persisting. Without
+// Web Locks (or if the request fails) every page writes, and the revision
+// checks below are all that stands between tabs ("unlocked" mode).
+//
+// Revisions. Each file's meta has `rev`, an integer that starts at 1 and
+// goes up by one with every write. put() runs ONE readwrite transaction:
+// it reads meta and, if the stored rev is not the one this tab expects,
+// resolves { outcome: "conflict", theirs: meta } without writing anything;
+// otherwise it writes bytes and meta with rev + 1. A missing record counts
+// as rev 0. If the stored bytes already equal this tab's (same sha256),
+// the save counts as persisted without a write. mtime is informational
+// only. With a single writer a conflict only happens when the store was
+// changed behind this tab's back (an old owner's write that was still in
+// flight when it closed, or a tab without Web Locks); the check stays.
+//
+// The expected rev per file (the store's `seen` map) is a baseline that
+// only moves for a reason this tab knows about:
+//
+//   unknown -> seen(rev) -> localDirty(rev) -> conflict(theirs.rev)
+//
+//   unknown       never set: counts as 0 (absent).
+//   seen(rev)     set by snapshot(), once, when this page becomes the
+//                 writer (or, unlocked, when it starts): every stored name
+//                 at its rev, and every other name frozen at 0 (absent).
+//                 list() and refresh() never change it.
+//   localDirty    the game (or an import) wrote the file in MEMFS; put()
+//                 expects the frozen rev. On commit, seen = the new rev.
+//   conflict      the stored rev was not the frozen one. seen does NOT
+//                 move: every plain save of that file conflicts again
+//                 until the player resolves it, by RESTORE (adopt(): seen =
+//                 the stored rev, whose bytes are now in MEMFS) or by Keep
+//                 this one (put with expectedRev = theirs.rev, which
+//                 commits theirs.rev + 1).
+//
 // Deletion (remove()) leaves a tombstone: the bytes record goes, and meta
 // keeps the name with { deleted: true } and the next rev. get() then finds
 // nothing, list() reports the tombstone (sessions leave it out of the
 // Saves dialog), and a stale tab that saves the old version afterwards gets
 // a conflict like any other, instead of bringing the file back unnoticed.
-//
-// Revisions, not timestamps, decide conflicts between tabs. Each file's
-// meta has `rev`, an integer that starts at 1 and goes up by one with every
-// write. A store remembers, per file, the rev it last saw: from list() the
-// first time it sees a name, from its own committed put(), and from
-// adopt() when a restore copies the stored file into MEMFS. put() runs ONE
-// readwrite transaction: it reads meta and, if the stored rev is not the
-// one this tab expects, resolves { outcome: "conflict", theirs: meta }
-// without writing anything; otherwise it writes bytes and meta with rev + 1.
-// So a tab can only replace the version it last saw: if another tab saved
-// in between, the stale tab gets a conflict, however close together the two
-// saves were. mtime is informational only. A missing record counts as
-// rev 0: there is nothing to overwrite. If the stored bytes already equal
-// this tab's (same sha256), the save counts as persisted without a write.
 //
 // Timeouts and supersession: every operation is a promise that settles
 // within `timeoutMs`. There is at most one live operation per kind and file
@@ -50,8 +77,17 @@
 // transaction ends, so no connection is held between operations (or across
 // a page in the back/forward cache).
 //
+// Replacing a MEMFS file (import, or a RESTORE copying a stored file in)
+// writes a temporary file and renames it over the target. The temporary
+// name is ".webfrotz-tmp-<random hex>-<name>" in the same directory,
+// created exclusively (O_EXCL; a new random name on collision), so it can
+// never be a file the game owns (a game may well have "foo.sav.tmp"). Only
+// the file this operation created is ever removed. Such names are left out
+// of the Saves dialog, and the C side never gives a game one.
+//
 // The file is plain browser JavaScript (no modules), and also loads in Node
-// for tests: createSaveStore takes the IndexedDB factory as a parameter.
+// for tests: createSaveStore takes the IndexedDB factory as a parameter,
+// and createSaveSession takes the lock manager (navigator.locks).
 
 (function (root) {
   "use strict";
@@ -60,6 +96,8 @@
   const DB_VERSION = 1;
   const SAVES = "saves";
   const META = "meta";
+  const LOCK_NAME = "webfrotz-saves";
+  const TMP_PREFIX = ".webfrotz-tmp-";
 
   class StorageTimeout extends Error {
     constructor(what) {
@@ -92,7 +130,7 @@
     const timeoutMs = (opts && opts.timeoutMs) || 5000;
     const gens = new Map(); // "kind:name" -> latest generation
     const liveOps = new Map(); // "kind:name" -> cancel(err) of the live operation
-    const seen = new Map(); // file name -> rev this tab last saw
+    const seen = new Map(); // file name -> expected rev (the frozen baseline)
 
     function nextGen(key) {
       const g = (gens.get(key) || 0) + 1;
@@ -207,31 +245,44 @@
       });
     }
 
+    // All meta records, newest first.
+    async function listMeta(ctx) {
+      const db = await open(ctx);
+      return transact(ctx, db, [META], "readonly", (tx, set) => {
+        const acc = [];
+        const cur = tx.objectStore(META).openCursor();
+        cur.onsuccess = () => {
+          if (!ctx.live()) return;
+          const c = cur.result;
+          if (!c) {
+            acc.sort((a, b) => b.mtime - a.mtime);
+            set(acc);
+            return;
+          }
+          acc.push({ name: String(c.key), ...c.value });
+          c.continue();
+        };
+      });
+    }
+
     // Requests inside a transaction use plain onsuccess callbacks, not
     // promises: older Safari let a transaction commit before promise
     // callbacks ran. An error aborts the transaction, which rejects.
     return {
-      // [{ name, size, mtime, story, rev, sha256 }], newest first. A name
-      // this tab has not seen before is recorded at its listed rev.
+      // [{ name, size, mtime, story, rev, sha256 }], newest first. Does not
+      // change any expected rev (see the state machine above).
       list() {
-        return guarded("list:", "Listing saves", async (ctx) => {
-          const db = await open(ctx);
-          const out = await transact(ctx, db, [META], "readonly", (tx, set) => {
-            const acc = [];
-            const cur = tx.objectStore(META).openCursor();
-            cur.onsuccess = () => {
-              if (!ctx.live()) return;
-              const c = cur.result;
-              if (!c) {
-                acc.sort((a, b) => b.mtime - a.mtime);
-                set(acc);
-                return;
-              }
-              acc.push({ name: String(c.key), ...c.value });
-              c.continue();
-            };
-          });
-          for (const m of out) if (!seen.has(m.name)) seen.set(m.name, m.rev || 0);
+        return guarded("list:", "Listing saves", (ctx) => listMeta(ctx));
+      },
+
+      // Set the baseline from what is stored now: every listed name at its
+      // rev, every other name absent (0). Called once when this page
+      // becomes the writer. Resolves with the listing.
+      snapshot() {
+        return guarded("snapshot:", "Reading saves", async (ctx) => {
+          const out = await listMeta(ctx);
+          seen.clear();
+          for (const m of out) seen.set(m.name, m.rev || 0);
           return out;
         });
       },
@@ -253,7 +304,9 @@
       },
 
       // This tab now holds the stored version `rev` of name (a restore
-      // copied it into MEMFS), so its next save may replace it.
+      // copied it into MEMFS), so its next save may replace it. The only
+      // way, besides this tab's own commits and snapshot(), that the
+      // baseline moves.
       adopt(name, rev) {
         seen.set(name, rev);
       },
@@ -304,8 +357,8 @@
       //   { outcome: "persisted", rev, meta }   written (or already equal)
       //   { outcome: "conflict", theirs }        stored rev is not expectedRev
       // and rejects on failure, timeout (StorageTimeout) or supersession.
-      // expectedRev defaults to the rev this tab last saw, read when the
-      // transaction runs.
+      // expectedRev defaults to the frozen baseline (0 if never set), read
+      // when the transaction runs.
       put(name, bytes, opts) {
         const o = opts || {};
         const copy = new Uint8Array(bytes); // detached from the wasm heap
@@ -348,22 +401,61 @@
 
   const baseName = (path) => path.slice(path.lastIndexOf("/") + 1);
 
-  // Replace path with bytes without ever leaving it half written: write a
-  // sibling <path>.tmp, then rename it over path. On any failure the
-  // previous file is untouched and the temporary file is removed.
+  function randomHex() {
+    const b = new Uint8Array(8);
+    const c = root.crypto;
+    if (c && c.getRandomValues) c.getRandomValues(b);
+    else for (let i = 0; i < b.length; i++) b[i] = (Math.random() * 256) | 0;
+    return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+
+  const isTempName = (name) => name.startsWith(TMP_PREFIX);
+
+  // O_WRONLY | O_CREAT | O_EXCL (Emscripten's musl values). FS.open has no
+  // string mode for an exclusive create.
+  const O_CREATE_EXCL = 1 | 64 | 128;
+
+  // Replace path with bytes without ever leaving it half written: create a
+  // new temporary file ".webfrotz-tmp-<hex>-<name>" next to it exclusively
+  // (another random name if one exists), write it, then rename it over
+  // path. On any failure the previous file is untouched and only the
+  // temporary file this call created is removed; nothing that existed
+  // before is ever written or unlinked.
   function writeAtomic(FS, path, bytes, mtime) {
-    const tmp = `${path}.tmp`;
+    const slash = path.lastIndexOf("/");
+    const dir = path.slice(0, slash);
+    const name = path.slice(slash + 1);
+    const present = (p) => { try { FS.lstat(p); return true; } catch (e) { return false; } };
+    let tmp = null;
+    let stream = null;
+    for (let i = 0; i < 16 && !stream; i++) {
+      const t = `${dir}/${TMP_PREFIX}${randomHex()}-${name}`;
+      try {
+        stream = FS.open(t, O_CREATE_EXCL, 0o666);
+        tmp = t;
+      } catch (e) {
+        if (!present(t)) throw e; // not a collision
+      }
+    }
+    if (!stream) throw new Error(`could not create a temporary file for ${name}`);
     try {
-      FS.writeFile(tmp, bytes);
+      FS.write(stream, bytes, 0, bytes.length, 0);
+      FS.close(stream);
+      stream = null;
       if (mtime) FS.utime(tmp, mtime, mtime);
       FS.rename(tmp, path);
     } catch (e) {
-      try { FS.unlink(tmp); } catch (e2) { /* never created */ }
+      if (stream) { try { FS.close(stream); } catch (e2) { /* already closed */ } }
+      try { FS.unlink(tmp); } catch (e2) { /* renamed or gone */ }
       throw e;
     }
   }
 
   const SESSION_ONLY = "Saved for this session only, not to browser storage. Export it from Saves.";
+  const NOT_OWNER = "Another Frotz tab owns browser storage; saves here are kept for this " +
+    "session only. Export any you need.";
+  const NOW_OWNER = "This tab now saves to browser storage. Saves made here earlier are still " +
+    "for this session only: save again, or open Saves and choose Keep this one.";
   const conflictNotice = (name) =>
     `Another tab saved ${name} more recently. Your save is kept in this session only: ` +
     "Export it, or open Saves and choose Keep this one.";
@@ -372,24 +464,98 @@
   // storage and why, plus the last listing. Shared by app.js and glk.js.
   //
   //   opts.store     a save store, or null without IndexedDB
+  //   opts.locks     navigator.locks, or null without Web Locks
   //   opts.fs()      the Emscripten FS
   //   opts.dir       "/saves"
   //   opts.story()   the story file name recorded with each save
   //   opts.hidden(n) true for a name to leave out of entries() (optional)
   //   opts.onChange()  after anything entries() or attention() reports changes
+  //   opts.onMode(mode, previous)  after mode() changes (optional)
   //   opts.log       console-like logger
+  //
+  // mode() is "pending" (the lock request has not answered yet), "writer"
+  // (this page holds the lock and persists), "reader" (another page holds
+  // it: session-only), "unlocked" (no Web Locks: persists, revisions only)
+  // or "none" (no IndexedDB).
   function createSaveSession(opts) {
     const store = opts.store;
     const log = opts.log || console;
     const dir = opts.dir;
-    const unpersisted = new Map(); // name -> { reason: "conflict"|"failed"|"timeout" }
+    const unpersisted = new Map(); // name -> { reason: "conflict"|"failed"|"timeout"|"session" }
     const base = new Map(); // name -> stored rev the MEMFS copy equals
+    const mutations = new Map(); // name -> count of this session's local writes
     let stored = []; // last list()
+    let mode = "none";
     const changed = () => { if (opts.onChange) opts.onChange(); };
 
     const exists = (path) => {
       try { return opts.fs().isFile(opts.fs().stat(path).mode); } catch (e) { return false; }
     };
+    const mutated = (name) => mutations.set(name, (mutations.get(name) || 0) + 1);
+    const writes = () => mode === "writer" || mode === "unlocked";
+
+    function setMode(m) {
+      const prev = mode;
+      if (prev === m) return;
+      mode = m;
+      if (opts.onMode) opts.onMode(m, prev);
+      changed();
+    }
+
+    // Becoming a writer: freeze the baseline first, so no write ever runs
+    // against a guessed rev. A failed snapshot leaves every name at 0, so
+    // a save of an existing stored file conflicts (safe) rather than
+    // overwriting it.
+    async function becomeWriter(m) {
+      try {
+        stored = await store.snapshot();
+      } catch (e) {
+        log.warn("could not read the saves in browser storage", e);
+      }
+      setMode(m);
+    }
+
+    // Resolves once mode() is no longer "pending". Writes wait for it.
+    const ready = (() => {
+      if (!store) return Promise.resolve();
+      const locks = opts.locks;
+      mode = "pending";
+      if (!locks || typeof locks.request !== "function") return becomeWriter("unlocked");
+      const hold = () => new Promise(() => { /* until the page closes */ });
+      return new Promise((resolve) => {
+        let answered = false;
+        const answer = () => { if (!answered) { answered = true; resolve(); } };
+        const unlocked = (e) => {
+          if (answered) return;
+          log.warn("Web Locks unavailable; every tab writes to browser storage", e);
+          becomeWriter("unlocked").then(answer);
+        };
+        let req;
+        try {
+          req = locks.request(LOCK_NAME, { mode: "exclusive", ifAvailable: true }, async (lock) => {
+            if (lock) {
+              await becomeWriter("writer");
+              answer();
+              return hold();
+            }
+            setMode("reader");
+            answer();
+            // Wait in line; granted when the owner closes.
+            Promise.resolve()
+              .then(() => locks.request(LOCK_NAME, { mode: "exclusive" }, async () => {
+                await becomeWriter("writer");
+                return hold();
+              }))
+              .catch((e) => log.warn("waiting for browser storage failed", e));
+            return null;
+          });
+        } catch (e) {
+          unlocked(e);
+          return;
+        }
+        Promise.resolve(req).catch(unlocked);
+      });
+    })();
 
     function noteStored(name, meta) {
       stored = stored.filter((s) => s.name !== name);
@@ -398,9 +564,16 @@
 
     async function put(path, expectedRev) {
       const name = baseName(path);
+      mutated(name);
       let r;
       try {
         if (!store) throw new Error("IndexedDB is not available");
+        await ready;
+        if (!writes()) {
+          unpersisted.set(name, { reason: "session" });
+          changed();
+          return { outcome: "session", message: NOT_OWNER };
+        }
         const FS = opts.fs();
         const bytes = FS.readFile(path);
         r = await store.put(name, bytes, { mtime: +FS.stat(path).mtime, story: opts.story(), expectedRev });
@@ -420,7 +593,8 @@
         refresh();
         return { outcome: "persisted" };
       }
-      log.warn(`${path}: another tab saved rev ${r.theirs && r.theirs.rev}; kept this save in memory`);
+      log.warn(`${path}: browser storage has rev ${r.theirs && r.theirs.rev}, not the one this ` +
+        "tab expected; kept this save in memory");
       unpersisted.set(name, { reason: "conflict" });
       noteStored(name, r.theirs);
       changed();
@@ -430,13 +604,21 @@
 
     // The game deleted path (already gone from MEMFS): delete it from
     // storage too. Resolves { outcome, message? }: "removed", "none",
-    // "conflict" (another tab saved it since; the stored one is kept),
-    // "failed", "timeout" or "superseded". Never rejects.
+    // "conflict" (the stored one changed behind this tab; it is kept),
+    // "session" (not the writer: deleted here only), "failed", "timeout" or
+    // "superseded". Never rejects.
     async function remove(path) {
       const name = baseName(path);
+      mutated(name);
       unpersisted.delete(name);
       base.delete(name);
       if (!store) { changed(); return { outcome: "none" }; }
+      await ready;
+      if (!writes()) {
+        changed();
+        return { outcome: "session", message: `Deleted ${name} in this session only: another ` +
+          "Frotz tab owns browser storage." };
+      }
       let r;
       try {
         r = await store.remove(name, { story: opts.story() });
@@ -457,6 +639,7 @@
       return { outcome: r.outcome };
     }
 
+    // Re-read the listing for the dialog. Never moves a baseline.
     async function refresh() {
       if (!store) return;
       try {
@@ -469,17 +652,29 @@
     }
 
     return {
+      ready,
+      mode: () => mode,
+
+      // True while saves here cannot reach browser storage at all (another
+      // tab is the writer, or there is no IndexedDB).
+      sessionOnly: () => mode === "reader" || mode === "none",
+
+      // True when Keep this one can store this tab's copy.
+      canWrite: writes,
+
       // After the game wrote path: store it. Resolves { outcome, message? }
-      // with outcome "persisted", "conflict", "failed", "timeout" or
-      // "superseded" (a newer write of the same file took over). message
-      // is the transcript notice, if any. Never rejects.
+      // with outcome "persisted", "conflict", "session" (not the writer),
+      // "failed", "timeout" or "superseded" (a newer write of the same
+      // file took over). message is the transcript notice, if any. Never
+      // rejects.
       persist: (path) => put(path),
 
       remove,
 
       // Store this tab's copy of name over the stored version listed now
-      // (the one the player saw in the dialog). Conflicts again if another
-      // tab has saved since.
+      // (the one the player saw in the dialog): the explicit resolution of
+      // a conflict, or of a session-only save once this tab is the writer.
+      // Conflicts again if the store has changed since.
       keepLocal(name) {
         const s = stored.find((x) => x.name === name);
         return put(`${dir}/${name}`, s ? s.rev || 0 : 0);
@@ -487,20 +682,29 @@
 
       // Before the game reads path: bring the stored copy into MEMFS if
       // MEMFS lacks it or holds a different stored revision. A copy that
-      // is not in storage (a save that failed or conflicted) is this tab's
-      // own latest save and is kept. Resolves "copied", "same", "none",
-      // "local" (kept the unpersisted copy) or "error" (storage could not
-      // be read; MEMFS is unchanged). Never rejects.
+      // is not in storage (a session-only, failed or conflicted save) is
+      // this tab's own latest save and is kept. So is any local write
+      // (save, import, Keep this one, delete) that happens while storage is
+      // being read: the stored result is then discarded. Resolves "copied",
+      // "same", "none", "local" (kept this tab's copy) or "error" (storage
+      // could not be read; MEMFS is unchanged). Never rejects.
       async load(path) {
         const name = baseName(path);
         if (!store) return "none";
         if (unpersisted.has(name) && exists(path)) return "local";
+        const before = mutations.get(name) || 0;
         let rec;
         try {
           rec = await store.get(name, "load");
         } catch (e) {
           log.warn(`could not read ${path} from IndexedDB`, e);
           return "error";
+        }
+        // No await from here on: nothing can change MEMFS in between.
+        if ((mutations.get(name) || 0) !== before || (unpersisted.has(name) && exists(path))) {
+          log.warn(`${path} changed in this tab while browser storage was read; ` +
+            "kept this tab's copy");
+          return exists(path) ? "local" : "none";
         }
         if (!rec) return "none";
         const rev = rec.rev || 0;
@@ -513,7 +717,7 @@
         }
         base.set(name, rev);
         store.adopt(name, rev);
-        unpersisted.delete(name);
+        unpersisted.delete(name); // its local copy was gone: the stored one replaces it
         changed();
         return "copied";
       },
@@ -522,6 +726,7 @@
       // take it, leaving the old file), then persist it like a save. A
       // conflict is not possible to resolve silently here either.
       async importBytes(path, bytes) {
+        mutated(baseName(path));
         writeAtomic(opts.fs(), path, bytes);
         return put(path);
       },
@@ -529,10 +734,11 @@
       refresh,
 
       // Rows for the Saves dialog. Each stored file has a "stored" row; a
-      // MEMFS file gets a "local" row when it is not in storage (failed or
-      // conflicted, or not stored at all). For a conflict both rows show.
+      // MEMFS file gets a "local" row when it is not in storage (failed,
+      // conflicted or session-only, or not stored at all). For a conflict
+      // both rows show. Temporary files are never listed.
       entries() {
-        const hidden = opts.hidden || (() => false);
+        const hidden = (n) => isTempName(n) || (opts.hidden ? opts.hidden(n) : false);
         const rows = [];
         const names = new Set();
         for (const s of stored) {
@@ -565,8 +771,8 @@
       },
 
       // Names of files this tab saved that are not in browser storage. The
-      // badge stays on while any remain; a later persisted save of the same
-      // file clears it.
+      // badge stays on while any remain (or while sessionOnly()); a later
+      // persisted save of the same file clears it.
       attention() {
         return [...unpersisted.entries()].map(([name, u]) => ({ name, reason: u.reason }));
       },
@@ -605,7 +811,8 @@
         label.textContent = `${f.name} · ${when} · in browser storage`;
       } else {
         label.textContent = `${f.name} · ${when} · this tab only, not in browser storage` +
-          (f.reason === "conflict" ? " (another tab saved a newer one)" : "");
+          (f.reason === "conflict" ? " (another tab saved a newer one)" :
+            f.reason === "session" ? " (another tab owned browser storage)" : "");
         li.dataset.local = "";
       }
       const exp = document.createElement("button");
@@ -620,7 +827,8 @@
         }
       });
       li.append(label, exp);
-      if (f.where === "local" && f.reason === "conflict") {
+      if (f.where === "local" && (f.reason === "conflict" || f.reason === "session") &&
+          session.canWrite()) {
         const keep = document.createElement("button");
         keep.type = "button";
         keep.textContent = "Keep this one";
@@ -628,6 +836,7 @@
           const r = await session.keepLocal(f.name);
           onMessage(r.outcome === "persisted" ? `Stored this tab's ${f.name} in browser storage.` :
             r.outcome === "conflict" ? `Another tab saved ${f.name} again. Nothing was replaced.` :
+            r.outcome === "session" ? NOT_OWNER :
             `Could not write ${f.name} to browser storage.`);
         });
         li.append(keep);
@@ -640,11 +849,15 @@
   function attentionText(session, hasStore) {
     const a = session.attention();
     const parts = [];
+    if (session.mode() === "reader") parts.push(NOT_OWNER);
     const conflicts = a.filter((x) => x.reason === "conflict").map((x) => x.name);
+    if (session.mode() !== "reader" && a.some((x) => x.reason === "session"))
+      parts.push("Saves made while another tab owned browser storage are still in this tab " +
+        "only: save again, or Keep this one.");
     if (conflicts.length)
       parts.push(`Another tab saved a newer ${conflicts.join(", ")}. Both versions are listed: ` +
         "export either one, or Keep this one to store this tab's version instead.");
-    if (a.some((x) => x.reason !== "conflict") || !hasStore)
+    if (a.some((x) => x.reason !== "conflict" && x.reason !== "session") || !hasStore)
       parts.push("A save could not be written to browser storage. It is kept only until " +
         "this page closes, so export it.");
     return parts.join(" ");
@@ -652,7 +865,8 @@
 
   const api = {
     createSaveStore, createSaveSession, writeAtomic, renderSaveList, attentionText,
-    StorageTimeout, Superseded, SESSION_ONLY, conflictNotice,
+    StorageTimeout, Superseded, SESSION_ONLY, NOT_OWNER, NOW_OWNER, conflictNotice,
+    LOCK_NAME, TMP_PREFIX, isTempName,
   };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.WebFrotzSaves = api;

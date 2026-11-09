@@ -281,7 +281,9 @@ const webFrotz = {
 // to IndexedDB; a RESTORE first brings that one file in. Each stored file
 // has a revision, and a write only replaces the revision this tab last saw,
 // so a tab never overwrites another tab's newer save: it gets a conflict,
-// keeps its own save in memory, and says so (saves.js has the details).
+// keeps its own save in memory, and says so. Where Web Locks exist, only
+// one tab (the first) writes at all; the others keep their saves for the
+// session and say so (saves.js has the details).
 
 const MAX_SAVE_BYTES = 4 * 1024 * 1024;
 
@@ -297,13 +299,26 @@ const saves = WebFrotzSaves.createSaveSession({
   fs: () => Module.FS,
   dir: SAVE_DIR,
   story: () => storyFile,
+  locks: navigator.locks || null,
   onChange: savesChanged,
+  onMode: savesModeChanged,
   log: { warn: (...a) => console.warn("[frotz]", ...a) },
 });
 
+// Only one tab writes to browser storage (saves.js). Say so once when this
+// one cannot, and again when it takes over; the dialog note and the badge
+// keep saying it meanwhile.
+function savesModeChanged(mode, previous) {
+  if (mode === "reader") transcriptNotice(WebFrotzSaves.NOT_OWNER);
+  else if (mode === "writer" && previous === "reader") transcriptNotice(WebFrotzSaves.NOW_OWNER);
+}
+
 // The badge stays on while any save this tab made is not in storage.
 function savesChanged() {
-  if (saves.attention().length) {
+  if (saves.mode() === "reader") {
+    savesBtn.dataset.warning = "";
+    savesBtn.setAttribute("aria-label", "Saves: another tab owns browser storage");
+  } else if (saves.attention().length) {
     savesBtn.dataset.warning = "";
     savesBtn.setAttribute("aria-label", "Saves: a save is not in browser storage");
   } else {
@@ -399,6 +414,8 @@ importInput.addEventListener("change", async () => {
   importMessage = r.outcome === "persisted" ? `Imported ${file.name} as ${saveName}.` :
     r.outcome === "conflict" ? `Imported ${file.name} as ${saveName} for this session only: ` +
       "another tab saved a newer one to browser storage." :
+    r.outcome === "session" ? `Imported ${file.name} as ${saveName} for this session only: ` +
+      "another Frotz tab owns browser storage." :
     `Imported ${file.name} as ${saveName}, for this session only.`;
   renderSaves();
 });

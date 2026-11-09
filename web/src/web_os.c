@@ -640,6 +640,9 @@ zchar os_read_key(int timeout, int cursor)
 
 /* ---- Files ---- */
 
+/* Reserved for saves.js temporary files (TMP_PREFIX there). */
+#define TMP_PREFIX ".webfrotz-tmp-"
+
 /* The kind and path of the last file request, so os_mark_recent_save can
    tell a save from a restore and persist the file the core actually wrote
    (the game's save file, or an auxiliary file from SAVE with operands). */
@@ -653,8 +656,13 @@ int os_read_file_name(char *file_name, const char *default_name, int flag)
     if (slash)
         base = slash + 1;
     /* The spike does not prompt: every save/restore uses the default name
-       under /saves in MEMFS. */
-    snprintf(file_name, MAX_FILE_NAME, "%s/%s", SAVE_PATH, base);
+       under /saves in MEMFS. Names starting ".webfrotz-tmp-" belong to
+       saves.js (its temporary files while replacing a file), so a game
+       asking for one gets "_webfrotz-tmp-..." instead. */
+    if (strncmp(base, TMP_PREFIX, sizeof TMP_PREFIX - 1) == 0)
+        snprintf(file_name, MAX_FILE_NAME, "%s/_%s", SAVE_PATH, base + 1);
+    else
+        snprintf(file_name, MAX_FILE_NAME, "%s/%s", SAVE_PATH, base);
     last_file_flag = flag;
     snprintf(last_file_path, sizeof last_file_path, "%s", file_name);
     if (flag == FILE_RESTORE || flag == FILE_LOAD_AUX)
