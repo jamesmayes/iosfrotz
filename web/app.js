@@ -11,8 +11,6 @@
 // readLine/readKey are awaited from EM_ASYNC_JS, so under ASYNCIFY the
 // interpreter's C stack is suspended until the player presses Enter.
 
-const STORY = "games/Balances.z5";
-
 const transcriptEl = document.getElementById("transcript");
 const statusEl = document.getElementById("status");
 const form = document.getElementById("command-form");
@@ -86,6 +84,7 @@ const webFrotz = {
     return wait("key", ms, 0);
   },
   fatal(msg) {
+    document.body.dataset.mode = "game";
     webFrotz.output("\n" + msg + "\n", 2);
   },
   syncSaves() {
@@ -199,11 +198,118 @@ importInput.addEventListener("change", async () => {
   renderSaves();
 });
 
-async function start() {
-  const resp = await fetch(STORY);
-  if (!resp.ok) throw new Error(`Could not load ${STORY}: ${resp.status}`);
-  const story = new Uint8Array(await resp.arrayBuffer());
-  const name = STORY.split("/").pop();
+
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!pending || pending.kind === "line") {
+    const line = input.value;
+    input.value = "";
+    if (pending) settle(line);
+    else typeAhead.push(line);
+  } else {
+    settle(13); // ZC_RETURN for "press any key"
+  }
+});
+
+input.addEventListener("keydown", (e) => {
+  if (!pending || pending.kind !== "key") return;
+  e.preventDefault();
+  if (e.key === "Enter") return settle(13);
+  if (e.key === "Backspace") return settle(8);
+  if (e.key === "Escape") return settle(27);
+  const arrows = { ArrowUp: 0x81, ArrowDown: 0x82, ArrowLeft: 0x83, ArrowRight: 0x84 };
+  if (e.key in arrows) return settle(arrows[e.key]);
+  if (e.key.length === 1) settle(e.key.codePointAt(0));
+});
+
+// ---- Story picker ----
+//
+// The start screen lists games/stories.json. Picking one sets the URL hash
+// (#story=Balances) so a link can be shared; the hash selects the story at
+// load. A story can only be loaded once per Module, so changing story while
+// one is running reloads the page.
+
+const pickerEl = document.getElementById("picker");
+const storyListEl = document.getElementById("story-list");
+const openInput = document.getElementById("open-story");
+const storiesBtn = document.getElementById("stories-button");
+const titleEl = document.getElementById("story-title");
+let stories = [];
+let running = false;
+
+const stem = (file) => file.replace(/\.[^.]*$/, "");
+
+function hashStory() {
+  const m = /(?:^|[#&])story=([^&]+)/.exec(location.hash);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function findStory(id) {
+  if (!id) return null;
+  const k = id.toLowerCase();
+  return stories.find((s) => stem(s.file).toLowerCase() === k) || null;
+}
+
+function renderPicker() {
+  storyListEl.textContent = "";
+  for (const s of stories) {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = `#story=${encodeURIComponent(stem(s.file))}`;
+    const t = document.createElement("span");
+    t.className = "story-name";
+    t.textContent = s.title;
+    const by = document.createElement("span");
+    by.className = "story-author";
+    by.textContent = s.author;
+    a.append(t, by);
+    li.appendChild(a);
+    storyListEl.appendChild(li);
+  }
+}
+
+function showPicker() {
+  document.body.dataset.mode = "picker";
+  pickerEl.hidden = false;
+  titleEl.textContent = "Web Frotz";
+}
+
+function onHashChange() {
+  if (running) return location.reload();
+  const s = findStory(hashStory());
+  if (s) loadBundled(s).catch((err) => webFrotz.fatal(String(err)));
+}
+
+async function loadBundled(s) {
+  const resp = await fetch(`games/${encodeURIComponent(s.file)}`);
+  if (!resp.ok) throw new Error(`Could not load ${s.file}: ${resp.status}`);
+  await play(s.file, s.title, new Uint8Array(await resp.arrayBuffer()));
+}
+
+openInput.addEventListener("change", async () => {
+  const file = openInput.files && openInput.files[0];
+  openInput.value = "";
+  if (!file || running) return;
+  // A local file cannot be linked to, so drop any #story= from the URL.
+  history.replaceState(null, "", location.pathname + location.search);
+  await play(file.name, stem(file.name), new Uint8Array(await file.arrayBuffer()));
+});
+
+storiesBtn.addEventListener("click", () => {
+  // A URL without a fragment is always a full load, which ends the game.
+  if (running) location.replace(location.pathname + location.search);
+});
+
+// The core strips everything from the first "." to build <story>.sav, and
+// fastmem.c detects a Blorb (FORM/IFRS + ZCOD chunk) itself, so a .zblorb
+// can be written to MEMFS as is.
+async function play(fileName, title, bytes) {
+  running = true;
+  pickerEl.hidden = true;
+  document.body.dataset.mode = "game";
+  titleEl.textContent = title;
+  document.title = `${title} · Web Frotz`;
+  const name = fileName.replace(/[\/]/g, "_");
 
   Module = await createFrotz({
     webFrotz,
@@ -220,10 +326,21 @@ async function start() {
     console.warn("[frotz] could not load saves from IndexedDB", e);
   }
   saveName = name.replace(/\..*$/, "") + ".sav";
-  Module.FS.writeFile(`/games/${name}`, story);
+  Module.FS.writeFile(`/games/${name}`, bytes);
   // callMain returns when interpret() first suspends; the game then runs
   // from Promise resolutions driven by the input form.
   Module.callMain([`/games/${name}`]);
+  input.focus({ preventScroll: true });
 }
 
-start().catch((err) => webFrotz.fatal(String(err)));
+async function init() {
+  const resp = await fetch("games/stories.json");
+  stories = resp.ok ? await resp.json() : [];
+  renderPicker();
+  window.addEventListener("hashchange", onHashChange);
+  const s = findStory(hashStory());
+  if (s) await loadBundled(s);
+  else showPicker();
+}
+
+init().catch((err) => webFrotz.fatal(String(err)));

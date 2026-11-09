@@ -23,7 +23,7 @@ make clean
 
 ## Serve
 
-The page fetches `dist/frotz.wasm` and `games/Balances.z5`, so it has to be served over HTTP. Opening it with `file://` does not work.
+The page fetches `dist/frotz.wasm`, `games/stories.json` and the chosen story, so it has to be served over HTTP. Opening it with `file://` does not work.
 
 ```sh
 cd web
@@ -43,6 +43,18 @@ Cross-Origin-Embedder-Policy: require-corp
 ## How input works
 
 `os_read_line` and `os_read_key` call `EM_ASYNC_JS` functions that `await` a Promise from `app.js`. ASYNCIFY unwinds the C stack at that point, so `callMain` returns to the browser. The stack is rewound when the player presses Enter, or when a timed-input timer resolves the Promise with a timeout. Lines submitted while the interpreter is still busy are queued (type-ahead), not dropped.
+
+## Stories
+
+The start screen lists `games/stories.json`. Picking a story sets the URL hash, for example `#story=Balances` (the file name without its extension, case-insensitive), so a link opens that story directly. Changing story while one is running reloads the page, since a story is loaded once per WebAssembly instance.
+
+**Open a story file…** plays a Z-code file from the device (`.z3`–`.z8`, `.zblorb`, `.zlb`). Nothing is uploaded. A local file cannot be linked to, so the hash is cleared.
+
+Blorb-wrapped Z-code needs no extra code: `init_memory()` in `frotz/common/fastmem.c` finds the `ZCOD` chunk in a `FORM`/`IFRS` file and sets `fileZCodeOffset`, which loading, `restart`, `save` and `restore` all honour. This was tested with *Lost Pig* (`resources/Games/LostPig.zblorb`, not copied into `web/`): play, `save`, then `restore` in a fresh instance.
+
+### Bundled stories
+
+`games/` holds the 21 `.z5`/`.z8` files from `resources/Games`, which the iOS app already ships (the Xcode project bundles that folder as a resource). The `.zblorb` files there are not copied. V6 (`.z6`) games load, but pictures are not drawn.
 
 ## Saves
 
@@ -67,12 +79,11 @@ Cross-Origin-Embedder-Policy: require-corp
 ## What does not work (yet)
 
 - There is no file-name prompt. Every save and restore uses `<story>.sav`.
-- No choice of story: `app.js` hard-codes `games/Balances.z5`. Blorb-wrapped stories (`.zblorb`) have not been tried.
 - No sound, no pictures (V6), no colours (colour is turned off in the header).
 - No `[MORE]` paging. The transcript just scrolls.
 - Upper-window games that position the cursor in window 0 or rely on `os_scroll_area` (cursor-driven layouts) will look wrong.
 - Transcripts (`script`) and command recording write to MEMFS only.
 
-## Game
+## Games
 
-`games/Balances.z5` is Graham Nelson's *Balances* (1994–96, Release 5). It is one of the example games shipped with the Inform design system, it is freely distributed on the IF Archive, and the iOS app already bundles it (`resources/Games/Balances.z5`).
+Every file in `games/` is a byte-for-byte copy of a file in `resources/Games`, which the iOS app already redistributes. The list, with authors, is in `games/stories.json`.

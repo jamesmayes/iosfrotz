@@ -34,7 +34,7 @@
     }
     #toolbar {
       display: flex;
-      justify-content: flex-end;
+      align-items: center;
       gap: 8px;
       padding: 6px 16px;
       border-bottom: 1px solid var(--rule);
@@ -69,6 +69,42 @@
     #saves-list li.empty { color: var(--muted); }
     .dialog-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+    #story-title {
+      flex: 1;
+      min-width: 0;
+      text-align: center;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    body[data-mode="picker"] #stories-button,
+    body[data-mode="picker"] #saves-button { visibility: hidden; }
+    body[data-mode="picker"] #status,
+    body[data-mode="picker"] #transcript,
+    body[data-mode="picker"] #command-form { display: none; }
+    #picker {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      max-width: 46rem;
+      width: 100%;
+      align-self: center;
+    }
+    #picker h1 { font-size: 22px; margin: 8px 0 12px; }
+    #story-list { list-style: none; margin: 0 0 16px; padding: 0; }
+    #story-list a {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 0 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--rule);
+      color: inherit;
+      text-decoration: none;
+    }
+    #story-list a:hover .story-name { text-decoration: underline; }
+    .story-author { color: var(--muted); font-size: 15px; }
     #status {
       margin: 0;
       padding: 4px 16px;
@@ -113,10 +149,22 @@
     }
   </style>
 </head>
-<body>
+<body data-mode="picker">
   <div id="toolbar">
+    <button id="stories-button" type="button">Stories</button>
+    <span id="story-title">Web Frotz</span>
     <button id="saves-button" type="button">Saves</button>
   </div>
+  <section id="picker" hidden>
+    <h1>Choose a story</h1>
+    <ul id="story-list"></ul>
+    <label class="file-button">Open a story file…
+      <input id="open-story" type="file"
+             accept=".z3,.z4,.z5,.z7,.z8,.zblorb,.zlb,.z6">
+    </label>
+    <p class="note">Your own Z-code files (.z3–.z8, .zblorb) stay on this device;
+      nothing is uploaded. V6 graphics games are not supported.</p>
+  </section>
   <pre id="status" hidden></pre>
   <div id="transcript" aria-live="polite"></div>
   <form id="command-form" autocomplete="off">
