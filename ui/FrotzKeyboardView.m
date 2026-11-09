@@ -5,7 +5,7 @@
 
 #import "FrotzKeyboardView.h"
 
-static const CGFloat kMinKeyHeight = 36, kMaxKeyHeight = 64, kMaxFillKeyHeight = 96;
+static const CGFloat kMinKeyHeight = 36, kMaxKeyHeight = 64, kMaxFillKeyHeight = 96, kMaxCompactKeyHeight = 40;
 static const NSTimeInterval kRepeatDelay = 0.4, kRepeatInterval = 0.08;
 static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
 static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down and up; only a real slide-off cancels
@@ -236,6 +236,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 #pragma mark - Keyboard
 
 @implementation FrotzKeyboardView {
+    FrotzKeyboardLayout *m_rows;   // the layout or its compact form, whichever is showing
     NSMutableArray<FrotzKeyView *> *m_keyViews;
     NSMapTable<UITouch *, FrotzKeyTouch *> *m_touchKeys;
     NSTimer *m_repeatTimer;
@@ -254,6 +255,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 -(instancetype)initWithLayout:(FrotzKeyboardLayout *)layout skin:(FrotzKeyboardSkin *)skin {
     if ((self = [super initWithFrame: CGRectZero])) {
         _layout = layout;
+        m_rows = layout;
         _skin = skin;
         _keyLayer = [FrotzKeyboardLayerDefault copy];
         self.backgroundColor = skin.caseColor;
@@ -274,16 +276,16 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 // Never below a point, so a view too narrow for its gaps squashes keys rather than flips them.
 -(CGFloat)unitWidthForWidth:(CGFloat)width {
     UIEdgeInsets safe = self.safeAreaInsets, bezel = _skin.bezelInsets;
-    CGFloat units = MAX(1, _layout.unitsPerRow), gap = _layout.gap;
+    CGFloat units = MAX(1, m_rows.unitsPerRow), gap = m_rows.gap;
     return MAX(1, (width - safe.left - safe.right - bezel.left - bezel.right - (units - 1) * gap) / units);
 }
 
 -(CGFloat)preferredHeightForWidth:(CGFloat)width {
     UIEdgeInsets bezel = _skin.bezelInsets;
-    CGFloat gap = _layout.gap;
-    NSUInteger rows = _layout.maxRowCount;
-    CGFloat keyHeight = [self unitWidthForWidth: width] / _layout.keyAspect;
-    keyHeight = MIN(kMaxKeyHeight, MAX(kMinKeyHeight, keyHeight));
+    CGFloat gap = m_rows.gap;
+    NSUInteger rows = m_rows.maxRowCount;
+    CGFloat keyHeight = [self unitWidthForWidth: width] / m_rows.keyAspect;
+    keyHeight = MIN(_compact ? kMaxCompactKeyHeight : kMaxKeyHeight, MAX(kMinKeyHeight, keyHeight));
     return ceil(bezel.top + bezel.bottom + rows * keyHeight + (rows > 0 ? rows - 1 : 0) * gap);
 }
 
@@ -297,10 +299,22 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     [self setNeedsLayout];
 }
 
+-(void)setCompact:(BOOL)compact {
+    FrotzKeyboardLayout *rows = compact && _layout.compactLayout ? _layout.compactLayout : _layout;
+    _compact = compact;
+    if (rows == m_rows)
+        return;
+    [self releaseAllKeys]; // the keys under any finger are about to go
+    m_rows = rows;
+    if (!m_rows.layers[_keyLayer])
+        _keyLayer = [FrotzKeyboardLayerDefault copy];
+    [self rebuildKeys];
+}
+
 #pragma mark Layers and shift
 
 -(void)setKeyLayer:(NSString *)layer {
-    if (!_layout.layers[layer])
+    if (!m_rows.layers[layer])
         return;
     if (m_layerTouch || m_inTouchDown) {
         m_pendingLayer = [layer isEqualToString: _keyLayer] ? nil : [layer copy];
@@ -354,7 +368,7 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
 }
 
 -(void)rebuildKeys {
-    NSArray<FrotzKeyboardRow *> *oldRows = _layout.layers[_keyLayer];
+    NSArray<FrotzKeyboardRow *> *oldRows = m_rows.layers[_keyLayer];
     NSArray<FrotzKeyView *> *oldViews = [m_keyViews copy];
     // A layer waiting on a held key is shown now, so nothing is left to wait for.
     m_layerTouch = nil;
@@ -365,7 +379,7 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
     for (FrotzKeyView *kv in m_keyViews)
         [kv removeFromSuperview];
     [m_keyViews removeAllObjects];
-    NSArray<FrotzKeyboardRow *> *rows = _layout.layers[_keyLayer];
+    NSArray<FrotzKeyboardRow *> *rows = m_rows.layers[_keyLayer];
     for (FrotzKeyboardRow *row in rows) {
         for (FrotzKeyboardKey *key in row.keys) {
             FrotzKeyView *kv = [[FrotzKeyView alloc] initWithKey: key skin: _skin];
@@ -398,12 +412,14 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
     CGRect rect = UIEdgeInsetsInsetRect(UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets), _skin.bezelInsets);
     rect.origin.y += _topInset;
     rect.size.height = MAX(0, rect.size.height - _topInset);
-    CGFloat gap = _layout.gap;
-    NSUInteger rows = MAX(1, _layout.maxRowCount);
+    CGFloat gap = m_rows.gap;
+    NSUInteger rows = MAX(1, m_rows.maxRowCount);
     CGFloat unitWidth = [self unitWidthForWidth: self.bounds.size.width];
     CGFloat keyHeight = MAX(1, (rect.size.height - (rows - 1) * gap) / rows);
     if (_fillsHeight)
         keyHeight = MIN(kMaxFillKeyHeight, keyHeight); // past this the keys stop looking like keys
+    if (_compact)
+        keyHeight = MIN(kMaxCompactKeyHeight, keyHeight);
     UIFont *font = [_skin fontForKeyHeight: keyHeight];
     BOOL chiclet = _skin.profile == FrotzKeyProfileChiclet;
 
@@ -411,7 +427,7 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
     NSMutableArray<FrotzKeyAccessibilityElement *> *aboveRow = [NSMutableArray array], *thisRow = [NSMutableArray array];
     NSUInteger i = 0;
     CGFloat y = rect.origin.y;
-    for (FrotzKeyboardRow *row in _layout.layers[_keyLayer]) {
+    for (FrotzKeyboardRow *row in m_rows.layers[_keyLayer]) {
         CGFloat x = rect.origin.x + row.indent * (unitWidth + gap);
         for (FrotzKeyboardKey *key in row.keys) {
             CGFloat w = MAX(1, key.width * unitWidth + (key.width - 1) * gap); // a sub-unit key on a cramped row
@@ -488,7 +504,7 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
 
 // A key's frame plus half the gap around it, so a near miss still lands.
 -(CGRect)hitRectForKey:(FrotzKeyView *)keyView {
-    CGFloat slop = -_layout.gap / 2 - 1;
+    CGFloat slop = -m_rows.gap / 2 - 1;
     return CGRectInset(keyView.frame, slop, slop);
 }
 
@@ -576,7 +592,7 @@ static NSString *PhaseName(UITouchPhase phase) {
 }
 
 -(BOOL)point:(CGPoint)pt isOnKey:(FrotzKeyView *)keyView {
-    CGFloat slop = -MAX(kReleaseSlop, _layout.gap / 2 + 1);
+    CGFloat slop = -MAX(kReleaseSlop, m_rows.gap / 2 + 1);
     if (CGRectContainsPoint(CGRectInset(keyView.frame, slop, slop), pt))
         return YES;
     FrotzKeyView *other = keyView.joinedKey;
@@ -643,9 +659,9 @@ static BOOL ActsOnTouchDown(FrotzKeyAction action) {
     *layer = _keyLayer;
     if (!m_pendingLayer)
         return keyView.key;
-    NSArray<FrotzKeyboardRow *> *pending = _layout.layers[m_pendingLayer];
+    NSArray<FrotzKeyboardRow *> *pending = m_rows.layers[m_pendingLayer];
     NSUInteger index = [m_keyViews indexOfObject: keyView];
-    index = index == NSNotFound ? NSNotFound : CorrespondingKeyIndex(_layout.layers[_keyLayer], pending, index);
+    index = index == NSNotFound ? NSNotFound : CorrespondingKeyIndex(m_rows.layers[_keyLayer], pending, index);
     if (index == NSNotFound)
         return keyView.key;
     for (FrotzKeyboardRow *row in pending) {

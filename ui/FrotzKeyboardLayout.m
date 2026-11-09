@@ -273,6 +273,71 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     return rows;
 }
 
+// Each layer's rows from "layers", with a shift layer made from the default one if there is none.
+static NSDictionary<NSString *, NSArray<FrotzKeyboardRow *> *> *ParseLayers(NSDictionary *json, NSString **error) {
+    NSDictionary *layersJSON = Optional(json, @"layers", [NSDictionary class], error);
+    NSMutableDictionary *layers = [NSMutableDictionary dictionary];
+    for (NSString *layerName in layersJSON) {
+        if (*error)
+            break;
+        NSArray *rows = ParseRows(layersJSON[layerName], error);
+        if (!rows)
+            *error = [NSString stringWithFormat: @"layer \"%@\": %@", layerName, *error];
+        else
+            layers[layerName] = rows;
+    }
+    NSArray<FrotzKeyboardRow *> *defaultRows = layers[FrotzKeyboardLayerDefault];
+    if (!defaultRows)
+        Fail(error, @"no default layer");
+    if (*error)
+        return nil;
+    if (!layers[FrotzKeyboardLayerShift]) {
+        NSMutableArray *shiftRows = [NSMutableArray array];
+        for (FrotzKeyboardRow *row in defaultRows) {
+            NSMutableArray *keys = [NSMutableArray array];
+            for (FrotzKeyboardKey *key in row.keys)
+                [keys addObject: [key upperCasedKey]];
+            [shiftRows addObject: [[FrotzKeyboardRow alloc] initWithIndent: row.indent keys: keys]];
+        }
+        layers[FrotzKeyboardLayerShift] = shiftRows;
+    }
+    return layers;
+}
+
+// A compact layer from a full one: no function keys or keypads, and only the bottom four rows (three
+// letter rows and the space bar). A backspace that was on a dropped row moves to the top kept row.
+static NSArray<FrotzKeyboardRow *> *CompactRows(NSArray<FrotzKeyboardRow *> *rows) {
+    static NSSet *dropped;
+    if (!dropped)
+        dropped = [NSSet setWithObjects: @"fn", @"num", @"pad", nil];
+    NSMutableArray<FrotzKeyboardRow *> *kept = [NSMutableArray array];
+    for (FrotzKeyboardRow *row in rows) {
+        NSMutableArray *keys = [NSMutableArray array];
+        for (FrotzKeyboardKey *key in row.keys)
+            if (![dropped containsObject: key.group])
+                [keys addObject: key];
+        if (keys.count)
+            [kept addObject: [[FrotzKeyboardRow alloc] initWithIndent: row.indent keys: keys]];
+    }
+    NSUInteger first = kept.count > 4 ? kept.count - 4 : 0;
+    FrotzKeyboardKey *(^backspaceIn)(NSArray<FrotzKeyboardRow *> *) = ^FrotzKeyboardKey *(NSArray<FrotzKeyboardRow *> *in) {
+        for (FrotzKeyboardRow *row in in)
+            for (FrotzKeyboardKey *key in row.keys)
+                if (key.action == FrotzKeyActionBackspace)
+                    return key;
+        return nil;
+    };
+    NSArray<FrotzKeyboardRow *> *bottom = [kept subarrayWithRange: NSMakeRange(first, kept.count - first)];
+    FrotzKeyboardKey *backspace = backspaceIn([kept subarrayWithRange: NSMakeRange(0, first)]);
+    if (bottom.count && backspace && !backspaceIn(bottom)) {
+        NSMutableArray *rowsWithBackspace = [bottom mutableCopy];
+        FrotzKeyboardRow *top = bottom[0];
+        rowsWithBackspace[0] = [[FrotzKeyboardRow alloc] initWithIndent: top.indent keys: [top.keys arrayByAddingObject: backspace]];
+        bottom = rowsWithBackspace;
+    }
+    return bottom;
+}
+
 +(instancetype)layoutWithID:(NSString *)layoutID {
     NSDictionary *json = LoadKeyboardJSON(layoutID, @"layout.json");
     if (!json)
@@ -285,35 +350,35 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     CGFloat gap = OptionalNumber(json, @"gap", 6, &error);
     if (gap < 0)
         Fail(&error, @"gap is negative");
-    NSDictionary *layersJSON = Optional(json, @"layers", [NSDictionary class], &error);
-    NSMutableDictionary *layers = [NSMutableDictionary dictionary];
-    for (NSString *layerName in layersJSON) {
-        if (error)
-            break;
-        NSArray *rows = ParseRows(layersJSON[layerName], &error);
-        if (!rows)
-            error = [NSString stringWithFormat: @"layer \"%@\": %@", layerName, error];
-        else
-            layers[layerName] = rows;
+    NSDictionary *layers = error ? nil : ParseLayers(json, &error);
+    // "compact": {"layers": ..., "keyAspect": ...} is the small keyboard under a Flow layout; without
+    // one it is made from the full layers.
+    NSDictionary *compactJSON = Optional(json, @"compact", [NSDictionary class], &error);
+    CGFloat compactAspect = OptionalNumber(compactJSON, @"keyAspect", keyAspect, &error);
+    if (compactAspect <= 0)
+        Fail(&error, @"compact keyAspect is zero or less");
+    NSDictionary *compactLayers = nil;
+    if (compactJSON && !error) {
+        compactLayers = ParseLayers(compactJSON, &error);
+        if (!compactLayers)
+            error = [NSString stringWithFormat: @"compact: %@", error];
     }
-    NSArray<FrotzKeyboardRow *> *defaultRows = layers[FrotzKeyboardLayerDefault];
-    if (!defaultRows)
-        Fail(&error, @"no default layer");
     if (error) {
         LogMalformed(@"layout.json", layoutID, error);
         return nil;
     }
-    if (!layers[FrotzKeyboardLayerShift]) {
-        NSMutableArray *shiftRows = [NSMutableArray array];
-        for (FrotzKeyboardRow *row in defaultRows) {
-            NSMutableArray *keys = [NSMutableArray array];
-            for (FrotzKeyboardKey *key in row.keys)
-                [keys addObject: [key upperCasedKey]];
-            [shiftRows addObject: [[FrotzKeyboardRow alloc] initWithIndent: row.indent keys: keys]];
+    if (!compactLayers) {
+        NSMutableDictionary *derived = [NSMutableDictionary dictionary];
+        for (NSString *layerName in layers) {
+            NSArray *rows = CompactRows(layers[layerName]);
+            if (rows.count)
+                derived[layerName] = rows;
         }
-        layers[FrotzKeyboardLayerShift] = shiftRows;
+        compactLayers = derived[FrotzKeyboardLayerDefault] ? derived : layers;
     }
-    return [[self alloc] initWithID: layoutID name: name layers: layers keyAspect: MAX(0.1, keyAspect) gap: gap];
+    FrotzKeyboardLayout *layout = [[self alloc] initWithID: layoutID name: name layers: layers keyAspect: MAX(0.1, keyAspect) gap: gap];
+    layout->_compactLayout = [[self alloc] initWithID: layoutID name: name layers: compactLayers keyAspect: MAX(0.1, compactAspect) gap: gap];
+    return layout;
 }
 
 -(instancetype)initWithID:(NSString *)layoutID name:(NSString *)name layers:(NSDictionary *)layers
