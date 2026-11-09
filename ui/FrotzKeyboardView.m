@@ -22,6 +22,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 @implementation FrotzKeyView {
     FrotzKeyboardSkin *m_skin;
     UILabel *m_label, *m_sublabel;
+    UIFont *m_sublabelFont;
     CAShapeLayer *m_bevel;
     CALayer *m_bottomEdge;
 }
@@ -33,7 +34,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
         self.userInteractionEnabled = NO;
         self.isAccessibilityElement = NO; // the keyboard provides the accessibility elements
         m_label = [[UILabel alloc] init];
-        m_label.text = skin.upperCaseLegends ? [key.label uppercaseString] : key.label;
+        m_label.text = skin.upperCaseLegends && key.action == FrotzKeyActionText ? [key.label uppercaseString] : key.label;
         m_label.textAlignment = NSTextAlignmentCenter;
         m_label.adjustsFontSizeToFitWidth = YES;
         m_label.minimumScaleFactor = 0.5;
@@ -94,22 +95,43 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
 -(void)setFont:(UIFont *)font {
     // Word legends ("return", "space") sit smaller than single characters, as on iOS.
     m_label.font = _key.label.length > 2 ? [font fontWithSize: round(font.pointSize * 0.65)] : font;
-    m_sublabel.font = [font fontWithSize: round(font.pointSize * 0.45)];
+    m_sublabelFont = [font fontWithSize: round(font.pointSize * 0.45)];
+    m_sublabel.font = m_sublabelFont;
 }
 
 -(void)layoutSubviews {
     [super layoutSubviews];
     CGRect b = self.bounds;
+    CGFloat edge = m_bevel ? MAX(2, round(b.size.height * 0.08)) : 0;
+    FrotzSublabelPosition position = m_skin.sublabelPosition;
+    if (position == FrotzSublabelPositionFront) {
+        // Front-printed legends (the C64's graphics) need a front face deep enough to hold them,
+        // on every key so the row looks even; a key with no front face takes them underneath.
+        if (m_bevel)
+            edge = MAX(edge, ceil(m_sublabelFont.lineHeight) + 2);
+        else
+            position = FrotzSublabelPositionBottom;
+    }
+    CGFloat w = b.size.width - 4;
     if (m_sublabel) {
-        CGFloat subHeight = ceil(m_sublabel.font.lineHeight);
-        m_sublabel.frame = CGRectMake(2, 2, b.size.width - 4, subHeight);
-        m_label.frame = CGRectMake(2, subHeight, b.size.width - 4, b.size.height - subHeight - 2);
-    } else
+        CGFloat subHeight = ceil(m_sublabelFont.lineHeight);
+        if (position == FrotzSublabelPositionTop) {
+            m_sublabel.frame = CGRectMake(2, 2, w, subHeight);
+            m_label.frame = CGRectMake(2, subHeight, w, b.size.height - subHeight - 2);
+        } else if (position == FrotzSublabelPositionFront) {
+            m_sublabel.frame = CGRectMake(2, b.size.height - edge + 1, w, subHeight);
+            m_label.frame = CGRectMake(2, 0, w, b.size.height - edge);
+        } else {
+            m_sublabel.frame = CGRectMake(2, b.size.height - edge - subHeight - 2, w, subHeight);
+            m_label.frame = CGRectMake(2, 0, w, b.size.height - edge - subHeight - 2);
+        }
+    } else if (position == FrotzSublabelPositionFront)
+        m_label.frame = CGRectMake(2, 0, w, b.size.height - edge);
+    else
         m_label.frame = CGRectInset(b, 2, 0);
     if (self.layer.shadowOpacity > 0)
         self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect: b cornerRadius: self.layer.cornerRadius].CGPath;
     if (m_bevel) {
-        CGFloat edge = MAX(2, round(b.size.height * 0.08));
         m_bottomEdge.frame = CGRectMake(0, b.size.height - edge, b.size.width, edge);
         UIBezierPath *path = [UIBezierPath bezierPath];
         CGFloat inset = m_bevel.lineWidth / 2;
@@ -494,6 +516,15 @@ static BOOL ActsOnTouchDown(FrotzKeyAction action) {
         [self performKey: keyView.key];
 }
 
+static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
+    switch (action) {
+        case FrotzKeyActionUp: return FrotzKeyboardSpecialKeyUp;
+        case FrotzKeyActionDown: return FrotzKeyboardSpecialKeyDown;
+        case FrotzKeyActionLeft: return FrotzKeyboardSpecialKeyLeft;
+        default: return FrotzKeyboardSpecialKeyRight;
+    }
+}
+
 -(void)performKey:(FrotzKeyboardKey *)key {
     id<FrotzKeyboardViewDelegate> delegate = self.delegate;
     switch (key.action) {
@@ -533,16 +564,13 @@ static BOOL ActsOnTouchDown(FrotzKeyAction action) {
             [delegate keyboardView: self didPressSpecialKey: FrotzKeyboardSpecialKeyEscape];
             break;
         case FrotzKeyActionUp:
-            [delegate keyboardView: self didPressSpecialKey: FrotzKeyboardSpecialKeyUp];
-            break;
         case FrotzKeyActionDown:
-            [delegate keyboardView: self didPressSpecialKey: FrotzKeyboardSpecialKeyDown];
-            break;
         case FrotzKeyActionLeft:
-            [delegate keyboardView: self didPressSpecialKey: FrotzKeyboardSpecialKeyLeft];
-            break;
         case FrotzKeyActionRight:
-            [delegate keyboardView: self didPressSpecialKey: FrotzKeyboardSpecialKeyRight];
+            [delegate keyboardView: self didPressSpecialKey: SpecialKeyForArrow(key.action)];
+            // A shifted cursor key (the C64's up and left) uses the shift up, as a letter does.
+            if (_shiftState == FrotzKeyboardShiftOneShot)
+                self.shiftState = FrotzKeyboardShiftOff;
             break;
         case FrotzKeyActionNone:
             break;

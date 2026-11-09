@@ -21,6 +21,10 @@ typedef NS_ENUM(NSInteger, FrotzKeyProfile) {
     FrotzKeyProfileFlat, FrotzKeyProfileRounded, FrotzKeyProfileSculpted, FrotzKeyProfileChiclet
 };
 
+typedef NS_ENUM(NSInteger, FrotzSublabelPosition) {
+    FrotzSublabelPositionTop, FrotzSublabelPositionBottom, FrotzSublabelPositionFront
+};
+
 extern NSString *const FrotzKeyboardLayerDefault;
 extern NSString *const FrotzKeyboardLayerShift;
 extern NSString *const FrotzKeyboardLayerSymbols;
@@ -62,7 +66,8 @@ extern NSString *const FrotzKeyboardLayerSymbols;
 @property (nonatomic, readonly) CGFloat cornerRadius;
 @property (nonatomic, readonly) BOOL shadow;
 @property (nonatomic, readonly, strong) UIColor *caseColor;
-@property (nonatomic, readonly) BOOL upperCaseLegends; // "legendCase": "upper" draws caps on keys that type lower case
+@property (nonatomic, readonly) FrotzSublabelPosition sublabelPosition; // front: on a sculpted key's front face
+@property (nonatomic, readonly) BOOL upperCaseLegends; // "legendCase": "upper" draws caps on text keys that type lower case
 -(UIColor *)keyColorForGroup:(NSString *)group;
 -(UIColor *)pressedColorForGroup:(NSString *)group;
 -(UIColor *)textColorForGroup:(NSString *)group;
