@@ -1748,6 +1748,7 @@ extern void gli_ios_set_focus(window_t *winNum);
     // geometry after every layout pass (the ones UIKit runs for status/nav bar changes included).
     // Cheap: RichTextView's setFrame: ignores an unchanged rect.
     [self layoutStatusLine];
+    [m_postureObserver refresh];
 }
 
 -(void)viewDidAppear:(BOOL)animated {
@@ -1806,10 +1807,12 @@ extern void gli_ios_set_focus(window_t *winNum);
         [m_notesController hide];
         [m_notesController autosize];
     }
+    [m_postureObserver start];
 }
 
 -(void)viewWillDisappear:(BOOL)animated {
     disable_complete = YES;
+    [m_postureObserver stop];
     [super viewWillDisappear:animated];
     [[self view] setTransform: CGAffineTransformIdentity];
 
@@ -1948,6 +1951,8 @@ static UIImage *GlkGetImageCallback(int imageNum) {
 
     self.automaticallyAdjustsScrollViewInsets = NO;
     self.view = [[UIView alloc] initWithFrame:frame];
+    m_postureObserver = [[FrotzPostureObserver alloc] initWithView: self.view];
+    m_postureObserver.delegate = self;
     float navHeight = self.view.safeAreaInsets.top;
     frame.origin.y = navHeight;
     frame.size.height -= navHeight;
@@ -2217,6 +2222,14 @@ static UIImage *GlkGetImageCallback(int imageNum) {
 // and put it back when the items return to the horizontal bar.
 -(void)updateTitleViewForVerticalBar {
     self.navigationItem.titleView = [self hasVerticalBar] ? nil : [m_frotzInfoController view];
+}
+
+// Only logged for now; the keyboard layouts that keep clear of the fold build on it.
+-(void)postureObserverDidChange:(FrotzPostureObserver *)observer {
+#if DEBUG
+    NSLog(@"posture=%ld angle=%.0f fold=%@ laptop=%d", (long)observer.posture, observer.hingeAngleDegrees,
+          NSStringFromCGRect(observer.foldFrameInView), observer.isLaptopPosture);
+#endif
 }
 
 // YES when the system is placing bar items on a vertical bar along one edge (iPhone Duo, iOS 27.1

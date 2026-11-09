@@ -22,6 +22,7 @@
 #import "FrotzWordPicker.h"
 #import "FileBrowser.h"
 #import "NotesViewController.h"
+#import "FrotzPostureObserver.h"
 
 @class StoryBrowser;
 @class FrotzView;
@@ -57,7 +58,7 @@ extern StoryBrowser *theStoryBrowser;
 @interface StoryMainViewController : UIViewController <UITextViewDelegate, UITextFieldDelegate,
     TransitionViewDelegate, KeyboardOwner, FrotzSettingsStoryDelegate,
     InputHelperDelegate, UIScrollViewDelegate, RTSelected, FileSelected, TextFileBrowser,
-    LockableKeyboard>
+    LockableKeyboard, FrotzPostureObserverDelegate>
 {
     StoryView *m_storyView;
     StatusLine *m_statusLine;
@@ -114,6 +115,7 @@ extern StoryBrowser *theStoryBrowser;
     NSInteger m_lastVerticalBarCapacity; // last estimate logged by updateLeadingBarItemsForSpaceAnimated:
     CGFloat m_verticalBarExtraTop; // bar space above the first item beyond the estimate (a Live Activity), measured after layout
     CGRect m_handledKbWillShowFrame, m_handledKbDidShowFrame; // keyboard end frames already laid out for
+    FrotzPostureObserver *m_postureObserver;
     NSTimeInterval m_animDuration;
     NSString *m_launchMessage;
 

@@ -346,6 +346,7 @@
 		44EA5BA60E67CD2200EF37C5 /* ReleaseNotes.m in Sources */ = {isa = PBXBuildFile; fileRef = 44EA5BA50E67CD2200EF37C5 /* ReleaseNotes.m */; };
 		44EDC1032494267B0074E8B0 /* Launch Screen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 44EDC1022494267B0074E8B0 /* Launch Screen.storyboard */; };
 		44F2F5B811447AE0001AE868 /* CompletionLabel.m in Sources */ = {isa = PBXBuildFile; fileRef = 44F2F5B711447AE0001AE868 /* CompletionLabel.m */; };
+		F7A3C2E14B9D0A6E00C1D203 /* FrotzPostureObserver.m in Sources */ = {isa = PBXBuildFile; fileRef = F7A3C2E14B9D0A6E00C1D202 /* FrotzPostureObserver.m */; };
 		44F35FED2511B15400807420 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44F35FEC2511B15400807420 /* AVFoundation.framework */; };
 		44F35FEF2511DFF100807420 /* Speech.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 44F35FEE2511DFF100807420 /* Speech.framework */; };
 		44F7B0FF1B20134A00DDD2A3 /* libtads.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4454850C1B1FBAB900E8EE7B /* libtads.a */; };
@@ -1185,6 +1186,8 @@
 		44EDC1022494267B0074E8B0 /* Launch Screen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = "Launch Screen.storyboard"; sourceTree = "<group>"; };
 		44F2F5B611447AE0001AE868 /* CompletionLabel.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = CompletionLabel.h; sourceTree = "<group>"; };
 		44F2F5B711447AE0001AE868 /* CompletionLabel.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = CompletionLabel.m; sourceTree = "<group>"; };
+		F7A3C2E14B9D0A6E00C1D201 /* FrotzPostureObserver.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = FrotzPostureObserver.h; sourceTree = "<group>"; };
+		F7A3C2E14B9D0A6E00C1D202 /* FrotzPostureObserver.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = FrotzPostureObserver.m; sourceTree = "<group>"; };
 		44F2FABF11460EF6001AE868 /* WordSelectionProtocol.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WordSelectionProtocol.h; sourceTree = "<group>"; };
 		44F35FEC2511B15400807420 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		44F35FEE2511DFF100807420 /* Speech.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Speech.framework; path = System/Library/Frameworks/Speech.framework; sourceTree = SDKROOT; };
@@ -1307,6 +1310,8 @@
 				44FB39F90E62406C00142D85 /* ColorPicker.m */,
 				44F2F5B611447AE0001AE868 /* CompletionLabel.h */,
 				44F2F5B711447AE0001AE868 /* CompletionLabel.m */,
+				F7A3C2E14B9D0A6E00C1D201 /* FrotzPostureObserver.h */,
+				F7A3C2E14B9D0A6E00C1D202 /* FrotzPostureObserver.m */,
 				446B9EA50E2075D1002BDD65 /* FileBrowser.h */,
 				446B9EA60E2075D1002BDD65 /* FileBrowser.m */,
 				44B6DD370F7C74E500EBE1BD /* FileTransferInfo.h */,
@@ -2646,6 +2651,7 @@
 				44FA76C20E4A5D89007DCC99 /* BookmarkListController.m in Sources */,
 				44FB39FA0E62406C00142D85 /* ColorPicker.m in Sources */,
 				44F2F5B811447AE0001AE868 /* CompletionLabel.m in Sources */,
+				F7A3C2E14B9D0A6E00C1D203 /* FrotzPostureObserver.m in Sources */,
 				446B9EAB0E2075D1002BDD65 /* FileBrowser.m in Sources */,
 				44B6DD390F7C74E500EBE1BD /* FileTransferInfo.m in Sources */,
 				448167DD0E7259280022EDC0 /* FontPicker.m in Sources */,
@@ -3085,6 +3091,10 @@
 				GCC_OPTIMIZATION_LEVEL = 0;
 				GCC_PRECOMPILE_PREFIX_HEADER = YES;
 				GCC_PREFIX_HEADER = Frotz_Prefix.pch;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
 				GCC_THUMB_SUPPORT = NO;
 				GCC_VERSION = "";
 				INFOPLIST_FILE = Info.plist;
