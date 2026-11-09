@@ -637,10 +637,10 @@ const firstDiff = (a, b) => {
 // compared (its timeout text could otherwise make the states differ).
 async function saveReloadRestore(tab, saveName, savedRe, restoredRe) {
   const s = await cmd(tab, "save");
-  const ok1 = s.ok && savedRe.test(s.tail);
+  const ok1 = s.ok && savedRe.test(s.reply);
   const db1 = await readIdb(tab, "after SAVE");
   const stored = storedSave(db1, saveName);
-  (ok1 && stored.ok ? pass : fail)("save", `reply "${clip(s.tail, 60)}"; IndexedDB ${saveName}: ${stored.text}`);
+  (ok1 && stored.ok ? pass : fail)("save", `reply "${clip(s.tail, 60)}"${s.ok ? (ok1 ? "" : " (NO SUCCESS REPLY)") : " (no prompt)"}; IndexedDB ${saveName}: ${stored.text}`);
   const probed = (when, o) => { if (!o.ok) fail(`observe ${when}`, `failed, so not compared: ${o.why}`); return o; };
   const o1 = probed("after SAVE", await observe(tab));
   await reload(tab);
@@ -648,7 +648,7 @@ async function saveReloadRestore(tab, saveName, savedRe, restoredRe) {
   (r0.ok ? pass : fail)("reload", r0.ok ? `story restarted; status "${clip(await status(tab), 80)}"` : `no prompt after reload: "${clip(r0.tail)}"`);
   const o0 = probed("after the reload", await observe(tab));
   const r = await cmd(tab, "restore");
-  const ok2 = r.ok && restoredRe.test(r.tail);
+  const ok2 = r.ok && restoredRe.test(r.reply);
   const o2 = probed("after RESTORE", await observe(tab));
   if (!(o1.ok && o0.ok && o2.ok)) {
     const bad = [["after SAVE", o1], ["after the reload", o0], ["after RESTORE", o2]].filter(([, o]) => !o.ok).map(([w]) => w);
@@ -791,11 +791,14 @@ const CHECKS = {
     for (let i = 0; i < 40 && mB2 !== "writer"; i++) { await new Promise((z) => setTimeout(z, 250)); mB2 = await run("B", "__T.mode()"); }
     const nowOwner = await run("B", "__T.text().includes(WebFrotzSaves.NOW_OWNER)");
     (mB2 === "writer" && nowOwner ? pass : fail)("takeover when A closes", `B mode ${mB2}; NOW_OWNER notice ${nowOwner ? "shown" : "missing"}`);
+    // The game must say it saved (a SAVE that reaches no prompt is a FAIL)
+    // and the stored revision must rise.
     const s2 = await cmd("B", "save");
     const db2 = await readIdb("B", "after B's stored save");
     const sv1 = storedSave(after, "Balances.sav"), sv2 = storedSave(db2, "Balances.sav");
-    (sv1.ok && sv2.ok && sv2.rec.rev > sv1.rec.rev ? pass : fail)("B's next save is stored",
-      `reply "${clip(s2.tail, 60)}"; ${sv1.ok && sv2.ok ? `rev ${sv1.rec.rev} -> ${sv2.rec.rev}` : `not compared: before ${sv1.text}, after ${sv2.text}`}`);
+    const saved2 = s2.ok && /Ok\./.test(s2.reply);
+    (saved2 && sv1.ok && sv2.ok && sv2.rec.rev > sv1.rec.rev ? pass : fail)("B's next save is stored",
+      `reply "${clip(s2.tail, 60)}" (${s2.ok ? (saved2 ? "game saved" : "NO SUCCESS REPLY") : "NO PROMPT"}); ${sv1.ok && sv2.ok ? `rev ${sv1.rec.rev} -> ${sv2.rec.rev}` : `not compared: before ${sv1.text}, after ${sv2.text}`}`);
 
     // Queued-grant steal: B (writer) leaves; A, now a reader with its
     // IndexedDB opens gated, is granted the lock mid-snapshot; B's page
