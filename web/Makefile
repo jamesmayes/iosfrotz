@@ -13,8 +13,12 @@
 #                      on the browser Glk) and git-sync, then runs
 #                      bench/check-glk.js, bench/check-malformed.js and
 #                      bench/check-page.js (glk.js and saves.js on fakes)
-#   make serve      -> python3 -m http.server on :8000 from web/
-#   make clean
+#   make dist       -> dist-site/: the static site to deploy (deploy/build-site.js;
+#                      hashed asset names, see deploy/README.md)
+#   make serve      -> make dist, then serve dist-site/ on 127.0.0.1:8000 with
+#                      the headers deploy/README.md asks for (deploy/serve.py)
+#   make serve-dev  -> python3 -m http.server on :8000 from web/ (unhashed)
+#   make clean      -> removes dist/ and dist-site/
 
 EMCC    ?= emcc
 ROOT    := ..
@@ -22,6 +26,7 @@ CORE    := $(ROOT)/frotz/common
 OBJDIR  := dist/obj
 DIST    := dist
 BENCH   := dist/bench
+SITE    := dist-site
 
 CORE_SRC := buffer err fastmem files hotkey input main math object process \
             quetzal random redirect screen sound stream table text variable
@@ -114,7 +119,9 @@ check: $(BENCH)/glk-check.js $(BENCH)/glk-check.wasm $(BENCH)/git-sync.js $(BENC
 	node bench/check-malformed.js
 	node bench/check-page.js
 
-$(OBJDIR) $(OBJDIR)/git $(OBJDIR)/glk $(DIST) $(BENCH):
+# dist/ itself is created with dist/obj (the links order on $(OBJDIR)), so
+# that `dist` can be the phony target that builds the site.
+$(OBJDIR) $(OBJDIR)/git $(OBJDIR)/glk $(BENCH):
 	mkdir -p $@
 
 # Link flags per output. dist/obj/<name>.ldflags holds the flags the output
@@ -182,11 +189,11 @@ $(OBJDIR)/glk/glk-check.o: bench/glk-check.c $(GIT_HEADERS) | $(OBJDIR)/glk
 # too. Each rule's pattern only matches its own pair ("frotz%js" matches
 # dist/frotz.js with the stem "."), so the two interpreters cannot pick up
 # each other's link rule.
-$(DIST)/frotz%js $(DIST)/frotz%wasm: $(CORE_OBJ) $(WEB_OBJ) | $(DIST)
+$(DIST)/frotz%js $(DIST)/frotz%wasm: $(CORE_OBJ) $(WEB_OBJ) | $(OBJDIR)
 	$(EMCC) $(LINK_frotz) $(CORE_OBJ) $(WEB_OBJ) -o $(DIST)/frotz.js
 	$(call stamp_link,frotz)
 
-$(DIST)/git%js $(DIST)/git%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) | $(DIST)
+$(DIST)/git%js $(DIST)/git%wasm: $(GIT_OBJ) $(GLK_ASYNC_OBJ) | $(OBJDIR)
 	$(EMCC) $(LINK_git) $(GIT_OBJ) $(GLK_ASYNC_OBJ) -o $(DIST)/git.js
 	$(call stamp_link,git)
 
@@ -206,10 +213,18 @@ $(BENCH)/glk-check%js $(BENCH)/glk-check%wasm: $(CHECK_OBJ) | $(BENCH)
 # and be deleted after the link; keep them so rebuilds are incremental.
 .SECONDARY: $(CORE_OBJ) $(WEB_OBJ) $(GIT_OBJ) $(GLK_ASYNC_OBJ) $(GLK_SYNC_OBJ) $(CHECK_OBJ)
 
-serve: all
+# The site is rebuilt from scratch every time: it is a copy, and a stale
+# hashed file left behind would be harmless but confusing.
+dist: all
+	node deploy/build-site.js $(SITE)
+
+serve: dist
+	python3 deploy/serve.py $(SITE) 8000
+
+serve-dev: all
 	python3 -m http.server 8000
 
 clean:
-	rm -rf $(DIST)
+	rm -rf $(DIST) $(SITE)
 
-.PHONY: all frotz git bench check serve clean FORCE
+.PHONY: all frotz git bench check dist serve serve-dev clean FORCE
