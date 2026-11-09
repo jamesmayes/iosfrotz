@@ -1,0 +1,35 @@
+# Seeds of the TADS 3 ASYNCIFY_ONLY list (tads/asyncify-tads3.txt). make
+# asyncify-lists adds them to the frames seen on the stack during an
+# unwind and lets emcc's ASYNCIFY_ADVISE add every direct caller, and their
+# callers. A seed is needed where code reaches the input wait (or a /saves
+# load) only through an indirect call that the walkthroughs may not take.
+# One name per line; '*' is a wildcard; parentheses must balance (binaryen
+# splits the list at commas and rejoins inside brackets); lines starting
+# with # are skipped.
+#
+# Intrinsic functions are called through CVmBifTable::call_func's table.
+# Those that wait (inputLine, inputKey, inputEvent, inputDialog, saveGame,
+# restoreGame, ...) and those that call back into bytecode
+# (G_interpreter->get_prop) do so through direct calls, which ADVISE
+# follows. rexReplace with a function argument calls it through a helper,
+# so it is a seed. Not all of CVmBif*: that instruments the hot ones too
+# (firstObj and nextObj), and made CPU-bound turns 1.36x as slow as plain,
+# against about 1.0x without it (README.md, "ASYNCIFY for TADS").
+CVmBifTADS::re_replace(*)
+# Metaclass property dispatch: get_prop and friends call a method through
+# the metaclass's func_table_ (pointers to members).
+CVmObject::get_prop(*)
+CVmObj*::get_prop(*)
+CVmObj*::const_get_prop(*)
+CVmObj*::call_stat_prop(*)
+CVmMetaclass*::call_stat_prop(*)
+vmrun_prop_eval::*
+# Every intrinsic method: List.forEach, mapAll, sort, Vector, LookupTable,
+# String.findReplace and the others that call a callback.
+CVmObj*::getp_*
+CVmObj*::s_getp_*
+CVmObj*::static_getp_*
+# Sorting with a comparator calls it through a virtual compare().
+CVmQSort*::*
+# Hash table enumeration with a callback (Dictionary.forEachWord, ...).
+CVmHashTable::enum_entries*

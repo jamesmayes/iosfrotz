@@ -14,6 +14,13 @@
 #                      C++, longjmp through JS as for TADS 2)
 #   make bench-tads -> dist/bench/tads{2,3}-{async,sync}.{js,wasm}, Node
 #                      builds for bench/measure.js --tads
+#   make asyncify-lists -> regenerates tads/asyncify-tads{2,3}.txt, the
+#                      functions ASYNCIFY instruments in TADS (see "ASYNCIFY
+#                      for TADS" below); run it after changing tads/ or the
+#                      TADS flags, and commit the lists
+#   make asyncify-check -> dist/bench/tads{2,3}-check.{js,wasm} (the
+#                      ASYNCIFY_ONLY builds with ASYNCIFY assertions), played
+#                      on every TADS walkthrough against the plain builds
 #   make bench      -> dist/bench/git-async.{js,wasm} and git-sync.{js,wasm},
 #                      Node builds of git for bench/run-bench.js
 #   make check      -> builds dist/bench/glk-check.{js,wasm} (bench/glk-check.c
@@ -99,6 +106,17 @@ GIT_HEADERS := $(wildcard $(GIT)/*.h) $(GIT)/labels.inc $(GLKIOS)/glk.h \
 #   - osansi1.c, which opens TADS's files, gets -include tads/tads_stdio.h,
 #     so /saves files go through browser storage (tads_web.c);
 #   - tads/tads2_web.c is the startup file (main_t2 of tads/t23run.cpp).
+#
+# TADS 2 raises its errors with setjmp/longjmp (ERRBEGIN, tads2/ler.h). It
+# is built with -sSUPPORT_LONGJMP=wasm: setjmp/longjmp are wasm exception
+# handling (Safari 15.2+), not emscripten's default JS invoke_ wrappers.
+# Under ASYNCIFY every call through an invoke_ wrapper also goes through
+# a JS wrapper of the dynCall_ export it calls, and runexe, TADS 2's
+# bytecode loop, makes nearly all its calls inside ERRBEGIN: ~81 million of
+# them in the CPU-bound walkthrough, 1.37x the plain build's time (README.md,
+# "Measurement"). Only the TADS 2 objects that are not shared with TADS 3
+# get the flag (TADS2_SJLJ_OBJ); the shared ones have no setjmp. TADS 2 is C
+# and has no C++ catch, so emcc does not warn, unlike -fwasm-exceptions.
 TADS      := $(ROOT)/tads
 TADS_CFLAGS := -O2 -DGLKUNIX -DGLK_TIMERS -Itads/shim -Itads -Iglk -I$(GLKIOS) \
                -I$(TADS) -I$(TADS)/tads2 -I$(TADS)/tads3
@@ -108,6 +126,10 @@ TADS2_SRC := argize bif bifgdum cmap cmd dat dbgtr emt errmsg execmd fio fioxor 
              osrestad osstzprs ostzposix out output ply qas regex run runstat \
              suprun tcgdum trd voc vocab voccomp
 TADS_OS_SRC := memicmp osansi1 osansi2 osansi3 osbuffer osglk osglkban osparse
+TADS2_SJLJ := -sSUPPORT_LONGJMP=wasm
+# The four tads/tads2 OS files TADS 3 links too (see "TADS 3").
+TADS2_SHARED := osifc osrestad osstzprs ostzposix
+TADS2_SJLJ_OBJ := $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,$(filter-out $(TADS2_SHARED),$(TADS2_SRC)) osportable))
 TADS2_OBJ := $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,$(TADS2_SRC) osportable)) \
              $(addprefix $(OBJDIR)/tads/,$(addsuffix .o,$(TADS_OS_SRC) t2askf t2indlg)) \
              $(OBJDIR)/tads/tads_web.o $(OBJDIR)/tads/tads2_web.o
@@ -168,6 +190,37 @@ TADS3_OBJ := $(addprefix $(OBJDIR)/tads3/,$(addsuffix .o,$(TADS3_SRC) osnetunix 
              $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,osifc osrestad osstzprs ostzposix))
 TADS3_HEADERS := $(TADS_HEADERS) $(wildcard $(TADS)/tads3/*.h $(TADS)/tads3/unix/*.h)
 
+# ---- ASYNCIFY for TADS ----
+#
+# Instrumenting every function that might be on the stack when the C code
+# awaits the page cost TADS 1.35-1.42x on CPU-bound turns: the wait is
+# reached through indirect calls (the builtin tables, metaclass methods), so
+# emcc must assume nearly every function can be. The TADS links instead pass
+# -sASYNCIFY_ONLY with a list of the functions that can be on that stack
+# (README.md, "ASYNCIFY for TADS"); calls to functions not in it, and their
+# code, are left alone. The lists are generated, not written by hand
+# (make asyncify-lists, below), from
+#   - the wasm frames seen on the stack whenever the C code awaits, playing
+#     every TADS walkthrough, including the stress games bench/tads/stress2
+#     and stress3 (a build with --profiling-funcs, bench/run-bench.js
+#     --frames);
+#   - seeds written by hand, tads/asyncify-seeds-tads{2,3}.txt: the
+#     dispatchers (builtin tables, metaclass methods, comparators) through
+#     which code the walkthroughs do not run could reach the wait;
+#   - every direct caller of those, and their callers, which emcc's
+#     ASYNCIFY_ADVISE finds (with ASYNCIFY_IGNORE_INDIRECT, so that indirect
+#     calls do not pull in the whole VM again).
+# A function wrongly left out of a list breaks an unwind through it, so
+# make asyncify-check plays every walkthrough on builds with ASYNCIFY
+# assertions, which stop at such a frame. Regenerate the lists after any
+# change to tads/, web/tads/, web/glk/ or the TADS flags: the names are the
+# functions as they are after inlining, so a list from other code or flags
+# is wrong.
+TADS2_ASYNC_LIST := tads/asyncify-tads2.txt
+TADS3_ASYNC_LIST := tads/asyncify-tads3.txt
+TADS2_ASYNC_ONLY := -sASYNCIFY_ONLY=@$(TADS2_ASYNC_LIST)
+TADS3_ASYNC_ONLY := -sASYNCIFY_ONLY=@$(TADS3_ASYNC_LIST)
+
 LDFLAGS_COMMON := -O2 \
            -sALLOW_MEMORY_GROWTH \
            -sINVOKE_RUN=0 \
@@ -192,18 +245,18 @@ GIT_LDFLAGS := $(LDFLAGS_COMMON) \
            -sEXPORT_NAME=createGit \
            -sENVIRONMENT=web
 
-# TADS 2: the same flags again. TADS uses setjmp/longjmp for its errors,
-# which emscripten implements by default with JS invoke_ wrappers
-# (-sSUPPORT_LONGJMP=emscripten); ASYNCIFY unwinds through them.
-TADS2_LDFLAGS := $(LDFLAGS_COMMON) \
-           -sASYNCIFY \
+# TADS 2: the same flags again, with wasm setjmp/longjmp (TADS2_SJLJ, see
+# "TADS 2") and only the functions in its list instrumented.
+TADS2_LDFLAGS := $(LDFLAGS_COMMON) $(TADS2_SJLJ) \
+           -sASYNCIFY $(TADS2_ASYNC_ONLY) \
            -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK) \
            -sEXPORT_NAME=createTads2 \
            -sENVIRONMENT=web
 
-# TADS 3: the same again (TADS3_EH is empty: JS longjmp, as above).
+# TADS 3: the same again (TADS3_EH is empty: JS longjmp, as above), with
+# only the functions in its list instrumented.
 TADS3_LDFLAGS := $(LDFLAGS_COMMON) $(TADS3_EH) \
-           -sASYNCIFY \
+           -sASYNCIFY $(TADS3_ASYNC_ONLY) \
            -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK) \
            -sEXPORT_NAME=createTads3 \
            -sENVIRONMENT=web
@@ -254,15 +307,22 @@ LINK_git-async := $(BENCH_LDFLAGS) -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_
 LINK_git-sync  := $(BENCH_LDFLAGS)
 LINK_glk-check := $(BENCH_LDFLAGS) $(CHECK_LIBS)
 LINK_tads2     := $(TADS2_LDFLAGS)
-LINK_tads2-async := $(LDFLAGS_COMMON) -sEXPORT_NAME=createTads2 -sENVIRONMENT=node \
-                    -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK)
-LINK_tads2-sync  := $(LDFLAGS_COMMON) -sEXPORT_NAME=createTads2 -sENVIRONMENT=node
+# tadsN-full: every function instrumented, as before the lists, for
+# --profiling-funcs builds (frames) and ASYNCIFY_ADVISE (callers); see
+# asyncify-lists. tadsN-check: the -async build with ASYNCIFY assertions.
+TADS2_NODE := $(LDFLAGS_COMMON) $(TADS2_SJLJ) -sEXPORT_NAME=createTads2 -sENVIRONMENT=node
+TADS2_FULL := $(TADS2_NODE) -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK)
+LINK_tads2-async := $(TADS2_FULL) $(TADS2_ASYNC_ONLY)
+LINK_tads2-sync  := $(TADS2_NODE)
+LINK_tads2-check := $(LINK_tads2-async) -sASSERTIONS=2
 LINK_tads3     := $(TADS3_LDFLAGS)
-LINK_tads3-async := $(LDFLAGS_COMMON) $(TADS3_EH) -sEXPORT_NAME=createTads3 -sENVIRONMENT=node \
-                    -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK)
-LINK_tads3-sync  := $(LDFLAGS_COMMON) $(TADS3_EH) -sEXPORT_NAME=createTads3 -sENVIRONMENT=node
+TADS3_NODE := $(LDFLAGS_COMMON) $(TADS3_EH) -sEXPORT_NAME=createTads3 -sENVIRONMENT=node
+TADS3_FULL := $(TADS3_NODE) -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK)
+LINK_tads3-async := $(TADS3_FULL) $(TADS3_ASYNC_ONLY)
+LINK_tads3-sync  := $(TADS3_NODE)
+LINK_tads3-check := $(LINK_tads3-async) -sASSERTIONS=2
 LINK_OUTPUTS   := frotz git git-async git-sync glk-check tads2 tads2-async tads2-sync \
-                  tads3 tads3-async tads3-sync
+                  tads2-check tads3 tads3-async tads3-sync tads3-check
 OUT_frotz      := $(DIST)/frotz
 OUT_git        := $(DIST)/git
 OUT_git-async  := $(BENCH)/git-async
@@ -271,24 +331,31 @@ OUT_glk-check  := $(BENCH)/glk-check
 OUT_tads2      := $(DIST)/tads2
 OUT_tads2-async := $(BENCH)/tads2-async
 OUT_tads2-sync  := $(BENCH)/tads2-sync
+OUT_tads2-check := $(BENCH)/tads2-check
 OUT_tads3      := $(DIST)/tads3
 OUT_tads3-async := $(BENCH)/tads3-async
 OUT_tads3-sync  := $(BENCH)/tads3-sync
+OUT_tads3-check := $(BENCH)/tads3-check
 
 stale_link = $(shell printf '%s\n' '$(LINK_$(1))' | cmp -s - $(OBJDIR)/$(1).ldflags 2>/dev/null || echo stale)
 $(foreach n,$(LINK_OUTPUTS),$(if $(call stale_link,$(n)),$(eval $(OUT_$(n)).js $(OUT_$(n)).wasm: FORCE)))
 # Recipe line: record the flags an output was just linked with.
 stamp_link = printf '%s\n' '$(LINK_$(1))' > $(OBJDIR)/$(1).ldflags
-# Compile flags of the TADS 3 objects, the same way: dist/obj/tads3.cxxflags
-# holds the flags they were last built with, and every link of a TADS 3
-# output writes it (after all its objects were compiled). If it differs,
-# every TADS 3 object is rebuilt, so objects built with and without
-# -fwasm-exceptions are never linked together. (The shared C objects in
-# dist/obj/tads and dist/obj/tads2 are built with TADS_CFLAGS, not these.)
-CXX_tads3 := $(TADS3_CXXFLAGS)
-stale_cxx = $(shell printf '%s\n' '$(CXX_$(1))' | cmp -s - $(OBJDIR)/$(1).cxxflags 2>/dev/null || echo stale)
-$(if $(call stale_cxx,tads3),$(eval $(filter $(OBJDIR)/tads3/%,$(TADS3_OBJ)): FORCE))
-stamp_cxx = printf '%s\n' '$(CXX_$(1))' > $(OBJDIR)/$(1).cxxflags
+# Compile flags of the TADS objects that depend on the longjmp mode, the
+# same way: dist/obj/tads2.ccflags and tads3.ccflags hold the flags they
+# were last built with, and every link of a TADS 2 or TADS 3 output writes
+# its own (after all its objects were compiled). If one differs, all of
+# those objects are rebuilt, so objects built for two longjmp modes are
+# never linked together: the TADS 3 objects (TADS3_EH) and the TADS 2 ones
+# in TADS2_SJLJ_OBJ. (The shared C objects have no setjmp and are built
+# with TADS_CFLAGS alone.)
+CC_tads2 := $(TADS_CFLAGS) $(TADS2_SJLJ)
+CC_tads3 := $(TADS3_CXXFLAGS)
+CCOBJ_tads2 := $(TADS2_SJLJ_OBJ)
+CCOBJ_tads3 := $(filter $(OBJDIR)/tads3/%,$(TADS3_OBJ))
+stale_cc = $(shell printf '%s\n' '$(CC_$(1))' | cmp -s - $(OBJDIR)/$(1).ccflags 2>/dev/null || echo stale)
+$(foreach n,tads2 tads3,$(if $(call stale_cc,$(n)),$(eval $(CCOBJ_$(n)): FORCE)))
+stamp_cc = printf '%s\n' '$(CC_$(1))' > $(OBJDIR)/$(1).ccflags
 FORCE:
 
 $(OBJDIR)/%.o: $(CORE)/%.c $(HEADERS) | $(OBJDIR)
@@ -322,11 +389,14 @@ $(OBJDIR)/glk/git_web.o: glk/git_web.c $(GIT_HEADERS) | $(OBJDIR)/glk
 $(OBJDIR)/glk/glk-check.o: bench/glk-check.c $(GIT_HEADERS) | $(OBJDIR)/glk
 	$(EMCC) $(GIT_CFLAGS) $(WEB_CFLAGS) -c $< -o $@
 
+# TADS2_OWN is TADS2_SJLJ for the objects in TADS2_SJLJ_OBJ, else empty.
+$(TADS2_SJLJ_OBJ): TADS2_OWN := $(TADS2_SJLJ)
+
 $(OBJDIR)/tads2/%.o: $(TADS)/tads2/%.c $(TADS_HEADERS) | $(OBJDIR)/tads2
-	$(EMCC) $(TADS_CFLAGS) -c $< -o $@
+	$(EMCC) $(TADS_CFLAGS) $(TADS2_OWN) -c $< -o $@
 
 $(OBJDIR)/tads2/osportable.o: $(TADS)/tads2/osportable.cc $(TADS_HEADERS) | $(OBJDIR)/tads2
-	$(EMXX) $(TADS_CXXFLAGS) -c $< -o $@
+	$(EMXX) $(TADS_CXXFLAGS) $(TADS2_OWN) -c $< -o $@
 
 $(OBJDIR)/tads/osansi1.o: $(TADS)/osansi1.c $(TADS_HEADERS) | $(OBJDIR)/tads
 	$(EMCC) $(TADS_CFLAGS) -include tads/tads_stdio.h -c $< -o $@
@@ -385,32 +455,82 @@ $(BENCH)/glk-check%js $(BENCH)/glk-check%wasm: $(CHECK_OBJ) | $(BENCH)
 	$(EMCC) $(LINK_glk-check) $(CHECK_OBJ) -o $(BENCH)/glk-check.js
 	$(call stamp_link,glk-check)
 
-$(DIST)/tads2%js $(DIST)/tads2%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) | $(OBJDIR)
+$(DIST)/tads2%js $(DIST)/tads2%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) $(TADS2_ASYNC_LIST) | $(OBJDIR)
 	$(EMXX) $(LINK_tads2) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(DIST)/tads2.js
 	$(call stamp_link,tads2)
+	$(call stamp_cc,tads2)
 
-$(BENCH)/tads2-async%js $(BENCH)/tads2-async%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) | $(BENCH)
+$(BENCH)/tads2-async%js $(BENCH)/tads2-async%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) $(TADS2_ASYNC_LIST) | $(BENCH)
 	$(EMXX) $(LINK_tads2-async) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads2-async.js
 	$(call stamp_link,tads2-async)
+	$(call stamp_cc,tads2)
 
 $(BENCH)/tads2-sync%js $(BENCH)/tads2-sync%wasm: $(TADS2_OBJ) $(TADS_GLK_SYNC) | $(BENCH)
 	$(EMXX) $(LINK_tads2-sync) $(TADS2_OBJ) $(TADS_GLK_SYNC) -o $(BENCH)/tads2-sync.js
 	$(call stamp_link,tads2-sync)
+	$(call stamp_cc,tads2)
 
-$(DIST)/tads3%js $(DIST)/tads3%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) | $(OBJDIR)
+$(DIST)/tads3%js $(DIST)/tads3%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) $(TADS3_ASYNC_LIST) | $(OBJDIR)
 	$(EMXX) $(LINK_tads3) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(DIST)/tads3.js
 	$(call stamp_link,tads3)
-	$(call stamp_cxx,tads3)
+	$(call stamp_cc,tads3)
 
-$(BENCH)/tads3-async%js $(BENCH)/tads3-async%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) | $(BENCH)
+$(BENCH)/tads3-async%js $(BENCH)/tads3-async%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) $(TADS3_ASYNC_LIST) | $(BENCH)
 	$(EMXX) $(LINK_tads3-async) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads3-async.js
 	$(call stamp_link,tads3-async)
-	$(call stamp_cxx,tads3)
+	$(call stamp_cc,tads3)
 
 $(BENCH)/tads3-sync%js $(BENCH)/tads3-sync%wasm: $(TADS3_OBJ) $(TADS_GLK_SYNC) | $(BENCH)
 	$(EMXX) $(LINK_tads3-sync) $(TADS3_OBJ) $(TADS_GLK_SYNC) -o $(BENCH)/tads3-sync.js
 	$(call stamp_link,tads3-sync)
-	$(call stamp_cxx,tads3)
+	$(call stamp_cc,tads3)
+
+$(BENCH)/tads2-check%js $(BENCH)/tads2-check%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) $(TADS2_ASYNC_LIST) | $(BENCH)
+	$(EMXX) $(LINK_tads2-check) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads2-check.js
+	$(call stamp_link,tads2-check)
+	$(call stamp_cc,tads2)
+
+$(BENCH)/tads3-check%js $(BENCH)/tads3-check%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) $(TADS3_ASYNC_LIST) | $(BENCH)
+	$(EMXX) $(LINK_tads3-check) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads3-check.js
+	$(call stamp_link,tads3-check)
+	$(call stamp_cc,tads3)
+
+# make asyncify-lists: regenerate tads/asyncify-tads{2,3}.txt (see "ASYNCIFY
+# for TADS"). For each interpreter: link it with every function instrumented
+# and --profiling-funcs (dist/bench/tadsN-names), play every walkthrough of
+# its games on it, noting the frames on the stack at each await
+# (dist/obj/tadsN-frames.txt); add the seeds; link with ASYNCIFY_ADVISE and
+# those as the add-list (dist/obj/tadsN-advise.txt), and keep every function
+# it names. The analysis links are not stamped or kept up to date: this
+# target always redoes them. Then `git diff tads/asyncify-*.txt` shows what
+# changed, and make asyncify-check tests the result.
+TADS2_WALKS := errand.gam:errand errand.gam:errand-cpu stress2.gam:stress2
+TADS3_WALKS := belfry.t3:belfry belfry.t3:belfry-cpu stress3.t3:stress3
+define asyncify_list
+	$(EMXX) $(TADS$(1)_FULL) --profiling-funcs $(2) -o $(BENCH)/tads$(1)-names.js
+	rm -f $(OBJDIR)/tads$(1)-frames.txt
+	$(foreach w,$(TADS$(1)_WALKS),node bench/run-bench.js async bench/tads/$(word 1,$(subst :, ,$(w))) \
+	    bench/tads/$(word 2,$(subst :, ,$(w))).walk --engine tads$(1) --module $(BENCH)/tads$(1)-names.js \
+	    --frames $(OBJDIR)/tads$(1)-frames.txt > /dev/null &&) true
+	cat tads/asyncify-seeds-tads$(1).txt $(OBJDIR)/tads$(1)-frames.txt > $(OBJDIR)/tads$(1)-add.txt
+	$(EMXX) $(TADS$(1)_FULL) -sASYNCIFY_IGNORE_INDIRECT -sASYNCIFY_ADVISE \
+	    -sASYNCIFY_ADD=@$(OBJDIR)/tads$(1)-add.txt $(2) -o $(BENCH)/tads$(1)-advise.js \
+	    > $(OBJDIR)/tads$(1)-advise.txt 2>&1
+	node bench/asyncify-list.js $(OBJDIR)/tads$(1)-advise.txt tads/asyncify-tads$(1).txt \
+	    "Functions ASYNCIFY instruments in TADS $(1) (-sASYNCIFY_ONLY). Generated by" \
+	    "make asyncify-lists; do not edit (web/Makefile, \"ASYNCIFY for TADS\")."
+endef
+
+asyncify-lists: $(TADS2_OBJ) $(TADS3_OBJ) $(TADS_GLK_ASYNC) | $(BENCH)
+	$(call asyncify_list,2,$(TADS2_OBJ) $(TADS_GLK_ASYNC))
+	$(call asyncify_list,3,$(TADS3_OBJ) $(TADS_GLK_ASYNC))
+	$(call stamp_cc,tads2)
+	$(call stamp_cc,tads3)
+
+asyncify-check: $(BENCH)/tads2-check.js $(BENCH)/tads2-check.wasm $(BENCH)/tads3-check.js \
+                $(BENCH)/tads3-check.wasm $(BENCH)/tads2-sync.js $(BENCH)/tads2-sync.wasm \
+                $(BENCH)/tads3-sync.js $(BENCH)/tads3-sync.wasm
+	node bench/check-asyncify.js
 
 # Objects reached only through a pattern rule would count as intermediate
 # and be deleted after the link; keep them so rebuilds are incremental.
@@ -431,4 +551,5 @@ serve-dev: all
 clean:
 	rm -rf $(DIST) $(SITE)
 
-.PHONY: all frotz git tads2 tads3 bench bench-tads check dist serve serve-dev clean FORCE
+.PHONY: all frotz git tads2 tads3 bench bench-tads check asyncify-lists asyncify-check dist serve \
+        serve-dev clean FORCE

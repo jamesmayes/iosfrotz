@@ -1,0 +1,17 @@
+# Seeds of the TADS 2 ASYNCIFY_ONLY list (tads/asyncify-tads2.txt). make
+# asyncify-lists adds them to the frames seen on the stack during an
+# unwind and lets emcc's ASYNCIFY_ADVISE add every direct caller, and their
+# callers. A seed is needed where code reaches the input wait (or a /saves
+# load) only through an indirect call that the walkthroughs may not take.
+# One name per line; '*' is a wildcard; parentheses must balance (binaryen
+# splits the list at commas and rejoins inside brackets); lines starting
+# with # are skipped.
+#
+# None are needed. Builtins are called through runexe's builtin table, and
+# every one that waits (input, inputkey, inputevent, yorn, askfile's save
+# and restore, ...) or runs bytecode (execCommand, ...) does so through
+# direct calls, which ADVISE follows. morePrompt, timeDelay and askfile
+# itself do not wait in this port (os_more_prompt is a stub, os_sleep_ms
+# does not yield, and the Glk file prompt names the file at once). Seeding
+# bif* added 72 functions, none of which can reach the wait, and cost 4% on
+# CPU-bound turns.

@@ -4,9 +4,15 @@
 // bench-tads) and time every turn.
 //
 //   node bench/run-bench.js async|sync STORY WALK [--engine git|tads2|tads3]
-//                           [--transcript FILE]
+//                           [--transcript FILE] [--module FILE] [--frames FILE]
 //
 // --engine picks dist/bench/<engine>-<build>.js; the default is git.
+// --module loads another build of that engine instead (a path to its .js).
+// --frames (async builds linked with --profiling-funcs, for make
+// asyncify-lists) adds to FILE the name of every wasm function on the stack
+// whenever the C code awaits the page (a wait, or loading, storing or
+// deleting a /saves file): the frames an unwind goes through. FILE keeps
+// one name per line, sorted, and what it held before is kept.
 //
 // "async" loads dist/bench/git-async.js (built with -sASYNCIFY: every
 // glk_select unwinds and rewinds the C stack through an awaited Promise,
@@ -15,8 +21,9 @@
 // are the same objects; only glk_web.c's bridge differs (-DGLK_WEB_SYNC).
 //
 // Input comes from WALK, one command per line, fed to each line request
-// as soon as the game asks. Char requests get a space. When the commands
-// run out the run ends. Date.now is pinned, so git seeds its random number
+// as soon as the game asks. Char requests get a space. A line "@timer"
+// answers the next wait that has a timeout with a timer event (Glk evtype
+// 1) instead. When the commands run out the run ends. Date.now is pinned, so git seeds its random number
 // generator the same way in both builds and they play the same game; the
 // transcript hash printed at the end lets the two be compared.
 //
@@ -50,6 +57,26 @@ if (!["git", "tads2", "tads3"].includes(engine)) {
   console.error(`run-bench.js: unknown engine ${engine}`);
   process.exit(2);
 }
+const mIdx = rest.indexOf("--module");
+const modulePath = mIdx >= 0 ? path.resolve(rest[mIdx + 1]) : null;
+const fIdx = rest.indexOf("--frames");
+const framesPath = fIdx >= 0 ? rest[fIdx + 1] : null;
+
+// --frames: V8 names a wasm frame "at <file>.wasm.<name> (wasm://...)" when
+// the module has a name section.
+const frames = new Set();
+if (framesPath) {
+  Error.stackTraceLimit = Infinity;
+  if (fs.existsSync(framesPath))
+    for (const n of fs.readFileSync(framesPath, "utf8").split("\n")) if (n) frames.add(n);
+}
+function noteFrames() {
+  if (!framesPath) return;
+  for (const line of new Error().stack.split("\n")) {
+    const m = line.match(/^\s*at \S+?\.wasm\.(.+) \(wasm:\/\//);
+    if (m) frames.add(m[1]);
+  }
+}
 
 const commands = fs.readFileSync(walkPath, "utf8").split(/\r?\n/)
   .filter((l) => l.trim() !== "" && !l.startsWith("#"));
@@ -58,7 +85,8 @@ const commands = fs.readFileSync(walkPath, "utf8").split(/\r?\n/)
 const FIXED_NOW = Date.UTC(2026, 10, 8, 12, 0, 0);
 Date.now = () => FIXED_NOW;
 
-const createModule = require(path.join(__dirname, "..", "dist", "bench", `${engine}-${build}.js`));
+const createModule = require(modulePath ||
+  path.join(__dirname, "..", "dist", "bench", `${engine}-${build}.js`));
 
 const texts = new Map(); // window id -> text
 let lastGrid = "";
@@ -96,6 +124,14 @@ function report(reason) {
     hash: crypto.createHash("sha256").update(all).digest("hex").slice(0, 16),
   };
   process.stdout.write(JSON.stringify(out) + "\n");
+  if (framesPath) {
+    fs.writeFileSync(framesPath, [...frames].sort().join("\n") + "\n");
+    // A run that stopped early saw only some of the frames.
+    if (!out.complete) {
+      console.error(`run-bench.js: ${walkPath} did not play to the end (${reason}); frames are partial`);
+      process.exit(1);
+    }
+  }
 }
 
 const glkWeb = {
@@ -119,10 +155,14 @@ const glkWeb = {
   input(id, kind) { inputs.push({ id, kind }); },
   wait(timeoutMs) {
     marks.push(performance.now());
+    noteFrames();
     const line = inputs.find((i) => i.kind === 1);
     const ch = inputs.find((i) => i.kind === 2);
     let ev;
-    if (line) {
+    if (timeoutMs >= 0 && commands[nextCmd] === "@timer") {
+      nextCmd++;
+      ev = { type: 1 };
+    } else if (line) {
       if (nextCmd >= commands.length) {
         report("walkthrough done");
         process.exit(0);
@@ -141,9 +181,9 @@ const glkWeb = {
   cancelLine: () => "",
   cancelChar() {},
   pollArrange: () => false,
-  loadFile() {},
-  persistFile() {},
-  deleteFile() {},
+  loadFile() { noteFrames(); },
+  persistFile() { noteFrames(); },
+  deleteFile() { noteFrames(); },
   setStory() {},
   exit() { report("game exited"); },
   asyncifyUsed(n) { if (n > asyncifyMax) asyncifyMax = n; },

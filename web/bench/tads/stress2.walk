@@ -1,0 +1,26 @@
+# stress2.t: every command waits from a different kind of frame (see the
+# comment at the top of stress2.t). Input lines follow the command that asks.
+line
+abc
+key
+event
+@timer
+yn
+yes
+more
+delay
+method
+m1
+exec
+x1
+daemon
+d1
+fuse
+f1
+savenamed
+line
+s1
+restorenamed
+err
+e1
+look
