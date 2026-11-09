@@ -4,7 +4,8 @@
 #     web/src/web_os.c;
 #   - Git (Glulx): git/ plus the browser Glk in web/glk/.
 #
-#   make            -> dist/frotz.js + dist/frotz.wasm, dist/git.js + dist/git.wasm
+#   make            -> dist/frotz.js + dist/frotz.wasm, dist/git.js + dist/git.wasm,
+#                      dist/tads2.js + dist/tads2.wasm, dist/tads3.js + dist/tads3.wasm
 #   make frotz      -> dist/frotz.js + dist/frotz.wasm
 #   make git        -> dist/git.js + dist/git.wasm
 #   make tads2      -> dist/tads2.js + dist/tads2.wasm (TADS 2, tads/tads2 on
@@ -16,9 +17,10 @@
 #   make bench      -> dist/bench/git-async.{js,wasm} and git-sync.{js,wasm},
 #                      Node builds of git for bench/run-bench.js
 #   make check      -> builds dist/bench/glk-check.{js,wasm} (bench/glk-check.c
-#                      on the browser Glk) and git-sync, then runs
-#                      bench/check-glk.js, bench/check-malformed.js and
-#                      bench/check-page.js (glk.js and saves.js on fakes)
+#                      on the browser Glk), git-sync, tads2-sync and
+#                      tads3-sync, then runs bench/check-glk.js,
+#                      bench/check-malformed.js, bench/check-page.js (glk.js
+#                      and saves.js on fakes) and bench/check-tads.js
 #   make dist       -> dist-site/: the static site to deploy (deploy/build-site.js;
 #                      hashed asset names, see deploy/README.md)
 #   make serve      -> make dist, then serve dist-site/ on 127.0.0.1:8000 with
@@ -204,7 +206,7 @@ TADS3_LDFLAGS := $(LDFLAGS_COMMON) $(TADS3_EH) \
 # Node builds for the measurement: the same code, with and without ASYNCIFY.
 BENCH_LDFLAGS := $(LDFLAGS_COMMON) -sEXPORT_NAME=createGit -sENVIRONMENT=node
 
-all: frotz git
+all: frotz git tads2 tads3
 
 frotz: $(DIST)/frotz.js $(DIST)/frotz.wasm
 git: $(DIST)/git.js $(DIST)/git.wasm
@@ -218,10 +220,12 @@ bench-tads: $(BENCH)/tads2-async.js $(BENCH)/tads2-async.wasm \
             $(BENCH)/tads3-async.js $(BENCH)/tads3-async.wasm \
             $(BENCH)/tads3-sync.js $(BENCH)/tads3-sync.wasm
 
-check: $(BENCH)/glk-check.js $(BENCH)/glk-check.wasm $(BENCH)/git-sync.js $(BENCH)/git-sync.wasm
+check: $(BENCH)/glk-check.js $(BENCH)/glk-check.wasm $(BENCH)/git-sync.js $(BENCH)/git-sync.wasm \
+       $(BENCH)/tads2-sync.js $(BENCH)/tads2-sync.wasm $(BENCH)/tads3-sync.js $(BENCH)/tads3-sync.wasm
 	node bench/check-glk.js
 	node bench/check-malformed.js
 	node bench/check-page.js
+	node bench/check-tads.js
 
 # dist/ itself is created with dist/obj (the links order on $(OBJDIR)), so
 # that `dist` can be the phony target that builds the site.

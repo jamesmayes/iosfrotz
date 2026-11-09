@@ -1,8 +1,9 @@
 // web/ui.js: the parts of the page both interpreters share.
 //
 //   detectFormat(bytes)  which interpreter a story file needs, from its
-//                        magic bytes: { format: "zcode" | "glulx" } or
-//                        { error } (no DOM; also used by bench/check-page.js)
+//                        magic bytes: { format: "zcode" | "glulx" | "tads2" |
+//                        "tads3" } or { error } (no DOM; also used by
+//                        bench/check-page.js)
 //   asset(path)          the URL of a build file (dist/frotz.js, app.js, ...):
 //                        the path itself, or the content-hashed name the
 //                        deploy build (deploy/build-site.js) maps it to
@@ -10,7 +11,8 @@
 //                        the Emscripten hook that finds the .wasm the same way
 //   registerEngine(format, engine), engine(format)
 //                        the interpreter front ends (app.js for Z-code, glk.js
-//                        for Glulx) register here when main.js loads them
+//                        for Glulx and TADS) register here when main.js loads
+//                        them
 //   onViewport(fn)       call fn after the page is re-pinned to the visual
 //                        viewport (mobile Safari's keyboard)
 //   appendNotice(el, msg)
@@ -31,6 +33,8 @@
   // the file, after the 64-byte header. Glulx starts with "Glul". A Blorb
   // (FORM ... IFRS) is opened by the interpreter whose executable chunk it
   // holds (ZCOD or GLUL); fastmem.c and git each find that chunk themselves.
+  // A TADS 2 game starts with "TADS2 bin" LF CR ^Z (tads2/fio.h FIOFILHDR),
+  // a TADS 3 image with "T3-image" CR LF ^Z (tads3/vmimage.h VMIMAGE_SIG).
 
   const tag = (b, i) => (i + 4 <= b.length ? String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]) : "");
   const u16 = (b, i) => (b[i] << 8) | b[i + 1];
@@ -42,11 +46,16 @@
     return staticBase >= 64 && staticBase <= b.length && objects >= 64 && objects < b.length;
   }
 
-  const NOT_A_STORY = "is not a Z-code or Glulx story file. This player opens .z3–.z8, .ulx " +
-    "and Blorb (.zblorb, .gblorb) files.";
+  const NOT_A_STORY = "is not a Z-code, Glulx or TADS story file. This player opens .z3–.z8, " +
+    ".ulx, Blorb (.zblorb, .gblorb), TADS 2 (.gam) and TADS 3 (.t3) files.";
+
+  const startsWith = (b, s) => b.length >= s.length &&
+    [...s].every((c, i) => b[i] === c.charCodeAt(0));
 
   function detectFormat(b) {
     if (tag(b, 0) === "Glul") return { format: "glulx" };
+    if (startsWith(b, "TADS2 bin\n\r\x1a")) return { format: "tads2" };
+    if (startsWith(b, "T3-image\r\n\x1a")) return { format: "tads3" };
     if (tag(b, 0) === "FORM") {
       if (tag(b, 8) !== "IFRS") return { error: NOT_A_STORY };
       const end = Math.min(b.length, 8 + u32(b, 4));
@@ -153,6 +162,22 @@
     return b.length >= 12 && tag(b, 0) === "FORM" && tag(b, 8) === "IFZS";
   }
 
+  // The save file each format's interpreter writes, for Import: Quetzal for
+  // Z-code and Glulx; TADS 2's "TADS2 save" header (tads2/fio.c FIOSAVHDR,
+  // with or without its "/g" game-name variant) and TADS 3's
+  // "T3-state-v" signature (tads3/vmsave.cpp VMSAVEFILE_SIG).
+  const SAVE_KINDS = {
+    zcode: { name: "Quetzal", test: isQuetzal },
+    glulx: { name: "Quetzal", test: isQuetzal },
+    tads2: { name: "TADS 2", test: (b) => startsWith(b, "TADS2 save") },
+    tads3: { name: "TADS 3", test: (b) => startsWith(b, "T3-state-v") },
+  };
+  const saveKind = (format) => SAVE_KINDS[format] || SAVE_KINDS.zcode;
+
+  // opts: tag (console prefix), fs(), story(), saveName(), ready(),
+  // notice(msg), and optionally hidden(name), beforeImport(name) and
+  // format() (the running story's format, which picks the save file Import
+  // accepts; Z-code when absent).
   function createSaves(opts) {
     const Saves = root.WebFrotzSaves;
     const savesBtn = document.getElementById("saves-button");
@@ -246,8 +271,9 @@
         importMessage = `Could not read ${file.name}. Nothing was replaced.`;
         return renderSaves();
       }
-      if (!isQuetzal(bytes)) {
-        importMessage = `${file.name} is not a Quetzal save file. Nothing was replaced.`;
+      const kind = saveKind(opts.format ? opts.format() : "zcode");
+      if (!kind.test(bytes)) {
+        importMessage = `${file.name} is not a ${kind.name} save file. Nothing was replaced.`;
         return renderSaves();
       }
       if (opts.beforeImport) opts.beforeImport(saveName);
@@ -273,7 +299,7 @@
 
   const api = {
     detectFormat, asset, locateFile, registerEngine, engine, onViewport, appendNotice,
-    createSaves, isQuetzal, SAVE_DIR,
+    createSaves, isQuetzal, saveKind, SAVE_DIR,
   };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.WebFrotzUI = api;

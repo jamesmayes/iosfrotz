@@ -14,10 +14,10 @@
   <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#161617" media="(prefers-color-scheme: dark)">
   <style>
-    /* One page for both interpreters: body[data-format] is "zcode" (the
-       transcript and upper-window grid, app.js) or "glulx" (the Glk
-       windows, glk.js); the toolbar, picker, command bar, Saves dialog and
-       notices are shared (ui.js, main.js).
+    /* One page for every interpreter: body[data-format] is "zcode" (the
+       transcript and upper-window grid, app.js) or "glulx", "tads2" or
+       "tads3" (the Glk windows, glk.js); the toolbar, picker, command bar,
+       Saves dialog and notices are shared (ui.js, main.js).
 
        Page colours, and the Z-machine colour table (2 black, 3 red,
        4 green, 5 yellow, 6 blue, 7 magenta, 8 cyan, 9 white, 10-12 greys)
@@ -197,7 +197,9 @@
     body[data-mode="picker"] #command-form { display: none; }
     body:not([data-format="zcode"]) #status,
     body:not([data-format="zcode"]) #transcript,
-    body:not([data-format="glulx"]) #glk-root { display: none; }
+    body:not([data-format="glulx"]):not([data-format="tads2"]):not([data-format="tads3"]) #glk-root {
+      display: none;
+    }
     #picker {
       flex: 1;
       min-height: 0;
@@ -373,11 +375,12 @@
     <ul id="story-list"></ul>
     <label class="file-button">Open a story file…
       <input id="open-story" type="file"
-             accept=".z3,.z4,.z5,.z6,.z7,.z8,.zblorb,.zlb,.ulx,.gblorb,.blb">
+             accept=".z3,.z4,.z5,.z6,.z7,.z8,.zblorb,.zlb,.ulx,.gblorb,.blb,.gam,.t3">
     </label>
-    <p class="note">Z-code (.z3–.z8, .zblorb) and Glulx (.ulx, .gblorb) files
-      you open stay on this device; nothing is uploaded. V6 graphics games are
-      not supported, and Glulx pictures and sound are not supported yet.</p>
+    <p class="note">Z-code (.z3–.z8, .zblorb), Glulx (.ulx, .gblorb) and TADS
+      (.gam, .t3) files you open stay on this device; nothing is uploaded. V6
+      graphics games are not supported, and Glulx pictures and sound and TADS
+      HTML are not supported yet.</p>
   </section>
   <div id="status" role="status" hidden></div>
   <div id="transcript" aria-live="polite"></div>
@@ -392,7 +395,7 @@
       <ul id="saves-list"></ul>
       <div class="dialog-actions">
         <label class="file-button">Import save…
-          <input id="import-save" type="file" accept=".sav,.qzl,.glksave,application/octet-stream">
+          <input id="import-save" type="file" accept=".sav,.qzl,.glksave,.t3v,application/octet-stream">
         </label>
         <button value="close">Done</button>
       </div>

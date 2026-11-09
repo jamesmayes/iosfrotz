@@ -1,6 +1,6 @@
 # Web Frotz
 
-Interactive fiction in the browser, from this repo's interpreters compiled unmodified to WebAssembly with emscripten: **Frotz** (`frotz/common`) for Z-code and **git** (`git/`) for Glulx. One start page (`index.html`) plays both; a small browser OS layer (`src/web_os.c`) sits under Frotz and a browser Glk library (`glk/`) under git, with a plain HTML/JS front end and no framework or npm.
+Interactive fiction in the browser, from this repo's interpreters compiled unmodified to WebAssembly with emscripten: **Frotz** (`frotz/common`) for Z-code, **git** (`git/`) for Glulx, and the **TADS 2** and **TADS 3** interpreters (`tads/`). One start page (`index.html`) plays all four; a small browser OS layer (`src/web_os.c`) sits under Frotz and a browser Glk library (`glk/`) under git and TADS (TADS through the iOS app's own Glk OS layer, `tads/osglk.c`, with the stand-ins in `tads/`), with a plain HTML/JS front end and no framework or npm.
 
 Contents: **Play** · **Deploy** · **Develop** · **Status** · **Architecture**.
 
@@ -9,7 +9,7 @@ Contents: **Play** · **Deploy** · **Develop** · **Status** · **Architecture*
 `make serve` (from `web/`) and open <http://127.0.0.1:8000/>. The page needs HTTP; `file://` does not work.
 
 - **The catalogue** (`games/stories.json`) lists the bundled stories, Z-code and Glulx together. Picking one sets the URL hash, for example `#story=Balances` (the file name without its extension; the parameter and the name are both case-insensitive), so a link opens that story directly. Old `glulx.html#story=…` links redirect to the same story on `index.html`.
-- **Open a story file…** plays a file from the device: Z-code (`.z3`–`.z8`, `.zblorb`, `.zlb`) or Glulx (`.ulx`, `.gblorb`, `.blb`). Nothing is uploaded. The format is read from the file's bytes, not its name, and anything that is neither is refused with a message. A local file cannot be linked to, so the hash is cleared.
+- **Open a story file…** plays a file from the device: Z-code (`.z3`–`.z8`, `.zblorb`, `.zlb`), Glulx (`.ulx`, `.gblorb`, `.blb`), TADS 2 (`.gam`) or TADS 3 (`.t3`). Nothing is uploaded. The format is read from the file's bytes, not its name, and anything else is refused with a message. A local file cannot be linked to, so the hash is cleared.
 - **Stories** goes back to the catalogue (it reloads the page: a story is loaded once per WebAssembly instance). **Saves** lists, exports and imports saves (see "Save store").
 - Type commands in the bar at the bottom. On iOS the bar stays docked above the keyboard. "Add to Home Screen" installs it as a web app, which also keeps Safari from deleting its saves after 7 days without a visit.
 
@@ -19,11 +19,11 @@ Bundled: *Balances* (Graham Nelson, Z-code) and *Glulxercise* (Andrew Plotkin's 
 
 ```sh
 cd web
-make dist       # -> dist-site/, the whole static site (about 1.3 MB)
+make dist       # -> dist-site/, the whole static site (about 4.4 MB, 2.3 MB of it tads3.wasm)
 make serve      # make dist, then serve dist-site/ on 127.0.0.1:8000
 ```
 
-`dist-site/` holds exactly what a static host needs: the start page, the `glulx.html` redirect, manifest, icon, the catalogue with the stories it lists and `games/LICENSES.md`, and in `assets/` the scripts and both interpreters (`.js` and `.wasm`) under content-hashed names, so they can be cached for good while `index.html` is revalidated. It is ignored by git. [`deploy/README.md`](deploy/README.md) lists the headers a host should send (`application/wasm`, `application/manifest+json`, long caching for `assets/`, no COOP/COEP) and how to publish on GitHub Pages.
+`dist-site/` holds exactly what a static host needs: the start page, the `glulx.html` redirect, manifest, icon, the catalogue with the stories it lists and `games/LICENSES.md`, and in `assets/` the scripts and the four interpreters (`.js` and `.wasm`) under content-hashed names, so they can be cached for good while `index.html` is revalidated. It is ignored by git. [`deploy/README.md`](deploy/README.md) lists the headers a host should send (`application/wasm`, `application/manifest+json`, long caching for `assets/`, no COOP/COEP) and how to publish on GitHub Pages.
 
 ## Develop
 
@@ -31,7 +31,7 @@ Requires emscripten (`emcc`, tested with 7.0.0 from Homebrew), Node (for `make c
 
 ```sh
 cd web
-make            # both interpreters
+make            # all four interpreters
 make frotz      # -> dist/frotz.js (~63 KB) + dist/frotz.wasm (~145 KB)
 make git        # -> dist/git.js (~71 KB) + dist/git.wasm (~265 KB)
 make tads2      # -> dist/tads2.js (~77 KB) + dist/tads2.wasm (~606 KB)
@@ -84,7 +84,7 @@ make clean      # removes dist/ and dist-site/
 
 ### The harness and `make check`
 
-`make check` builds `bench/glk-check.c`, a small Glk program on the plain bridge, and runs it with `bench/check-glk.js`: `set_arrangement` direction and axis changes, a nested key, closing a key, a blank fixed key, grid line limits and echo wrapping, cancelling a line before it is shown, echo per request, consecutive overdue timers (each waits on the page with a zero timeout), deleting a `/saves` file, the LineInput/CharInput gestalt answers, and `glk_style_distinguish` against the CSS. It then runs `bench/check-malformed.js`, and `bench/check-page.js`: format detection (`ui.js`) on the bundled stories, Blorbs with a ZCOD, a GLUL or no executable chunk, a Quetzal save, HTML, empty, truncated and version-9 files; the start page run as `index.html` runs it (`saves.js`, `ui.js`, `main.js`, which loads only `glk.js` for a Glulx story); `glk.js` on a fake DOM (composition across timer and Arrange waits, a lowered line limit) and `saves.js` across tabs on a fake IndexedDB (a clean copy removed after another tab's delete, an unstored copy kept). Link flags are compared with `dist/obj/<name>.ldflags` while the Makefile is read, without writing anything, so `make -n` leaves `dist/` alone.
+`make check` builds `bench/glk-check.c`, a small Glk program on the plain bridge, and runs it with `bench/check-glk.js`: `set_arrangement` direction and axis changes, a nested key, closing a key, a blank fixed key, grid line limits and echo wrapping, cancelling a line before it is shown, echo per request, consecutive overdue timers (each waits on the page with a zero timeout), deleting a `/saves` file, the LineInput/CharInput gestalt answers, and `glk_style_distinguish` against the CSS. It then runs `bench/check-malformed.js`, and `bench/check-page.js`: format detection (`ui.js`) on the bundled stories, the TADS test games, Blorbs with a ZCOD, a GLUL or no executable chunk, a Quetzal save, TADS saves, HTML, empty, truncated and version-9 files, cut-short TADS signatures, and which save files Import accepts for each format; the start page run as `index.html` runs it (`saves.js`, `ui.js`, `main.js`, which loads only `glk.js` for a Glulx story); `glk.js` on a fake DOM (composition across timer and Arrange waits, a lowered line limit) and `saves.js` across tabs on a fake IndexedDB (a clean copy removed after another tab's delete, an unstored copy kept). Last, `bench/check-tads.js` runs the plain Node builds of TADS 2 and TADS 3 on the test games: the status line is drawn, SAVE asks the page to load `/saves/<story>.glksave` before opening it and to store it once after closing it (and the stored file is that interpreter's save format), RESTORE loads it before reading and stores nothing, and a file of the wrong format is refused with a message. Link flags are compared with `dist/obj/<name>.ldflags` while the Makefile is read, without writing anything, so `make -n` leaves `dist/` alone.
 
 **Safari 27.2 (macOS), 2026-11-08 (task 3).** The Glulx page (then `glulx.html`) was served by a test-only server that injected a remote-control script (not in the repo); input went through the real form (`requestSubmit()`) and synthetic `keydown`, `input` and `composition*` events on the command field, not real keystrokes. Test stories came from Plotkin's `erkyrath/glk-dev` unit tests and from `git/test/`, served by the test server and not shipped.
 
@@ -143,7 +143,21 @@ Not done (yet):
 
 - Graphics windows, images, sound, hyperlinks, mouse input: stubbed, gestalt false.
 - Style hints are ignored. There is no per-game colour.
-- `glulxe/` and `tads/` are not built. Neither needs only a startup file; see "What glulxe and TADS need" below.
+- `glulxe/` is not built; see "What glulxe and TADS need" below.
+
+### TADS 2 and TADS 3 (feasibility spike, task 5)
+
+- Both interpreters build from this repo's `tads/` unmodified (see "How TADS 2 is built", "How TADS 3 is built") and run on the browser Glk under ASYNCIFY, in the same Glk windows as Glulx: the status line is a text grid, the story a text buffer.
+- The start page opens them from their bytes (`TADS2 bin`, `T3-image`) and loads only that interpreter (`dist/tads2.js` or `dist/tads3.js`, then `glk.js`). The catalogue lists no TADS game: the repo has no TADS game cleared for shipping (the two test games are in `bench/tads`).
+- Saves use the shared store: TADS's stdio save is brought in from and written to IndexedDB by its `/saves` path, `<story>.glksave` (the Glk file prompt's name), checked in `make check` (`bench/check-tads.js`). Export works as for the other formats; Import accepts the format's own save file (`TADS2 save`, `T3-state-v`), not Quetzal.
+- **Safari 27.2 (macOS), 2026-11-08**, through the same kind of test-only control channel as task 3, from `make dist`'s site, with the test games added to a scratch copy of the catalogue: *The Keeper's Errand* (TADS 2) started and played 14 commands to its end through the real form, and SAVE replied "Saved."; *The Silent Belfry* (TADS 3, wasm exceptions) started and played 13 commands, including scoring and UNDO, with its status line. No page errors. The machine's screen was locked throughout, so the page was hidden and Safari held back its timers and storage: the SAVE's IndexedDB read timed out ("Could not read browser storage; using this session's copy only.") and later storage calls did not finish, so storing, RESTORE and a reload were **not** verified in Safari (they are in Node, above). Nor was a TADS 3 run-time error (the `longjmp` path) seen in Safari.
+
+Not done (yet):
+
+- TADS HTML (`<b>`, `<font>` and other markup in TADS 3 games written for HTML TADS) is shown as the text-only interpreter shows it; banners are text windows; no images or sound (the same gestalt as Glulx).
+- No real TADS game has been tried: none is in the repo with clearance, and adv3 games (the TADS 3 library most games use) do far more per turn than the test game, so they need their own measurement before the speed figures below are taken as representative.
+- The interpreter's banner says "GlkTADS for iOS" (`tads/tads2/oem_glk.c`), which cannot change without editing `tads/`.
+- Gargoyle's `osglk.c` is GPL v2 (or later), and the TADS 2 source licence forbids charging for copies; these apply to `tads2.wasm`/`tads3.wasm` wherever they are hosted, as the iOS app's terms do there.
 
 ### Mobile layout (task 4, Safari 27.2, 2026-11-08)
 
@@ -159,11 +173,11 @@ The interpreters' own licences (Frotz, git, and the `glkios` files) apply to the
 
 ## Architecture
 
-### One page, two interpreters
+### One page, four interpreters
 
-`index.html` loads `saves.js`, `ui.js` and `main.js`. When a story is picked, `main.js` gets its bytes, asks `WebFrotzUI.detectFormat` which interpreter it needs, and only then loads that interpreter: `dist/frotz.js` + `app.js` for Z-code, or `dist/git.js` + `glk.js` for Glulx. Each front end registers with `ui.js` and is started once. `body[data-format]` shows that front end's part of the page (the transcript and upper-window grid, or the Glk windows); the toolbar, picker, command bar, Saves dialog and notices are shared.
+`index.html` loads `saves.js`, `ui.js` and `main.js`. When a story is picked, `main.js` gets its bytes, asks `WebFrotzUI.detectFormat` which interpreter it needs, and only then loads that interpreter: `dist/frotz.js` + `app.js` for Z-code, or `dist/git.js`, `dist/tads2.js` or `dist/tads3.js` + `glk.js` for Glulx, TADS 2 and TADS 3. `glk.js` registers as all three Glk engines and starts the one whose module factory (`createGit`, `createTads2`, `createTads3`) was loaded. Each front end registers with `ui.js` and is started once. `body[data-format]` shows that front end's part of the page (the transcript and upper-window grid, or the Glk windows); the toolbar, picker, command bar, Saves dialog and notices are shared.
 
-- **Detection.** Glulx starts with `Glul`. A Blorb (`FORM` … `IFRS`) is opened by the interpreter whose executable chunk it holds (`ZCOD` or `GLUL`; `fastmem.c` and git then find that chunk themselves). Z-code has no magic number, so a file counts as Z-code when its header is plausible: version 1–8, and static memory and the object table inside the file, after the 64-byte header. All 38 story files in this repo are classified correctly, and scripts, images and HTML are refused.
+- **Detection.** Glulx starts with `Glul`; TADS 2 with `TADS2 bin` LF CR ^Z, TADS 3 with `T3-image` CR LF ^Z. A Blorb (`FORM` … `IFRS`) is opened by the interpreter whose executable chunk it holds (`ZCOD` or `GLUL`; `fastmem.c` and git then find that chunk themselves). Z-code has no magic number, so a file counts as Z-code when its header is plausible: version 1–8, and static memory and the object table inside the file, after the 64-byte header. All 38 story files in this repo are classified correctly, and scripts, images and HTML are refused.
 - **Loading.** While a story loads, the picker says so; a newer pick supersedes a load still fetching, and a failed load (a fetch, a refused file, an interpreter that does not load or start) puts the picker back with the error and drops the hash. A hash that names no story, or has malformed `%` escapes, shows the picker.
 - **Blorb.** Neither front end unwraps a Blorb: the file goes to MEMFS as it is. Frotz's `init_memory()` (`fastmem.c`) finds the `ZCOD` chunk and sets `fileZCodeOffset`, which loading, `restart`, `save` and `restore` honour (tested with *Lost Pig*, `resources/Games/LostPig.zblorb`, not shipped); `git_web.c` validates a Glulx Blorb and git finds its `GLUL` chunk.
 - **One interpreter per page.** Only one front end is ever loaded, because both drive the same command bar (and their top-level names would collide). Changing story while one runs reloads the page. If an interpreter fails to start, a story in the same format can be tried again in that page; one in the other format asks for a reload.

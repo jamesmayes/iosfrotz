@@ -10,7 +10,8 @@
 //   manifest.webmanifest, icon-512.png
 //   assets/<name>.<hash>.<ext>
 //                          saves.js, ui.js, main.js, app.js, glk.js and the
-//                          two interpreters (frotz.js/.wasm, git.js/.wasm),
+//                          four interpreters (frotz, git, tads2 and tads3,
+//                          each a .js and a .wasm),
 //                          each named by the first 10 hex digits of its
 //                          SHA-256, so they can be cached for good
 //   games/stories.json, the stories it lists, games/LICENSES.md
@@ -35,6 +36,7 @@ const OUT = path.resolve(WEB, process.argv[2] || "dist-site");
 const HASHED = [
   "saves.js", "ui.js", "main.js", "app.js", "glk.js",
   "dist/frotz.js", "dist/frotz.wasm", "dist/git.js", "dist/git.wasm",
+  "dist/tads2.js", "dist/tads2.wasm", "dist/tads3.js", "dist/tads3.wasm",
 ];
 // Loaded by index.html itself; the rest are loaded through the asset map.
 const PAGE_SCRIPTS = ["saves.js", "ui.js", "main.js"];

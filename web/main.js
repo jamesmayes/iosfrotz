@@ -6,6 +6,8 @@
 //
 //   zcode  dist/frotz.js + app.js   (Frotz, web/src/web_os.c)
 //   glulx  dist/git.js   + glk.js   (git, web/glk/glk_web.c)
+//   tads2  dist/tads2.js + glk.js   (TADS 2 on the same Glk, web/tads/)
+//   tads3  dist/tads3.js + glk.js   (TADS 3 on the same Glk, web/tads/)
 //
 // A story can only be loaded once per WebAssembly instance, and only one
 // interpreter's front end runs in a page, so changing story while one is
@@ -21,6 +23,8 @@
   const ENGINES = {
     zcode: { name: "Z-code", scripts: ["dist/frotz.js", "app.js"] },
     glulx: { name: "Glulx", scripts: ["dist/git.js", "glk.js"] },
+    tads2: { name: "TADS 2", scripts: ["dist/tads2.js", "glk.js"] },
+    tads3: { name: "TADS 3", scripts: ["dist/tads3.js", "glk.js"] },
   };
 
   const pickerEl = document.getElementById("picker");

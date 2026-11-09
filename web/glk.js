@@ -1,7 +1,8 @@
-// web/glk.js: plain-DOM front end for Glulx stories (git compiled to
-// WebAssembly with the browser Glk in web/glk/glk_web.c). main.js loads it,
-// with dist/git.js, when the first Glulx story starts; it registers with
-// web/ui.js as the "glulx" engine.
+// web/glk.js: plain-DOM front end for the interpreters on the browser Glk
+// (web/glk/glk_web.c): git for Glulx, and TADS 2 and TADS 3 (web/tads/).
+// main.js loads it, after that interpreter's dist/*.js, when the first such
+// story starts; it registers with web/ui.js as the "glulx", "tads2" and
+// "tads3" engines, and only the one whose script was loaded can start.
 //
 // The library owns the Glk window tree and lays it out in CSS pixels from
 // the font metrics this page measures; the page draws what it is told.
@@ -35,7 +36,8 @@
 //
 // Saves use web/saves.js through web/ui.js, the same per-file IndexedDB
 // store, Saves dialog and import as Z-code stories (database "web-frotz").
-// Glulx saves are named <story>.glksave.
+// Saves made through the Glk file prompt are named <story>.glksave, for
+// every interpreter (TADS asks the same prompt for its save files).
 
 const glkRoot = document.getElementById("glk-root");
 const form = document.getElementById("command-form");
@@ -512,6 +514,7 @@ const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 
 const saves = UI.createSaves({
   tag: "glk",
+  format: () => storyFormat,
   fs: () => Module.FS,
   story: () => storyFile,
   saveName: () => saveName,
@@ -578,14 +581,26 @@ UI.onViewport(onResize);
 
 // ---- Start (main.js calls this once per page) ----
 
-async function play(fileName, title, bytes) {
+// The module factory each interpreter's dist/*.js defines (EXPORT_NAME in
+// the Makefile), looked up when the story starts: only the loaded one exists.
+const FACTORIES = {
+  glulx: { tag: "git", get: () => (typeof createGit === "function" ? createGit : null) },
+  tads2: { tag: "tads2", get: () => (typeof createTads2 === "function" ? createTads2 : null) },
+  tads3: { tag: "tads3", get: () => (typeof createTads3 === "function" ? createTads3 : null) },
+};
+let storyFormat = null;
+
+async function play(format, fileName, title, bytes) {
   const name = fileName.replace(/[\/]/g, "_");
+  const f = FACTORIES[format];
   try {
-    Module = await createGit({
+    const create = f.get();
+    if (!create) throw new Error(`the ${format} interpreter is not loaded`);
+    Module = await create({
       glkWeb,
       locateFile: UI.locateFile,
-      print: (t) => console.log("[git]", t),
-      printErr: (t) => console.warn("[git]", t),
+      print: (t) => console.log(`[${f.tag}]`, t),
+      printErr: (t) => console.warn(`[${f.tag}]`, t),
     });
     Module.FS.mkdir("/games");
     Module.FS.writeFile(`/games/${name}`, bytes);
@@ -594,6 +609,7 @@ async function play(fileName, title, bytes) {
     throw new Error(`Could not start ${title}: ${err && err.message ? err.message : err}`);
   }
   storyFile = fileName;
+  storyFormat = format;
   saves.refresh();
   // callMain returns when the game first waits in glk_select; from then on
   // it runs from Promise resolutions driven by the input form.
@@ -601,4 +617,5 @@ async function play(fileName, title, bytes) {
   input.focus({ preventScroll: true });
 }
 
-UI.registerEngine("glulx", { start: play });
+for (const format of Object.keys(FACTORIES))
+  UI.registerEngine(format, { start: (fileName, title, bytes) => play(format, fileName, title, bytes) });

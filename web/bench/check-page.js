@@ -8,7 +8,8 @@
 // The page is run as index.html runs it: saves.js, ui.js and main.js, which
 // fetches the catalogue, detects the story's format from its bytes and
 // loads glk.js (dist/git.js is the fake createGit below). Also covered:
-// WebFrotzUI.detectFormat on Z-code, Glulx, Blorb and other files.
+// WebFrotzUI.detectFormat on Z-code, Glulx, Blorb, TADS 2, TADS 3 and other
+// files, and which save files Import accepts for each format.
 //
 // Covered: while the interpreter's scripts are still loading the command
 // field is disabled and a submit is cancelled (no page reload); no path hands an input method's uncommitted (preedit) text to a
@@ -291,7 +292,28 @@ function formatChecks() {
   ok(fmt(new Uint8Array(0)) === "error" && fmt(balances.slice(0, 40)) === "error", "empty and truncated files are refused");
   const bogus = balances.slice(); bogus[0] = 9;
   ok(fmt(bogus) === "error", "a Z-code header with version 9 is refused");
-  ok(/not a Z-code or Glulx story/.test(UI.detectFormat(new Uint8Array(100)).error), "the error says what is wrong");
+  ok(/not a Z-code, Glulx or TADS story/.test(UI.detectFormat(new Uint8Array(100)).error),
+    "the error says what is wrong");
+
+  // TADS: the test games in bench/tads, their signatures cut short, and
+  // each interpreter's save files (which are not stories).
+  const gam = new Uint8Array(fs.readFileSync(path.join(WEB, "bench", "tads", "errand.gam")));
+  const t3 = new Uint8Array(fs.readFileSync(path.join(WEB, "bench", "tads", "belfry.t3")));
+  const ascii = (str) => Uint8Array.from([...str].map((c) => c.charCodeAt(0)));
+  ok(fmt(gam) === "tads2", "errand.gam is TADS 2");
+  ok(fmt(t3) === "tads3", "belfry.t3 is TADS 3");
+  ok(fmt(gam.slice(0, 11)) === "error" && fmt(t3.slice(0, 10)) === "error", "a cut-short TADS signature is refused");
+  const t2save = ascii("TADS2 save\n\r\x1a"), t2saveg = ascii("TADS2 save/g\n\r\x1a");
+  const t3save = ascii("T3-state-v000A\r\n\x1a");
+  ok(fmt(t2save) === "error" && fmt(t3save) === "error", "TADS save files are not stories");
+  const quetzal = Uint8Array.from([...b4("FORM"), 0, 0, 0, 4, ...b4("IFZS")]);
+  const accepts = (f, b) => UI.saveKind(f).test(b);
+  ok(accepts("tads2", t2save) && accepts("tads2", t2saveg) && !accepts("tads2", quetzal) && !accepts("tads2", t3save),
+    "Import takes TADS 2 saves for a TADS 2 story, and nothing else");
+  ok(accepts("tads3", t3save) && !accepts("tads3", quetzal) && !accepts("tads3", t2save),
+    "Import takes TADS 3 saves for a TADS 3 story, and nothing else");
+  ok(accepts("glulx", quetzal) && accepts("zcode", quetzal) && !accepts("glulx", t2save) && !accepts("zcode", t3save),
+    "Import takes Quetzal saves for Z-code and Glulx, and not TADS ones");
 }
 
 // ---- saves.js across tabs ----
