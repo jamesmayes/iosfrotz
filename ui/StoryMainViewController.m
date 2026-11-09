@@ -1760,8 +1760,8 @@ extern void gli_ios_set_focus(window_t *winNum);
 }
 
 #if DEBUG
-// FROTZ_INAPP_KEYBOARD=<skin-id> until the settings choose a keyboard; read once, so a failed
-// load isn't retried on every appearance and clearing the skin sticks.
+// FROTZ_INAPP_KEYBOARD=<skin-id> (or "system") overrides the keyboardStyle pref; read once, so
+// a failed load isn't retried on every appearance and a choice made in settings sticks.
 -(void)showInAppKeyboardIfRequested {
     NSDictionary *env = [[NSProcessInfo processInfo] environment];
     if ([m_keyboardController applySkinFromEnvironment] && [env[@"FROTZ_INAPP_KEYBOARD_SELFTEST"] boolValue])
@@ -4116,6 +4116,11 @@ static int iosif_top_win_height = 1;
     [dict setObject: @(m_canEditStoryInfo) forKey: @"canEditStoryInfo"];
     [dict setObject: @(iosif_ifrotz_verbose_debug) forKey: @"debug_flags_" IPHONE_FROTZ_VERS];
     [dict setObject: @(m_autoRestoreEnabled) forKey:@"autorestore_preference"];
+    if (m_keyboardStyle.length)
+        [dict setObject: m_keyboardStyle forKey: @"keyboardStyle"];
+    else
+        [dict removeObjectForKey: @"keyboardStyle"];
+    [dict setObject: m_duoLayoutMode ?: @"classic" forKey: @"duoLayoutMode"];
     
     [dict synchronize];    
 }
@@ -4178,7 +4183,37 @@ static UIColor *scanColor(NSString *colorStr) {
             m_autoRestoreEnabled = [arp boolValue];
         else
             m_autoRestoreEnabled = YES;
+        NSString *style = [dict stringForKey: @"keyboardStyle"];
+        m_keyboardStyle = style.length ? style : nil;
+        m_duoLayoutMode = [[dict stringForKey: @"duoLayoutMode"] isEqualToString: @"flow"] ? @"flow" : @"classic";
+        // The first call comes from init, before loadView has made the controller.
+        BOOL applyStyle = m_keyboardController != nil;
+#if DEBUG
+        if ([[NSProcessInfo processInfo] environment][@"FROTZ_INAPP_KEYBOARD"].length)
+            applyStyle = NO; // the override wins; viewDidAppear applies it
+#endif
+        if (applyStyle)
+            m_keyboardController.skinID = m_keyboardStyle;
     }
+}
+
+-(void)setKeyboardStyle:(NSString *)skinID {
+    m_keyboardStyle = skinID.length ? [skinID copy] : nil;
+    m_keyboardController.skinID = m_keyboardStyle;
+    [self savePrefs];
+}
+
+-(NSString *)keyboardStyle {
+    return m_keyboardStyle;
+}
+
+-(void)setDuoLayoutMode:(NSString *)mode {
+    m_duoLayoutMode = [mode isEqualToString: @"flow"] ? @"flow" : @"classic"; // Flow has no effect yet
+    [self savePrefs];
+}
+
+-(NSString *)duoLayoutMode {
+    return m_duoLayoutMode ?: @"classic";
 }
 
 -(void)rememberActiveStory {

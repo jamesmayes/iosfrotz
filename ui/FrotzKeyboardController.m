@@ -255,9 +255,9 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
         return NO;
     m_envSkinApplied = YES;
     NSString *skinID = [[NSProcessInfo processInfo] environment][@"FROTZ_INAPP_KEYBOARD"];
-    if (skinID.length == 0 || _skinID)
+    if (skinID.length == 0)
         return NO;
-    self.skinID = skinID;
+    self.skinID = [skinID isEqualToString: @"system"] ? nil : skinID;
     return _keyboardView != nil;
 }
 #endif

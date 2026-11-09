@@ -24,6 +24,10 @@
 @property (nonatomic, readwrite) BOOL canEditStoryInfo;
 -(void)savePrefs;
 -(StoryBrowser*)storyBrowser;
+-(void)setKeyboardStyle:(NSString*)skinID;     // nil = system keyboard; applied at once
+-(NSString*)keyboardStyle;
+-(void)setDuoLayoutMode:(NSString*)mode;       // "classic" or "flow"
+-(NSString*)duoLayoutMode;
 @end
 
 @class FileTransferInfo;

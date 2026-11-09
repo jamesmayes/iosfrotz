@@ -121,6 +121,8 @@ extern StoryBrowser *theStoryBrowser;
     FrotzPostureObserver *m_postureObserver;
     FrotzKeyboardSource m_keyboardSource;
     FrotzKeyboardController *m_keyboardController;
+    NSString *m_keyboardStyle;      // the player's choice; nil = system keyboard
+    NSString *m_duoLayoutMode;      // "classic" or "flow"
     NSTimeInterval m_animDuration;
     NSString *m_launchMessage;
 
