@@ -1,0 +1,9 @@
+{ "id": "atari800xl", "name": "Atari 800XL", "profile": "sculpted", "legendCase": "upper",
+  "case": { "light": "#DAD2C0", "dark": "#4C4840" },
+  "bezel": { "top": 10, "bottom": 10, "sides": 6 },
+  "key": { "radius": 3, "light": "#22201E", "dark": "#22201E", "textLight": "#F4F2EC", "textDark": "#E4E1DA",
+           "font": "system", "fontSize": 11, "pressedLight": "#4A4642", "pressedDark": "#4A4642" },
+  "groups": { "fn": { "light": "#BDB4A2", "dark": "#A8A08F", "textLight": "#22201E", "textDark": "#22201E",
+                      "pressedLight": "#D6CEBD", "pressedDark": "#C0B8A6" } },
+  "credits": "Layout after the Atari 800XL (1983) keyboard; colours after its beige case, black caps and light console keys.",
+  "notes": "Faithful: the XL key matrix with black caps and white upper-case legends on the beige case, the shifted, CLEAR, INSERT, DELETE and cursor-arrow legends above the characters, CAPS beside *, the INVERSE key after the right SHIFT, and RESET, OPTION, SELECT, START and HELP as the light column on the right, one to a row. BREAK ends the number row beside BACK S, where it sits on the XL. Letters type lower case and SHIFT upper case; CAPS locks capitals. Approximated: widths are compressed to fit a phone, there is no gap before the console keys, the space bar is drawn long so HELP can sit in its column (a row cannot hold a gap), the inverse key is the text INVERSE (no logo), shifted < and > type < and >, and the aluminium strip above the keys is not drawn, since a skin has no decorative elements. Mapped to none: BREAK, TAB, CTRL, INVERSE and the console keys. The cursor arrows on - = + * were CTRL combinations and are out of scope." }

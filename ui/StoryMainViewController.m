@@ -1827,6 +1827,12 @@ extern void gli_ios_set_focus(window_t *winNum);
         @"ibmpc": @[ @"⌫", @"↵", @"⇧", @"tap:⇧", @"tap:Q", @"tap:\\", @"tap:⇧", @"tap:1", @"tap:`", @"tap:*",
                      @"tap:Caps Lock", @"tap:A", @"tap:Caps Lock", @"tap:b", @"clear:", @"tap:F1", @"tap:F2",
                      @"tap:Esc", @"tap:⇥", @"tap:Ctrl", @"tap:Alt", @"tap:Num Lock", @"tap:F10" ],
+        @"atari400": @[ @"BACK S", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:1", @"tap:LOWR", @"tap:A", @"tap:LOWR", @"tap:b",
+                        @"tap:ESC", @"tap:BREAK", @"tap:RESET", @"tap:START", @"tap:◪" ],
+        @"atari800": @[ @"BACK S", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:1", @"tap:LOWR", @"tap:A", @"tap:LOWR", @"tap:b",
+                        @"tap:ESC", @"tap:BREAK", @"tap:RESET", @"tap:START", @"tap:◪" ],
+        @"atari800xl": @[ @"BACK S", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:1", @"tap:CAPS", @"tap:A", @"tap:CAPS", @"tap:b",
+                          @"tap:ESC", @"tap:BREAK", @"tap:HELP", @"tap:INVERSE" ],
         @"ibmpcjr": @[ @"⌫", @"↵", @"⇧", @"tap:⇧", @"tap:1", @"tap:'", @"tap:Caps Lock", @"tap:A", @"tap:Caps Lock", @"tap:b",
                        @"clear:", @"tap:↑", @"tap:↓", @"tap:Esc", @"tap:Ins", @"tap:Del" ],
     };

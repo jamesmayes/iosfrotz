@@ -1,0 +1,10 @@
+{ "id": "atari400", "name": "Atari 400", "profile": "flat", "legendCase": "upper",
+  "case": { "light": "#D9CDB4", "dark": "#4E463A" },
+  "bezel": { "top": 10, "bottom": 10, "sides": 6 },
+  "key": { "light": "#7B5B3F", "dark": "#6E5139", "textLight": "#FAF6EC", "textDark": "#EDE7DA",
+           "font": "system", "fontSize": 11, "pressedLight": "#9C7A5A", "pressedDark": "#8C6C4E" },
+  "groups": { "mod": { "light": "#664A33", "dark": "#5B422E", "pressedLight": "#8A6A4D", "pressedDark": "#7C5E43" },
+              "fn": { "light": "#C08A2E", "dark": "#A9792A", "textLight": "#2E2116", "textDark": "#241A11",
+                      "pressedLight": "#D8A54E", "pressedDark": "#C29243" } },
+  "credits": "Layout after the Atari 400 (1979) membrane keyboard; colours after its beige case, brown printed keys and golden-brown console keys.",
+  "notes": "Faithful: the 400 and 800 key matrix in its rows and order, with BREAK at the end of the number row, CAPS/LOWR beside *, the inverse-video key after the right SHIFT, the shifted legends and the CLEAR, INSERT, DELETE and cursor-arrow legends printed above, and SYSTEM RESET (RESET under SYSTEM, as on the cap), OPTION, SELECT and START as the column on the right in golden brown. The membrane is drawn flat, square and almost gapless, as one printed surface. Letters type lower case and SHIFT upper case; LOWR locks capitals here, a simplification of the machine's LOWR/CAPS pair. Approximated: widths are compressed to fit a phone, there is no gap before the console keys (a row cannot hold one), the inverse key is the text ◪ with ATARI above, since the logo is not drawn, and shifted < and > type < and > (CLEAR and INSERT edited the screen). Mapped to none: BREAK, TAB, CTRL, the inverse key and the console keys. The cursor arrows on - = + * were CTRL combinations and are out of scope: use the command history instead." }
