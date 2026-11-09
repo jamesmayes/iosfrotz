@@ -2585,6 +2585,7 @@ static const CGFloat kVerticalBarLiveActivityReserve = 90;
 -(NSInteger)estimatedVerticalBarCapacityWithKeyboardHeight:(CGFloat)keyboardHeight {
     if (![self hasVerticalBar])
         return NSIntegerMax;
+    keyboardHeight = [self verticalBarKeyboardHeightForRegionHeight: keyboardHeight];
     CGFloat bottom = self.view.bounds.size.height;
     // The keyboard reaches the bottom of the screen, so the home indicator inset is already in it.
     bottom -= keyboardHeight > 0 ? keyboardHeight : self.view.safeAreaInsets.bottom;
@@ -2595,6 +2596,20 @@ static const CGFloat kVerticalBarLiveActivityReserve = 90;
         return 1;
     CGFloat pitch = kVerticalBarItemLength + kVerticalBarItemGap;
     return (NSInteger)floor((space - kVerticalBarGroupGap + 2 * kVerticalBarItemGap) / pitch);
+}
+
+// How much of a keyboard region of this height the vertical bar has to stop above. UIKit shortens
+// the bar for its own keyboard only; the in-app one counts just where it reaches under the bar's
+// side inset (docked, full width), not when it stops beside it (Classic split).
+-(CGFloat)verticalBarKeyboardHeightForRegionHeight:(CGFloat)height {
+    if (height <= 0 || m_keyboardSource != FrotzKeyboardSourceInApp)
+        return height;
+    CGRect frame = m_keyboardController.keyboardView.frame;
+    CGRect bounds = self.view.bounds;
+    UIEdgeInsets safe = self.view.safeAreaInsets;
+    BOOL underBar = (safe.left > 0 && CGRectGetMinX(frame) < safe.left)
+                 || (safe.right > 0 && CGRectGetMaxX(frame) > CGRectGetMaxX(bounds) - safe.right);
+    return underBar ? MIN(height, CGRectGetMaxY(bounds) - CGRectGetMinY(frame)) : 0;
 }
 
 // Leading items, by how many items the vertical bar has space for: the Story List with the Frotz
@@ -2674,9 +2689,9 @@ static const CGFloat kVerticalBarLiveActivityReserve = 90;
         // The inputs to the estimate, for checking the constants above against the device.
         m_lastVerticalBarCapacity = capacity;
         UIEdgeInsets safe = self.view.safeAreaInsets;
-        NSLog(@"vertical bar: height %.0f, island at top %d, status hidden %d, keyboard %.0f, safe insets (t %.0f l %.0f b %.0f r %.0f), first tile top %.0f (measured extra %.0f) -> capacity %ld, %lu leading item(s)",
+        NSLog(@"vertical bar: height %.0f, island at top %d, status hidden %d, keyboard %.0f (under the bar %.0f), safe insets (t %.0f l %.0f b %.0f r %.0f), first tile top %.0f (measured extra %.0f) -> capacity %ld, %lu leading item(s)",
               self.view.bounds.size.height, [self dynamicIslandIsAtTopOfVerticalBar], [self prefersStatusBarHidden],
-              keyboardHeight, safe.top, safe.left, safe.bottom, safe.right,
+              keyboardHeight, [self verticalBarKeyboardHeightForRegionHeight: keyboardHeight], safe.top, safe.left, safe.bottom, safe.right,
               [self estimatedVerticalBarFirstItemTop], m_verticalBarExtraTop, (long)capacity, (unsigned long)items.count);
     }
     if (![self.navigationItem.leftBarButtonItems isEqualToArray: items])
