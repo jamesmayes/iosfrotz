@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web Frotz</title>
+  <style>
+    :root {
+      --bg: #fbfaf7;
+      --fg: #1d1d1f;
+      --muted: #6e6e73;
+      --rule: #d9d6cf;
+      --status-bg: #1d1d1f;
+      --status-fg: #fbfaf7;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #161617;
+        --fg: #e8e6e1;
+        --muted: #98989d;
+        --rule: #3a3a3c;
+        --status-bg: #e8e6e1;
+        --status-fg: #161617;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font: 17px/1.5 Georgia, "Iowan Old Style", serif;
+      display: flex;
+      flex-direction: column;
+    }
+    #status {
+      margin: 0;
+      padding: 4px 16px;
+      background: var(--status-bg);
+      color: var(--status-fg);
+      font: 14px/1.4 ui-monospace, Menlo, monospace;
+      white-space: pre;
+      overflow: hidden;
+    }
+    #transcript {
+      flex: 1;
+      overflow-y: auto;
+      margin: 0;
+      padding: 16px;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      max-width: 46rem;
+      width: 100%;
+      align-self: center;
+    }
+    .s-bold { font-weight: bold; }
+    .s-emphasis { font-style: italic; }
+    .s-fixed { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; }
+    .s-reverse { background: var(--fg); color: var(--bg); }
+    #command-form {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--rule);
+      max-width: 46rem;
+      width: 100%;
+      align-self: center;
+    }
+    #command {
+      flex: 1;
+      min-width: 0;
+      font: inherit;
+      color: inherit;
+      background: transparent;
+      border: none;
+      outline: none;
+    }
+  </style>
+</head>
+<body>
+  <pre id="status" hidden></pre>
+  <div id="transcript" aria-live="polite"></div>
+  <form id="command-form" autocomplete="off">
+    <input id="command" type="text" autocapitalize="off" autocorrect="off"
+           spellcheck="false" enterkeyhint="send" aria-label="Command">
+  </form>
+  <script src="dist/frotz.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

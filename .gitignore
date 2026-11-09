@@ -37,3 +37,4 @@ Frotz.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
 ## Obj-C/Swift specific
 *.hmap
 *.ipa
+web/dist/
