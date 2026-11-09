@@ -1839,6 +1839,8 @@ extern void gli_ios_set_focus(window_t *winNum);
                          @"tap:c", @"clear:", @"tap:↑", @"tap:↓", @"tap:Esc", @"tap:Help", @"tap:Del", @"tap:F1" ],
         @"trs80m3": @[ @"←", @"ENTER", @"SHIFT", @"tap:SHIFT", @"tap:1", @"tap:@", @"tap:SHIFT", @"tap:;", @"clear:", @"tap:↑",
                        @"tap:↓", @"tap:CLEAR", @"tap:BREAK" ],
+        @"ibmpcjr": @[ @"⌫", @"↵", @"⇧", @"tap:⇧", @"tap:1", @"tap:'", @"tap:Caps Lock", @"tap:A", @"tap:Caps Lock", @"tap:b",
+                       @"clear:", @"tap:↑", @"tap:↓", @"tap:Esc", @"tap:Ins", @"tap:Del" ],
     };
     NSArray *keys = faithful[m_keyboardController.skinID];
     if (keys) {

@@ -38,6 +38,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
         m_label.textAlignment = NSTextAlignmentCenter;
         m_label.adjustsFontSizeToFitWidth = YES;
         m_label.minimumScaleFactor = 0.5;
+        m_label.hidden = skin.blankCaps; // the label still names the key for VoiceOver
         [self addSubview: m_label];
         if (key.sublabel) {
             m_sublabel = [[UILabel alloc] init];
