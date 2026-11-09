@@ -19,9 +19,10 @@
  *     line (or a timeout) resolves the Promise.
  *
  * Saves go to /saves, which is plain MEMFS. Each file is persisted on its
- * own (web/saves.js): after a successful SAVE, js_persist_save() writes that
- * one file to IndexedDB, and before a RESTORE, js_load_save() copies that one
- * file from IndexedDB into MEMFS if the stored copy is newer. Both are
+ * own (web/saves.js): after a successful SAVE (or auxiliary save),
+ * js_persist_save() writes that one file to IndexedDB, and before a RESTORE
+ * (or auxiliary restore), js_load_save() brings that one file in from
+ * IndexedDB, by revision (see saves.js). Both are
  * awaited, and neither can hang the game: they give up after a timeout.
  */
 
@@ -84,15 +85,15 @@ EM_JS(int, js_size_changed, (void), {
     return Module.webFrotz.sizeChanged();
 });
 
-/* Write one save file (a MEMFS path) to IndexedDB. If that fails or times
-   out, the page reports it in the transcript; the save itself stays in
-   MEMFS for this session. */
+/* Write one save file (a MEMFS path) to IndexedDB. If that conflicts with
+   another tab's save, fails or times out, the page reports it in the
+   transcript; the save itself stays in MEMFS for this session. */
 EM_ASYNC_JS(void, js_persist_save, (const char *path), {
     await Module.webFrotz.persistSave(UTF8ToString(path));
 });
 
-/* Before a restore: copy that file from IndexedDB into MEMFS if MEMFS lacks
-   it or the stored copy is newer. A failure leaves MEMFS as it is. */
+/* Before a restore: bring that file in from IndexedDB (web/saves.js decides
+   when). A failure leaves MEMFS as it is. */
 EM_ASYNC_JS(void, js_load_save, (const char *path), {
     await Module.webFrotz.loadSave(UTF8ToString(path));
 });
@@ -599,9 +600,11 @@ zchar os_read_key(int timeout, int cursor)
 
 /* ---- Files ---- */
 
-/* The kind of the last file request, so os_mark_recent_save can tell a
-   save from a restore. */
+/* The kind and path of the last file request, so os_mark_recent_save can
+   tell a save from a restore and persist the file the core actually wrote
+   (the game's save file, or an auxiliary file from SAVE with operands). */
 static int last_file_flag = -1;
+static char last_file_path[MAX_FILE_NAME + 1];
 
 int os_read_file_name(char *file_name, const char *default_name, int flag)
 {
@@ -613,7 +616,8 @@ int os_read_file_name(char *file_name, const char *default_name, int flag)
        under /saves in MEMFS. */
     snprintf(file_name, MAX_FILE_NAME, "%s/%s", SAVE_PATH, base);
     last_file_flag = flag;
-    if (flag == FILE_RESTORE)
+    snprintf(last_file_path, sizeof last_file_path, "%s", file_name);
+    if (flag == FILE_RESTORE || flag == FILE_LOAD_AUX)
         js_load_save(file_name);
     return 1;
 }
@@ -623,15 +627,18 @@ FILE *os_path_open(const char *name, const char *mode)
     return fopen(name, mode);
 }
 
-/* Called by the core after a successful save or restore (fastmem.c). After
-   a save, save_name holds the file's path. Text still in the output buffer
+/* Called by the core after a successful save or restore (fastmem.c), for
+   whole-game and auxiliary files alike. After a save, the file is the one
+   os_read_file_name was last asked for. Text still in the output buffer
    (the echoed SAVE) goes out first, so a storage notice follows it. */
 void os_mark_recent_save(void)
 {
-    if (last_file_flag != FILE_SAVE)
+    int flag = last_file_flag;
+    last_file_flag = -1;
+    if (flag != FILE_SAVE && flag != FILE_SAVE_AUX)
         return;
     flush_output();
-    js_persist_save(save_name);
+    js_persist_save(last_file_path);
 }
 
 void os_start_script(void) { }

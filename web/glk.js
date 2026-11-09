@@ -326,139 +326,73 @@ function pollArrange() {
 }
 
 // ---- Saves (web/saves.js) ----
+//
+// The same per-file, revisioned store and save session as the Z-machine
+// client: a write only replaces the revision this tab last saw, and a
+// conflict, failure or timeout keeps the file in memory, shows a notice and
+// badges the Saves button.
 
 const MAX_SAVE_BYTES = 4 * 1024 * 1024;
-const SESSION_ONLY = "Saved for this session only, not to browser storage. Export it from Saves.";
 let store = null;
 try {
   if (window.indexedDB) store = WebFrotzSaves.createSaveStore(window.indexedDB, { timeoutMs: 5000 });
 } catch (e) {
   console.warn("[glk] IndexedDB unavailable", e);
 }
-let stored = [];
-let persistFailed = false;
 const deleted = new Set(); // files the game deleted this session
 
 const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 
-function setPersistFailed(on) {
-  persistFailed = on;
-  if (on) {
+const saves = WebFrotzSaves.createSaveSession({
+  store,
+  fs: () => Module.FS,
+  dir: SAVE_DIR,
+  story: () => storyFile,
+  hidden: (n) => deleted.has(n),
+  onChange: savesChanged,
+  log: { warn: (...a) => console.warn("[glk]", ...a) },
+});
+
+function savesChanged() {
+  if (saves.attention().length) {
     savesBtn.dataset.warning = "";
     savesBtn.setAttribute("aria-label", "Saves: a save is not in browser storage");
   } else {
     delete savesBtn.dataset.warning;
     savesBtn.removeAttribute("aria-label");
   }
+  if (savesDialog.open) renderSaves();
 }
 
 async function persistFile(path, report = notice) {
   deleted.delete(baseName(path));
-  try {
-    if (!store) throw new Error("IndexedDB is not available");
-    await WebFrotzSaves.persistFile(store, Module.FS, path, storyFile);
-    setPersistFailed(false);
-    refreshStored();
-    return true;
-  } catch (e) {
-    console.warn("[glk] could not write", path, "to IndexedDB", e);
-    setPersistFailed(true);
-    report(SESSION_ONLY);
-    return false;
-  }
+  const r = await saves.persist(path);
+  if (r.message) report(r.message);
+  return r.outcome;
 }
 
 async function loadFile(path) {
-  if (!store || deleted.has(baseName(path))) return;
-  try {
-    await WebFrotzSaves.loadFile(store, Module.FS, path);
-  } catch (e) {
-    console.warn("[glk] could not read", path, "from IndexedDB", e);
-    notice("Could not read browser storage; using this session's copy only.");
-  }
+  if (deleted.has(baseName(path))) return;
+  const r = await saves.load(path);
+  if (r === "error") notice("Could not read browser storage; using this session's copy only.");
+  else if (r === "local") notice(`Using this tab's own ${baseName(path)}, which is not in browser storage.`);
 }
 
 function deleteFile(path) {
   deleted.add(baseName(path));
 }
 
-async function refreshStored() {
-  if (!store) return;
-  try {
-    stored = await store.list();
-  } catch (e) {
-    console.warn("[glk] could not list saves", e);
-  }
-  if (savesDialog.open) renderSaves();
-}
-
-function allSaves() {
-  const byName = new Map();
-  for (const s of stored)
-    if (!deleted.has(s.name)) byName.set(s.name, { name: s.name, mtime: s.mtime, local: false });
-  if (Module) {
-    for (const n of Module.FS.readdir(SAVE_DIR)) {
-      if (n === "." || n === "..") continue;
-      const st = Module.FS.stat(`${SAVE_DIR}/${n}`);
-      if (!Module.FS.isFile(st.mode)) continue;
-      const prev = byName.get(n);
-      if (!prev || +st.mtime > prev.mtime) byName.set(n, { name: n, mtime: +st.mtime, local: true });
-    }
-  }
-  return [...byName.values()].sort((a, b) => b.mtime - a.mtime);
-}
-
-async function exportSave(f) {
-  try {
-    let bytes;
-    if (f.local) bytes = Module.FS.readFile(`${SAVE_DIR}/${f.name}`);
-    else {
-      const rec = await store.get(f.name);
-      if (!rec) throw new Error("not found");
-      bytes = rec.bytes;
-    }
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = f.name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  } catch (e) {
-    console.warn("[glk] export", f.name, e);
-    importNote.textContent = `Could not read ${f.name}.`;
-  }
-}
-
 let importMessage = "";
 
 function renderSaves() {
-  savesList.textContent = "";
-  const files = allSaves();
-  if (!files.length) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.textContent = "No saves yet. Type SAVE in the game.";
-    savesList.appendChild(li);
-  }
-  for (const f of files) {
-    const li = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = `${f.name} · ${new Date(f.mtime).toLocaleString()}` +
-      (f.local ? " · this session only" : "");
-    const exp = document.createElement("button");
-    exp.type = "button";
-    exp.textContent = "Export";
-    exp.addEventListener("click", () => exportSave(f));
-    li.append(label, exp);
-    savesList.appendChild(li);
-  }
+  WebFrotzSaves.renderSaveList(savesList, saves, (msg) => {
+    importMessage = msg;
+    renderSaves();
+  });
   const parts = [];
   if (importMessage) parts.push(importMessage);
-  if (persistFailed || !store)
-    parts.push("A save could not be written to browser storage. It is kept only until " +
-      "this page closes, so export it.");
+  const note = WebFrotzSaves.attentionText(saves, !!store);
+  if (note) parts.push(note);
   if (saveName) parts.push(`Import replaces ${saveName}; then type RESTORE in the game.`);
   importNote.textContent = parts.join(" ");
 }
@@ -467,7 +401,7 @@ savesBtn.addEventListener("click", () => {
   importMessage = "";
   renderSaves();
   savesDialog.showModal();
-  refreshStored();
+  saves.refresh();
 });
 
 // Glulx saves are Quetzal files too: an IFF FORM of type IFZS.
@@ -496,14 +430,18 @@ importInput.addEventListener("change", async () => {
     return renderSaves();
   }
   const path = `${SAVE_DIR}/${saveName}`;
+  deleted.delete(saveName);
+  let r;
   try {
-    Module.FS.writeFile(path, bytes);
+    r = await saves.importBytes(path, bytes);
   } catch (e) {
-    importMessage = `Could not write ${saveName}.`;
+    console.warn("[glk] import", e);
+    importMessage = `Could not write ${saveName}. Nothing was replaced.`;
     return renderSaves();
   }
-  const ok = await persistFile(path, () => {});
-  importMessage = ok ? `Imported ${file.name} as ${saveName}.` :
+  importMessage = r.outcome === "persisted" ? `Imported ${file.name} as ${saveName}.` :
+    r.outcome === "conflict" ? `Imported ${file.name} as ${saveName} for this session only: ` +
+      "another tab saved a newer one to browser storage." :
     `Imported ${file.name} as ${saveName}, for this session only.`;
   renderSaves();
 });
@@ -689,7 +627,7 @@ async function play(fileName, title, bytes) {
     throw new Error(`Could not start ${title}: ${err && err.message ? err.message : err}`);
   }
   storyFile = fileName;
-  refreshStored();
+  saves.refresh();
   // callMain returns when the game first waits in glk_select; from then on
   // it runs from Promise resolutions driven by the input form.
   Module.callMain([`/games/${name}`]);

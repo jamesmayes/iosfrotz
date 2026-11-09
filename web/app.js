@@ -16,9 +16,10 @@
 //   readKey(ms)          Promise<number>      (0 = timed out)
 //   fatal(msg)
 //   setSaveName(name)    the <story>.sav name the core uses
-//   persistSave(path)    Promise; after a SAVE, writes that file to IndexedDB
-//   loadSave(path)       Promise; before a RESTORE, copies that file from
-//                        IndexedDB into MEMFS if the stored copy is newer
+//   persistSave(path)    Promise; after a SAVE (or auxiliary save), writes
+//                        that file to IndexedDB
+//   loadSave(path)       Promise; before a RESTORE (or auxiliary restore),
+//                        brings that file in from IndexedDB
 // readLine/readKey are awaited from EM_ASYNC_JS, so under ASYNCIFY the
 // interpreter's C stack is suspended until the player presses Enter.
 
@@ -276,14 +277,13 @@ const webFrotz = {
 
 // ---- Persistent saves (web/saves.js) ----
 //
-// /saves is plain MEMFS. A SAVE writes that one file to IndexedDB; a
-// RESTORE first copies that one file back if the stored copy is newer.
-// Nothing else is synchronised, so one tab can never overwrite or delete
-// another tab's files, and for a file both tabs save, the later save wins.
+// /saves is plain MEMFS. A SAVE (or an auxiliary save) writes that one file
+// to IndexedDB; a RESTORE first brings that one file in. Each stored file
+// has a revision, and a write only replaces the revision this tab last saw,
+// so a tab never overwrites another tab's newer save: it gets a conflict,
+// keeps its own save in memory, and says so (saves.js has the details).
 
 const MAX_SAVE_BYTES = 4 * 1024 * 1024;
-const SESSION_ONLY = "Saved for this session only, not to browser storage. " +
-  "Export it from Saves.";
 
 let store = null;
 try {
@@ -291,20 +291,26 @@ try {
 } catch (e) {
   console.warn("[frotz] IndexedDB unavailable", e);
 }
-let stored = [];          // last store.list(): [{ name, size, mtime, story }]
-let persistFailed = false; // the last persist failed; badge on the Saves button
 
-const mtimeOf = (st) => +st.mtime;
+const saves = WebFrotzSaves.createSaveSession({
+  store,
+  fs: () => Module.FS,
+  dir: SAVE_DIR,
+  story: () => storyFile,
+  onChange: savesChanged,
+  log: { warn: (...a) => console.warn("[frotz]", ...a) },
+});
 
-function setPersistFailed(on) {
-  persistFailed = on;
-  if (on) {
+// The badge stays on while any save this tab made is not in storage.
+function savesChanged() {
+  if (saves.attention().length) {
     savesBtn.dataset.warning = "";
     savesBtn.setAttribute("aria-label", "Saves: a save is not in browser storage");
   } else {
     delete savesBtn.dataset.warning;
     savesBtn.removeAttribute("aria-label");
   }
+  if (savesDialog.open) renderSaves();
 }
 
 // A line of its own in the transcript, styled apart from the game's text.
@@ -317,123 +323,34 @@ function transcriptNotice(msg) {
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
 
-// Write one MEMFS file to IndexedDB. Never throws: a failure or timeout is
-// reported through `report` and leaves the Saves badge on until a later
-// persist succeeds.
+// Write one MEMFS file to IndexedDB. Never throws: a conflict, failure or
+// timeout is reported through `report` and leaves the badge on.
 async function persistSave(path, report) {
-  try {
-    if (!store) throw new Error("IndexedDB is not available");
-    const r = await WebFrotzSaves.persistFile(store, Module.FS, path, storyFile);
-    if (r === "kept-newer") console.info(`[frotz] ${path}: browser storage has a later save; kept it`);
-    setPersistFailed(false);
-    refreshStored();
-    return true;
-  } catch (e) {
-    console.warn("[frotz] could not write", path, "to IndexedDB", e);
-    setPersistFailed(true);
-    report(SESSION_ONLY);
-    return false;
-  }
+  const r = await saves.persist(path);
+  if (r.message) report(r.message);
+  return r.outcome;
 }
 
-// Before a RESTORE: bring in the stored copy if MEMFS lacks the file or the
-// stored copy is newer. On failure the restore uses whatever MEMFS has.
+// Before a RESTORE: bring in the stored copy (saves.js decides when). On
+// failure the restore uses whatever MEMFS has.
 async function loadSave(path) {
-  if (!store) return;
-  try {
-    await WebFrotzSaves.loadFile(store, Module.FS, path);
-  } catch (e) {
-    console.warn("[frotz] could not read", path, "from IndexedDB", e);
-    transcriptNotice("Could not read browser storage; restoring from this session only.");
-  }
-}
-
-async function refreshStored() {
-  if (!store) return;
-  try {
-    stored = await store.list();
-  } catch (e) {
-    console.warn("[frotz] could not list saves", e);
-  }
-  if (savesDialog.open) renderSaves();
-}
-
-// Saves this session has in MEMFS, merged with the ones in browser storage.
-// The newer copy of each name is shown and exported. A MEMFS copy counts as
-// "local" only if it is newer than the stored one (a copy a RESTORE read
-// from storage has the same mtime); with storage working, that means the
-// save did not reach it.
-function allSaves() {
-  const byName = new Map();
-  for (const s of stored) byName.set(s.name, { name: s.name, mtime: s.mtime, size: s.size, local: false });
-  if (Module) {
-    for (const n of Module.FS.readdir(SAVE_DIR)) {
-      if (n === "." || n === "..") continue;
-      const st = Module.FS.stat(`${SAVE_DIR}/${n}`);
-      if (!Module.FS.isFile(st.mode)) continue;
-      const prev = byName.get(n);
-      if (!prev || mtimeOf(st) > prev.mtime)
-        byName.set(n, { name: n, mtime: mtimeOf(st), size: st.size, local: true });
-    }
-  }
-  return [...byName.values()].sort((a, b) => b.mtime - a.mtime);
-}
-
-async function exportSave(f) {
-  try {
-    let bytes;
-    if (f.local) bytes = Module.FS.readFile(`${SAVE_DIR}/${f.name}`);
-    else {
-      const rec = await store.get(f.name);
-      if (!rec) throw new Error("not found");
-      bytes = rec.bytes;
-    }
-    download(f.name, bytes);
-  } catch (e) {
-    console.warn("[frotz] export", f.name, e);
-    importNote.textContent = `Could not read ${f.name}.`;
-  }
-}
-
-function download(name, bytes) {
-  const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const r = await saves.load(path);
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  if (r === "error") transcriptNotice("Could not read browser storage; restoring from this session only.");
+  else if (r === "local") transcriptNotice(`Restoring this tab's own ${name}, which is not in browser storage.`);
 }
 
 let importMessage = "";
 
 function renderSaves() {
-  savesList.textContent = "";
-  const files = allSaves();
-  if (!files.length) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.textContent = "No saves yet. Type SAVE in the game.";
-    savesList.appendChild(li);
-  }
-  for (const f of files) {
-    const li = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = `${f.name} · ${new Date(f.mtime).toLocaleString()}` +
-      (f.local ? " · this session only" : "");
-    const exp = document.createElement("button");
-    exp.type = "button";
-    exp.textContent = "Export";
-    exp.addEventListener("click", () => exportSave(f));
-    li.append(label, exp);
-    savesList.appendChild(li);
-  }
+  WebFrotzSaves.renderSaveList(savesList, saves, (msg) => {
+    importMessage = msg;
+    renderSaves();
+  });
   const parts = [];
   if (importMessage) parts.push(importMessage);
-  if (persistFailed || !store)
-    parts.push("A save could not be written to browser storage. It is kept only until " +
-      "this page closes, so export it.");
+  const note = WebFrotzSaves.attentionText(saves, !!store);
+  if (note) parts.push(note);
   if (saveName) parts.push(`Import replaces ${saveName}; then type RESTORE in the game.`);
   importNote.textContent = parts.join(" ");
 }
@@ -442,7 +359,7 @@ savesBtn.addEventListener("click", () => {
   importMessage = "";
   renderSaves();
   savesDialog.showModal();
-  refreshStored();
+  saves.refresh();
 });
 
 // A Quetzal save is an IFF FORM of type IFZS.
@@ -471,15 +388,18 @@ importInput.addEventListener("change", async () => {
     importMessage = `${file.name} is not a Quetzal save file. Nothing was replaced.`;
     return renderSaves();
   }
-  const path = `${SAVE_DIR}/${saveName}`;
+  let r;
   try {
-    Module.FS.writeFile(path, bytes);
+    r = await saves.importBytes(`${SAVE_DIR}/${saveName}`, bytes);
   } catch (e) {
-    importMessage = `Could not write ${saveName}.`;
+    console.warn("[frotz] import", e);
+    importMessage = `Could not write ${saveName}. Nothing was replaced.`;
     return renderSaves();
   }
-  const ok = await persistSave(path, () => {});
-  importMessage = ok ? `Imported ${file.name} as ${saveName}.` : `Imported ${file.name} as ${saveName}, for this session only.`;
+  importMessage = r.outcome === "persisted" ? `Imported ${file.name} as ${saveName}.` :
+    r.outcome === "conflict" ? `Imported ${file.name} as ${saveName} for this session only: ` +
+      "another tab saved a newer one to browser storage." :
+    `Imported ${file.name} as ${saveName}, for this session only.`;
   renderSaves();
 });
 
@@ -685,7 +605,7 @@ async function play(fileName, title, bytes) {
   }
   // Saves are read from IndexedDB one file at a time, at RESTORE; this only
   // lists them for the Saves dialog, and the game does not wait for it.
-  refreshStored();
+  saves.refresh();
   storyFile = fileName;
   // callMain returns when interpret() first suspends; the game then runs
   // from Promise resolutions driven by the input form.

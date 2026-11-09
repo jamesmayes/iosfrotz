@@ -31,8 +31,8 @@
  * Files live in MEMFS. Everything under /saves (saved games, data files,
  * transcripts) is persisted one file at a time through web/saves.js: a
  * write-mode stream is written to IndexedDB when it is closed, and a file
- * is brought in from IndexedDB (if newer) before it is opened or tested
- * for existence. glk_fileref_create_by_prompt does not prompt: it uses a
+ * is brought in from IndexedDB (by revision; see saves.js) before it is
+ * opened or tested for existence. glk_fileref_create_by_prompt does not prompt: it uses a
  * fixed name per story and usage, as the Z-machine client does.
  *
  * Not implemented (gestalt says so): graphics windows, images, sound,
@@ -153,14 +153,15 @@ EM_JS(void, js_persist_file, (const char *path), {
     Module.glkWeb.persistFile(UTF8ToString(path));
 });
 #else
-/* Bring one /saves file in from IndexedDB if MEMFS lacks it or the stored
-   copy is newer. Never fails: a storage error leaves MEMFS as it is. */
+/* Bring one /saves file in from IndexedDB (web/saves.js decides when).
+   Never fails: a storage error leaves MEMFS as it is. */
 EM_ASYNC_JS(void, js_load_file, (const char *path), {
     await Module.glkWeb.loadFile(UTF8ToString(path));
     if (Module.glkWeb.asyncifyUsed && Asyncify.currData)
         Module.glkWeb.asyncifyUsed(HEAPU32[Asyncify.currData >> 2] - Asyncify.currData - 12);
 });
-/* Write one /saves file to IndexedDB. A failure is reported by the page. */
+/* Write one /saves file to IndexedDB. A conflict or failure is reported by
+   the page. */
 EM_ASYNC_JS(void, js_persist_file, (const char *path), {
     await Module.glkWeb.persistFile(UTF8ToString(path));
     if (Module.glkWeb.asyncifyUsed && Asyncify.currData)
