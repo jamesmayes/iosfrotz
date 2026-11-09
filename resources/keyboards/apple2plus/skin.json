@@ -1,0 +1,8 @@
+{ "id": "apple2plus", "name": "Apple II Plus", "profile": "sculpted", "legendCase": "upper",
+  "case": { "light": "#D8CBA6", "dark": "#4A4234" },
+  "bezel": { "top": 10, "bottom": 10, "sides": 6 },
+  "key": { "radius": 3, "light": "#4B3A2D", "dark": "#4B3A2D", "textLight": "#F3EEE3", "textDark": "#E6E0D2",
+           "font": "system", "fontSize": 15, "pressedLight": "#6F5847", "pressedDark": "#6F5847" },
+  "groups": { "mod": { "light": "#221C18", "dark": "#221C18", "pressedLight": "#4A403A", "pressedDark": "#4A403A" } },
+  "credits": "Layout after the Apple II Plus (1979) keyboard; colours after its beige case and dark brown and black caps.",
+  "notes": "Faithful: the II Plus's 52 keys in their rows and order (ESC beside Q and CTRL beside A, as on the machine), the shifted legends printed above the characters, BELL on G, upper-case legends on dark brown letter keys and near-black function keys, and a blank space bar. The II Plus has no lower case; here a letter types lower case, SHIFT types upper case (except P, N and M, which type @, ^ and ] as on the machine), and a double tap on SHIFT locks it, a caps lock the machine never had. ← erases the last character, which is what it did while you typed a line; → moves the caret right. Approximated: widths are compressed to fit a phone and the keys are drawn rather than photographed. Mapped to none: RESET (it rebooted the machine), REPT (held keys repeat by themselves here) and CTRL (there is no control-key layer). The POWER lamp is not drawn, since a skin has no decorative elements." }
