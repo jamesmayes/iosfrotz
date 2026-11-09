@@ -29,6 +29,19 @@
   const storiesBtn = document.getElementById("stories-button");
   const titleEl = document.getElementById("story-title");
   const pickerStatus = document.getElementById("picker-status");
+  const commandForm = document.getElementById("command-form");
+  const commandInput = document.getElementById("command");
+
+  // The command bar shows as soon as a story starts loading, but its submit
+  // handler belongs to the front end (app.js or glk.js), which is still
+  // downloading. Return there would be a native form submit, which reloads
+  // the page. So the page never lets the form submit, and the field stays
+  // disabled, saying "Loading…", until the front end has loaded.
+  commandForm.addEventListener("submit", (e) => e.preventDefault());
+  function setCommandLoading(on) {
+    commandInput.disabled = on;
+    commandInput.placeholder = on ? "Loading…" : "";
+  }
 
   let stories = [];
   // Set when a story's interpreter starts loading; from then on, picking
@@ -95,6 +108,7 @@
     delete document.body.dataset.loading;
     document.body.dataset.format = format;
     document.body.dataset.mode = "game";
+    setCommandLoading(true);
     titleEl.textContent = title;
     document.title = `${title} · ${APP_TITLE}`;
   }
@@ -175,6 +189,7 @@
     showGame(title, d.format);
     try {
       const engine = await loadEngine(d.format);
+      setCommandLoading(false);
       await engine.start(fileName, title, bytes);
     } catch (err) {
       // The interpreter, its module or the file system failed before the

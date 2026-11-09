@@ -10,7 +10,8 @@
 // loads glk.js (dist/git.js is the fake createGit below). Also covered:
 // WebFrotzUI.detectFormat on Z-code, Glulx, Blorb and other files.
 //
-// Covered: no path hands an input method's uncommitted (preedit) text to a
+// Covered: while the interpreter's scripts are still loading the command
+// field is disabled and a submit is cancelled (no page reload); no path hands an input method's uncommitted (preedit) text to a
 // char or line request, including a wait that starts after a timer or an
 // Arrange event ended the previous one; a line limit lowered under a pending
 // request trims the bar; cancelling a char request during a composition, or
@@ -80,14 +81,18 @@ let rootWidth = 800;
 // the front end (glk.js) in the page's context, and the fake createGit
 // stands in for dist/git.js.
 const scriptsLoaded = [];
+// The interpreter's scripts are held until pageChecks releases them, so the
+// page can be checked while they are still downloading.
+let releaseScripts;
+const scriptGate = new Promise((r) => { releaseScripts = r; });
 class Body extends El {
   appendChild(c) {
     if (c.tag !== "script") return super.appendChild(c);
     scriptsLoaded.push(c.src);
-    setTimeout(() => {
+    scriptGate.then(() => setTimeout(() => {
       if (!c.src.startsWith("dist/")) vm.runInContext(fs.readFileSync(path.join(WEB, c.src), "utf8"), ctx);
       c.onload();
-    }, 0);
+    }, 0));
     return c;
   }
 }
@@ -136,7 +141,18 @@ const form = ids["command-form"];
 const within = (p, ms) => Promise.race([p, sleep(ms).then(() => "pending")]);
 
 async function pageChecks() {
+  // 0. While the interpreter is still downloading, the command bar shows but
+  //    cannot submit: Return must not be a native submit (a page reload).
+  for (let i = 0; i < 20 && !scriptsLoaded.length; i++) await tick();
+  await sleep(10);
+  ok(scriptsLoaded.join(" ") === "dist/git.js" && document.body.dataset.mode === "game" && !glkWeb,
+    "the game view shows while dist/git.js is still loading");
+  ok(input.disabled === true && input.placeholder === "Loading…",
+    "the command field is disabled and says Loading… until the front end loads");
+  ok(form.fire("submit").defaultPrevented === true, "a submit while loading does not reach the browser");
+  releaseScripts();
   for (let i = 0; i < 20 && !glkWeb; i++) await tick();
+  ok(input.disabled === false && input.placeholder === "", "the command field is enabled once the front end loads");
   ok(!!glkWeb, "page started a (fake) game");
   ok(scriptsLoaded.join(" ") === "dist/git.js glk.js" && document.body.dataset.format === "glulx",
     "a Glulx story loads git and glk.js, and only those");
