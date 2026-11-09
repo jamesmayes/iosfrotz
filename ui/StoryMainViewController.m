@@ -1833,6 +1833,10 @@ extern void gli_ios_set_focus(window_t *winNum);
                         @"tap:ESC", @"tap:BREAK", @"tap:RESET", @"tap:START", @"tap:◪" ],
         @"atari800xl": @[ @"BACK S", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:1", @"tap:CAPS", @"tap:A", @"tap:CAPS", @"tap:b",
                           @"tap:ESC", @"tap:BREAK", @"tap:HELP", @"tap:INVERSE" ],
+        @"amiga500": @[ @"⌫", @"Return", @"Shift", @"tap:Shift", @"tap:`", @"tap:\\", @"tap:Caps Lock", @"tap:B", @"tap:Caps Lock",
+                        @"tap:c", @"clear:", @"tap:↑", @"tap:↓", @"tap:Esc", @"tap:Help", @"tap:Del", @"tap:F1" ],
+        @"amiga1200": @[ @"⌫", @"Return", @"Shift", @"tap:Shift", @"tap:`", @"tap:\\", @"tap:Caps Lock", @"tap:B", @"tap:Caps Lock",
+                         @"tap:c", @"clear:", @"tap:↑", @"tap:↓", @"tap:Esc", @"tap:Help", @"tap:Del", @"tap:F1" ],
         @"ibmpcjr": @[ @"⌫", @"↵", @"⇧", @"tap:⇧", @"tap:1", @"tap:'", @"tap:Caps Lock", @"tap:A", @"tap:Caps Lock", @"tap:b",
                        @"clear:", @"tap:↑", @"tap:↓", @"tap:Esc", @"tap:Ins", @"tap:Del" ],
     };

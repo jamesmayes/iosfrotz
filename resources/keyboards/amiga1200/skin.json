@@ -1,0 +1,9 @@
+{ "id": "amiga1200", "name": "Amiga 1200", "profile": "rounded", "legendCase": "upper",
+  "case": { "light": "#E9E7E0", "dark": "#4F4E4A" },
+  "bezel": { "top": 8, "bottom": 8, "sides": 4 },
+  "key": { "radius": 2, "shadow": true, "light": "#F5F4EF", "dark": "#E3E2DD", "textLight": "#2A2A2A", "textDark": "#2A2A2A",
+           "font": "system", "fontSize": 11, "pressedLight": "#D9D8D2", "pressedDark": "#CBCAC4" },
+  "groups": { "mod": { "light": "#B9B8B2", "dark": "#ABAAA4", "pressedLight": "#D0CFC9", "pressedDark": "#C2C1BB" },
+              "amiga": { "light": "#CAC9C3", "dark": "#BCBBB5", "pressedLight": "#DEDDD7", "pressedDark": "#D1D0CA" } },
+  "credits": "Layout after the Amiga 1200 (1992) US keyboard; colours after its white case, low-profile white caps and light grey modifiers.",
+  "notes": "Faithful: the same arrangement as the A500 (Esc and the function keys on top, Del and Help above the inverted-T cursor keys, the L-shaped Return, Ctrl beside Caps Lock, an Amiga key either side of the space bar, shifted legends above the characters), with the A1200's whiter case, flatter low-profile caps and lighter grey modifiers. Width: the numeric keypad is dropped, as on the A500 skin, so the keys stay legible on a 393 pt phone. Approximated: widths are compressed to fit a phone; the Return is two keys; the right Shift is a unit wider so the up arrow sits over the down arrow; and the Amiga keys are the text A (no logo). Mapped to none: F1 to F10, Del, Help, Tab, Ctrl, both Alt keys and both Amiga keys." }

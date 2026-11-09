@@ -1,0 +1,9 @@
+{ "id": "amiga500", "name": "Amiga 500", "profile": "sculpted", "legendCase": "upper",
+  "case": { "light": "#D8D2C2", "dark": "#4E4A41" },
+  "bezel": { "top": 8, "bottom": 8, "sides": 4 },
+  "key": { "radius": 2, "light": "#ECE7DA", "dark": "#DCD7CA", "textLight": "#2B2A27", "textDark": "#2B2A27",
+           "font": "system", "fontSize": 11, "pressedLight": "#CFC9BB", "pressedDark": "#C2BCAE" },
+  "groups": { "mod": { "light": "#A9A69D", "dark": "#9C9990", "pressedLight": "#C4C1B8", "pressedDark": "#B6B3AA" },
+              "amiga": { "light": "#BDB9AE", "dark": "#AFAB9F", "pressedLight": "#D3CFC4", "pressedDark": "#C6C2B6" } },
+  "credits": "Layout after the Amiga 500 (1987) US keyboard; colours after its off-white case and caps, grey modifiers and Amiga keys.",
+  "notes": "Faithful: the A500 main block in its rows and order, with Esc and the ten function keys on top, Del and Help above the cursor keys, the backtick before 1, backslash before ⌫, the L-shaped Return, Ctrl and Caps Lock side by side, the two Amiga keys either side of the space bar, the inverted-T cursor keys, off-white letter keys against grey modifier, function and cursor keys, the Amiga keys a shade apart, and the shifted legends above the characters. Width: the numeric keypad is dropped; with it the keys fell under 16 pt on a 393 pt phone, and the number row types every digit. Approximated: widths are compressed to fit a phone; the Return is two keys, one in each of its rows; the right Shift is drawn a unit wider so the up arrow sits over the down arrow (a row cannot hold a gap); and the Amiga keys are the text A (no logo). Mapped to none: F1 to F10, Del (forward delete is out of scope), Help, Tab, Ctrl, both Alt keys and both Amiga keys." }
