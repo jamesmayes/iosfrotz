@@ -1,0 +1,220 @@
+# The Keeper's Errand (bench/tads/errand.t): the solution, SAVE, RESTORE
+# and UNDO, then 15 rounds of wandering between the kitchen and the
+# lamp room. 217 commands.
+look
+open drawer
+take key
+turn on stove
+wait
+wait
+wait
+x kettle
+n
+unlock door with key
+e
+take lantern
+take can
+w
+n
+n
+turn on lantern
+up
+pour can in lamp
+turn on lamp
+score
+save
+down
+restore
+look
+undo
+inventory
+down
+s
+e
+take shell
+x shell
+w
+s
+s
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+n
+e
+look
+w
+n
+up
+x great lamp
+down
+s
+s
+inventory
+x kettle
+drop shell
+score

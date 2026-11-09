@@ -1,8 +1,12 @@
 #!/usr/bin/env node
-// web/bench/run-bench.js: play one Glulx story headlessly through a Node
-// build of git (make bench) and time every turn.
+// web/bench/run-bench.js: play one story headlessly through a Node build
+// of an interpreter on the browser Glk (git: make bench; TADS: make
+// bench-tads) and time every turn.
 //
-//   node bench/run-bench.js async|sync STORY WALK [--transcript FILE]
+//   node bench/run-bench.js async|sync STORY WALK [--engine git|tads2|tads3]
+//                           [--transcript FILE]
+//
+// --engine picks dist/bench/<engine>-<build>.js; the default is git.
 //
 // "async" loads dist/bench/git-async.js (built with -sASYNCIFY: every
 // glk_select unwinds and rewinds the C stack through an awaited Promise,
@@ -16,10 +20,10 @@
 // generator the same way in both builds and they play the same game; the
 // transcript hash printed at the end lets the two be compared.
 //
-// Prints one JSON line: { build, reason, turns, moduleMs, startupMs,
+// Prints one JSON line: { engine, build, reason, turns, moduleMs, startupMs,
 // mainStartupMs, totalMs, perTurnMs[], commandsUsed, commandsTotal,
-// complete, asyncifyMaxBytes, hash }. moduleMs is createGit (compiling
-// and instantiating the wasm); startupMs runs from before createGit to the
+// complete, asyncifyMaxBytes, hash }. moduleMs is the module factory (compiling
+// and instantiating the wasm); startupMs runs from before the factory to the
 // first input wait, so it includes moduleMs; mainStartupMs is callMain to
 // the first wait. complete is true when every command was fed and the run
 // ended normally (commands ran out, or the game exited after the last). asyncifyMaxBytes is the most of the Asyncify
@@ -40,6 +44,12 @@ if (!["async", "sync"].includes(build) || !storyPath || !walkPath) {
 }
 const tIdx = rest.indexOf("--transcript");
 const transcriptPath = tIdx >= 0 ? rest[tIdx + 1] : null;
+const eIdx = rest.indexOf("--engine");
+const engine = eIdx >= 0 ? rest[eIdx + 1] : "git";
+if (!["git", "tads2", "tads3"].includes(engine)) {
+  console.error(`run-bench.js: unknown engine ${engine}`);
+  process.exit(2);
+}
 
 const commands = fs.readFileSync(walkPath, "utf8").split(/\r?\n/)
   .filter((l) => l.trim() !== "" && !l.startsWith("#"));
@@ -48,14 +58,14 @@ const commands = fs.readFileSync(walkPath, "utf8").split(/\r?\n/)
 const FIXED_NOW = Date.UTC(2026, 10, 8, 12, 0, 0);
 Date.now = () => FIXED_NOW;
 
-const createGit = require(path.join(__dirname, "..", "dist", "bench", `git-${build}.js`));
+const createModule = require(path.join(__dirname, "..", "dist", "bench", `${engine}-${build}.js`));
 
 const texts = new Map(); // window id -> text
 let lastGrid = "";
 const inputs = [];
 let nextCmd = 0;
 const marks = [];
-let tModule = 0; // before createGit
+let tModule = 0; // before the module factory
 let moduleMs = null;
 let t0 = 0;      // callMain
 let finished = false;
@@ -69,6 +79,7 @@ function report(reason) {
   const all = [...texts.values()].join("\n---\n");
   if (transcriptPath) fs.writeFileSync(transcriptPath, all + "\n--- grid ---\n" + lastGrid);
   const out = {
+    engine,
     build,
     reason,
     turns: per.length,
@@ -141,10 +152,10 @@ const glkWeb = {
 (async () => {
   const story = fs.readFileSync(storyPath);
   tModule = performance.now();
-  const Module = await createGit({
+  const Module = await createModule({
     glkWeb,
-    print: (t) => process.stderr.write(`[git] ${t}\n`),
-    printErr: (t) => process.stderr.write(`[git] ${t}\n`),
+    print: (t) => process.stderr.write(`[${engine}] ${t}\n`),
+    printErr: (t) => process.stderr.write(`[${engine}] ${t}\n`),
   });
   moduleMs = performance.now() - tModule;
   Module.FS.mkdir("/games");

@@ -7,6 +7,10 @@
 #   make            -> dist/frotz.js + dist/frotz.wasm, dist/git.js + dist/git.wasm
 #   make frotz      -> dist/frotz.js + dist/frotz.wasm
 #   make git        -> dist/git.js + dist/git.wasm
+#   make tads2      -> dist/tads2.js + dist/tads2.wasm (TADS 2, tads/tads2 on
+#                      the browser Glk, through tads/osglk.c and web/tads/)
+#   make bench-tads -> dist/bench/tads2-{async,sync}.{js,wasm}, Node builds
+#                      for bench/measure-tads.js
 #   make bench      -> dist/bench/git-async.{js,wasm} and git-sync.{js,wasm},
 #                      Node builds of git for bench/run-bench.js
 #   make check      -> builds dist/bench/glk-check.{js,wasm} (bench/glk-check.c
@@ -77,7 +81,41 @@ CHECK_LIBS := -sEXPORTED_RUNTIME_METHODS=callMain,FS,stringToUTF8,UTF8ToString
 GIT_CFLAGS := -O2 -DUSE_INLINE -Iglk/shim -Iglk -I$(GLKIOS) -I$(GIT)
 GIT_HEADERS := $(wildcard $(GIT)/*.h) $(GIT)/labels.inc $(GLKIOS)/glk.h \
                $(GLKIOS)/gi_dispa.h $(GLKIOS)/gi_blorb.h glk/shim/iosfrotz.h \
-               glk/glk_web.h glk/glkios_compat.h
+               glk/glk_web.h glk/glk_web_fileref.h glk/glkios_compat.h
+
+# ---- TADS 2 ----
+#
+# The sources and defines of the Xcode target `tads` (Frotz.xcodeproj),
+# less what is only for TADS 3: tads/tads2 for the VM, tads/*.c for the OS
+# layer on Glk (osglk.c, osglkban.c, osbuffer.c, ...), and tads2/osportable.cc
+# (C++), the portable half of the OS layer. Compiled unmodified; what they
+# need from the iOS app comes from web/tads/ (README.md, "TADS"):
+#   - web/tads/shim comes first on the include path, so osglk.c's
+#     unconditional "iosfrotz.h", "glkios.h" and "git.h" are stand-ins;
+#   - osansi1.c, which opens TADS's files, gets -include tads/tads_stdio.h,
+#     so /saves files go through browser storage (tads_web.c);
+#   - tads/tads2_web.c is the startup file (main_t2 of tads/t23run.cpp).
+TADS      := $(ROOT)/tads
+TADS_CFLAGS := -O2 -DGLKUNIX -DGLK_TIMERS -Itads/shim -Itads -Iglk -I$(GLKIOS) \
+               -I$(TADS) -I$(TADS)/tads2 -I$(TADS)/tads3
+TADS_CXXFLAGS := $(TADS_CFLAGS) -std=gnu++11
+TADS2_SRC := argize bif bifgdum cmap cmd dat dbgtr emt errmsg execmd fio fioxor \
+             getstr ler linfdum lst mch mcm mcs obj objcomp oem_glk oserr osifc \
+             osrestad osstzprs ostzposix out output ply qas regex run runstat \
+             suprun tcgdum trd voc vocab voccomp
+TADS_OS_SRC := memicmp osansi1 osansi2 osansi3 osbuffer osglk osglkban osparse
+TADS2_OBJ := $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,$(TADS2_SRC) osportable)) \
+             $(addprefix $(OBJDIR)/tads/,$(addsuffix .o,$(TADS_OS_SRC) t2askf t2indlg)) \
+             $(OBJDIR)/tads/tads_web.o $(OBJDIR)/tads/tads2_web.o
+TADS_HEADERS := $(wildcard $(TADS)/*.h $(TADS)/tads2/*.h) $(wildcard tads/shim/*.h) \
+                tads/tads_web.h tads/tads_stdio.h $(GLKIOS)/glk.h $(GLKIOS)/gi_dispa.h \
+                glk/glk_web.h glk/glk_web_fileref.h
+# The browser Glk without git's startup file.
+TADS_GLK_ASYNC := $(GIDISP_OBJ) $(OBJDIR)/glk/glk_unicode.o $(OBJDIR)/glk/glk_date.o \
+                  $(OBJDIR)/glk/glk_web.o
+TADS_GLK_SYNC  := $(GIDISP_OBJ) $(OBJDIR)/glk/glk_unicode.o $(OBJDIR)/glk/glk_date.o \
+                  $(OBJDIR)/glk/glk_web_sync.o
+EMXX ?= em++
 
 LDFLAGS_COMMON := -O2 \
            -sALLOW_MEMORY_GROWTH \
@@ -103,6 +141,15 @@ GIT_LDFLAGS := $(LDFLAGS_COMMON) \
            -sEXPORT_NAME=createGit \
            -sENVIRONMENT=web
 
+# TADS 2: the same flags again. TADS uses setjmp/longjmp for its errors,
+# which emscripten implements by default with JS invoke_ wrappers
+# (-sSUPPORT_LONGJMP=emscripten); ASYNCIFY unwinds through them.
+TADS2_LDFLAGS := $(LDFLAGS_COMMON) \
+           -sASYNCIFY \
+           -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK) \
+           -sEXPORT_NAME=createTads2 \
+           -sENVIRONMENT=web
+
 # Node builds for the measurement: the same code, with and without ASYNCIFY.
 BENCH_LDFLAGS := $(LDFLAGS_COMMON) -sEXPORT_NAME=createGit -sENVIRONMENT=node
 
@@ -110,9 +157,12 @@ all: frotz git
 
 frotz: $(DIST)/frotz.js $(DIST)/frotz.wasm
 git: $(DIST)/git.js $(DIST)/git.wasm
+tads2: $(DIST)/tads2.js $(DIST)/tads2.wasm
 # Each link writes a .js and a .wasm; both are named, so a missing .wasm is
 # rebuilt even when its .js is present.
 bench: $(BENCH)/git-async.js $(BENCH)/git-async.wasm $(BENCH)/git-sync.js $(BENCH)/git-sync.wasm
+bench-tads: $(BENCH)/tads2-async.js $(BENCH)/tads2-async.wasm \
+            $(BENCH)/tads2-sync.js $(BENCH)/tads2-sync.wasm
 
 check: $(BENCH)/glk-check.js $(BENCH)/glk-check.wasm $(BENCH)/git-sync.js $(BENCH)/git-sync.wasm
 	node bench/check-glk.js
@@ -121,7 +171,7 @@ check: $(BENCH)/glk-check.js $(BENCH)/glk-check.wasm $(BENCH)/git-sync.js $(BENC
 
 # dist/ itself is created with dist/obj (the links order on $(OBJDIR)), so
 # that `dist` can be the phony target that builds the site.
-$(OBJDIR) $(OBJDIR)/git $(OBJDIR)/glk $(BENCH):
+$(OBJDIR) $(OBJDIR)/git $(OBJDIR)/glk $(OBJDIR)/tads $(OBJDIR)/tads2 $(BENCH):
 	mkdir -p $@
 
 # Link flags per output. dist/obj/<name>.ldflags holds the flags the output
@@ -140,12 +190,19 @@ LINK_git       := $(GIT_LDFLAGS)
 LINK_git-async := $(BENCH_LDFLAGS) -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK)
 LINK_git-sync  := $(BENCH_LDFLAGS)
 LINK_glk-check := $(BENCH_LDFLAGS) $(CHECK_LIBS)
-LINK_OUTPUTS   := frotz git git-async git-sync glk-check
+LINK_tads2     := $(TADS2_LDFLAGS)
+LINK_tads2-async := $(LDFLAGS_COMMON) -sEXPORT_NAME=createTads2 -sENVIRONMENT=node \
+                    -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK)
+LINK_tads2-sync  := $(LDFLAGS_COMMON) -sEXPORT_NAME=createTads2 -sENVIRONMENT=node
+LINK_OUTPUTS   := frotz git git-async git-sync glk-check tads2 tads2-async tads2-sync
 OUT_frotz      := $(DIST)/frotz
 OUT_git        := $(DIST)/git
 OUT_git-async  := $(BENCH)/git-async
 OUT_git-sync   := $(BENCH)/git-sync
 OUT_glk-check  := $(BENCH)/glk-check
+OUT_tads2      := $(DIST)/tads2
+OUT_tads2-async := $(BENCH)/tads2-async
+OUT_tads2-sync  := $(BENCH)/tads2-sync
 
 stale_link = $(shell printf '%s\n' '$(LINK_$(1))' | cmp -s - $(OBJDIR)/$(1).ldflags 2>/dev/null || echo stale)
 $(foreach n,$(LINK_OUTPUTS),$(if $(call stale_link,$(n)),$(eval $(OUT_$(n)).js $(OUT_$(n)).wasm: FORCE)))
@@ -184,6 +241,24 @@ $(OBJDIR)/glk/git_web.o: glk/git_web.c $(GIT_HEADERS) | $(OBJDIR)/glk
 $(OBJDIR)/glk/glk-check.o: bench/glk-check.c $(GIT_HEADERS) | $(OBJDIR)/glk
 	$(EMCC) $(GIT_CFLAGS) $(WEB_CFLAGS) -c $< -o $@
 
+$(OBJDIR)/tads2/%.o: $(TADS)/tads2/%.c $(TADS_HEADERS) | $(OBJDIR)/tads2
+	$(EMCC) $(TADS_CFLAGS) -c $< -o $@
+
+$(OBJDIR)/tads2/osportable.o: $(TADS)/tads2/osportable.cc $(TADS_HEADERS) | $(OBJDIR)/tads2
+	$(EMXX) $(TADS_CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/tads/osansi1.o: $(TADS)/osansi1.c $(TADS_HEADERS) | $(OBJDIR)/tads
+	$(EMCC) $(TADS_CFLAGS) -include tads/tads_stdio.h -c $< -o $@
+
+$(OBJDIR)/tads/%.o: $(TADS)/%.c $(TADS_HEADERS) | $(OBJDIR)/tads
+	$(EMCC) $(TADS_CFLAGS) -c $< -o $@
+
+$(OBJDIR)/tads/tads_web.o: tads/tads_web.c $(TADS_HEADERS) | $(OBJDIR)/tads
+	$(EMCC) $(TADS_CFLAGS) $(WEB_CFLAGS) -c $< -o $@
+
+$(OBJDIR)/tads/tads2_web.o: tads/tads2_web.c $(TADS_HEADERS) | $(OBJDIR)/tads
+	$(EMCC) $(TADS_CFLAGS) $(WEB_CFLAGS) -c $< -o $@
+
 # One link writes both files. A pattern rule with two targets is a single
 # recipe for both (in every GNU make), so a missing or stale .wasm relinks
 # too. Each rule's pattern only matches its own pair ("frotz%js" matches
@@ -209,9 +284,22 @@ $(BENCH)/glk-check%js $(BENCH)/glk-check%wasm: $(CHECK_OBJ) | $(BENCH)
 	$(EMCC) $(LINK_glk-check) $(CHECK_OBJ) -o $(BENCH)/glk-check.js
 	$(call stamp_link,glk-check)
 
+$(DIST)/tads2%js $(DIST)/tads2%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) | $(OBJDIR)
+	$(EMXX) $(LINK_tads2) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(DIST)/tads2.js
+	$(call stamp_link,tads2)
+
+$(BENCH)/tads2-async%js $(BENCH)/tads2-async%wasm: $(TADS2_OBJ) $(TADS_GLK_ASYNC) | $(BENCH)
+	$(EMXX) $(LINK_tads2-async) $(TADS2_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads2-async.js
+	$(call stamp_link,tads2-async)
+
+$(BENCH)/tads2-sync%js $(BENCH)/tads2-sync%wasm: $(TADS2_OBJ) $(TADS_GLK_SYNC) | $(BENCH)
+	$(EMXX) $(LINK_tads2-sync) $(TADS2_OBJ) $(TADS_GLK_SYNC) -o $(BENCH)/tads2-sync.js
+	$(call stamp_link,tads2-sync)
+
 # Objects reached only through a pattern rule would count as intermediate
 # and be deleted after the link; keep them so rebuilds are incremental.
-.SECONDARY: $(CORE_OBJ) $(WEB_OBJ) $(GIT_OBJ) $(GLK_ASYNC_OBJ) $(GLK_SYNC_OBJ) $(CHECK_OBJ)
+.SECONDARY: $(CORE_OBJ) $(WEB_OBJ) $(GIT_OBJ) $(GLK_ASYNC_OBJ) $(GLK_SYNC_OBJ) $(CHECK_OBJ) \
+            $(TADS2_OBJ)
 
 # The site is rebuilt from scratch every time: it is a copy, and a stale
 # hashed file left behind would be harmless but confusing.
@@ -227,4 +315,4 @@ serve-dev: all
 clean:
 	rm -rf $(DIST) $(SITE)
 
-.PHONY: all frotz git bench check dist serve serve-dev clean FORCE
+.PHONY: all frotz git tads2 bench bench-tads check dist serve serve-dev clean FORCE

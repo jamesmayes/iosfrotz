@@ -54,6 +54,7 @@
 #include "gi_dispa.h"
 #include "gi_blorb.h"
 #include "glk_web.h"
+#include "glk_web_fileref.h"
 
 #ifndef TRUE
 #define TRUE 1
@@ -275,13 +276,8 @@ struct glk_stream_struct {
     gidispatch_rock_t disprock;
 };
 
-struct glk_fileref_struct {
-    glui32 rock;
-    char *path;
-    glui32 usage;
-    fileref_t *next, *prev;
-    gidispatch_rock_t disprock;
-};
+/* struct glk_fileref_struct is in glk_web_fileref.h, so that TADS's
+   osglk.c, which reads fileref->filename, can see it (web/tads/shim). */
 
 static window_t *winlist = NULL, *rootwin = NULL;
 static stream_t *strlist = NULL, *curstr = NULL;
@@ -2086,6 +2082,18 @@ void glkweb_init(const char *story_path)
     mkdir("/tmp", 0777);
     js_set_story(story_stem, save_name);
     measure();
+}
+
+void glkweb_file_will_open(const char *path)
+{
+    if (path && under_saves(path))
+        load_file(path);
+}
+
+void glkweb_file_did_write(const char *path)
+{
+    if (path && under_saves(path))
+        persist_file(path);
 }
 
 void glkweb_finish(void)

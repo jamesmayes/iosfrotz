@@ -34,7 +34,9 @@ cd web
 make            # both interpreters
 make frotz      # -> dist/frotz.js (~63 KB) + dist/frotz.wasm (~145 KB)
 make git        # -> dist/git.js (~71 KB) + dist/git.wasm (~265 KB)
+make tads2      # -> dist/tads2.js (~77 KB) + dist/tads2.wasm (~606 KB)
 make bench      # -> dist/bench/git-{async,sync}.{js,wasm}, Node builds for the measurement
+make bench-tads # -> dist/bench/tads2-{async,sync}.{js,wasm}, the same for TADS
 make check      # the checks below; must stay green
 make serve-dev  # serve web/ itself (unhashed) on :8000, for editing the page
 make clean      # removes dist/ and dist-site/
@@ -61,6 +63,15 @@ make clean      # removes dist/ and dist-site/
 - Before calling `git()`, `git_web.c` validates the file, because neither `gi_blorb.c` nor git checks a Blorb's declared sizes against the real file. It checks that the FORM fits the file, that every chunk fits the FORM, that the resource index has room for its count and its entries, that each entry starts a real chunk, that no two entries share a (usage, number) key (`gi_blorb.c`'s quicksort never finishes on equal keys, and its binary search could pick a different duplicate than the one checked), that an odd-sized chunk's pad byte fits too, and that the executable is a GLUL chunk whose Glulx header fits it. A bare `.ulx` must have the Glulx magic and a RAMSTART/EXTSTART/ENDMEM map that fits its length. A damaged file is refused with a message in the story window. `node bench/check-malformed.js` (after `make bench`) runs damaged files through the Node build and fails if any of them reaches the game: a truncated FORM, an oversized GLUL chunk (alone, with the FORM length raised to match, and near 4 GB), a short resource index, an index count whose entries do not fit, six and three identical `Exec 0` entries, an odd final chunk whose pad byte is missing, and a header larger than its image; valid controls (Exec 0 and Pict 0 on one chunk, a padded odd chunk) must still start.
 - Link flags are Frotz's (`-sASYNCIFY -sASYNCIFY_STACK_SIZE=65536 -sALLOW_MEMORY_GROWTH -sINVOKE_RUN=0 -sEXIT_RUNTIME=1 -sMODULARIZE -sEXPORTED_RUNTIME_METHODS=callMain,FS -sENVIRONMENT=web`), with `-sEXPORT_NAME=createGit`. The deepest unwind measured uses 288 bytes of the 64 KB Asyncify buffer (see "Measurement").
 - `glk/glk_web.c` and `glk/git_web.c` build with `-Wall -Wextra` and no warnings. The `git/` and `glkios/` files also build without warnings at the default level.
+
+### How TADS 2 is built
+
+- `make tads2` → `dist/tads2.js` + `dist/tads2.wasm`. The sources and defines are the Xcode target `tads`'s (`-DGLKUNIX -DGLK_TIMERS`) minus TADS 3: `tads/tads2/*` (the VM), `tads/*.c` (the Glk OS layer: `osglk.c`, `osglkban.c`, `osbuffer.c`, `osparse.c`, `osansi1–3.c`, `t2askf.c`, `t2indlg.c`) and `tads2/osportable.cc` (C++, so the link uses `em++`). All of them compile unmodified and without warnings; link flags are git's, with `-sEXPORT_NAME=createTads2`.
+- What they need from the iOS app comes from `web/tads/` (see "What glulxe and TADS need" for the list): `tads/shim/` comes first on the include path, so `osglk.c`'s unconditional `"iosfrotz.h"`, `"glkios.h"` and `"git.h"` are stand-ins. `gli_rootwin` is `glk_window_get_root()`, and `fileref->filename` (`os_askfile`) reads the browser Glk's own fileref, whose definition `glk/glk_web_fileref.h` shares (`filename` is another name for its `path`). `tads/tads_web.c` defines the iOS autosave globals (`do_autosave` stays 0), a no-op `git_shutdown_dispatch`, Frotz's `finished` (0) and an empty `os_more_prompt` (no `[MORE]` paging, as for Z-code).
+- TADS opens its files with stdio (`osansi1.c`), not Glk streams. That one file is compiled with `-include tads/tads_stdio.h`, which renames its `fopen`/`fclose` to `tads_web.c`'s wrappers: a `/saves` file is brought in from browser storage before it is opened and stored after a write-mode close, through `glkweb_file_will_open`/`glkweb_file_did_write` (`glk/glk_web.h`), with the same rules as a Glk file stream.
+- `tads/tads2_web.c` is the startup file (`main_t2` of `tads/t23run.cpp`, which this build does not use because it pulls in TADS 3). It refuses a file without the TADS 2 signature (`TADS2 bin` LF CR ^Z) and calls `trdmain`.
+- TADS raises its errors with `setjmp`/`longjmp`. Emscripten implements them by default with JS `invoke_*` wrappers, and ASYNCIFY unwinds through them: in Node, *The Keeper's Errand* (below) plays its 217-command walkthrough, including SAVE, RESTORE and UNDO, identically under ASYNCIFY and without it.
+- **Test game.** `bench/tads/errand.t` is a small game written for this repo (public domain), on `adv.t` and `std.t` from `tads/tads2`, whose notice says "You may modify and use this file in any way you want". `bench/tads/errand.gam` is its compiled form, made with the TADS 2 compiler built natively from `tads/tads2` (`tcd.c` and friends) in a scratch directory; the compiler is not part of the build. `bench/tads/errand.walk` is its walkthrough.
 
 ### The harness and `make check`
 
