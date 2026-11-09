@@ -14,12 +14,15 @@
 //    object compiled with B before the build stopped
 //    (make WEB_CFLAGS=B dist/obj/tads/tads_text.o). Before going back, the
 //    object and its record (if the Makefile writes records) are set to one
-//    identical second, 60 s ahead of the clock, and the check asserts that
+//    identical second, 300 s ahead of the clock, and the check asserts that
 //    they are. So when the rebuild rewrites the record, the new record is
 //    not newer than the object as make first saw it, whatever second the
 //    rebuild runs in: the case where both fall in the same whole second,
 //    which GNU make 3.81 cannot tell apart. Back on A, make -n must compile
-//    the object, building must compile it, and then nothing is left.
+//    the object, building must compile it, and then nothing is left. After
+//    the dry run and after the rebuild, the check asserts that the pinned
+//    second is still ahead of the clock; if it has expired, that check
+//    fails (rerun) rather than letting the others pass having proved nothing.
 // 2. Needs the per-object records (dist/obj/<object>.o.flags), and is
 //    skipped, with the reason, on a Makefile without them: an object whose
 //    record was rewritten for B, but that was not compiled yet
@@ -49,8 +52,12 @@ const TEXT = "dist/obj/tads/tads_text.o";
 const TWEB = "dist/obj/tads/tads_web.o";
 // What make -n over the outputs that link them would compile.
 const OUTPUTS = ["dist/tads2.js", "dist/tads3.js", "dist/bench/glk-check.js"];
-// How far ahead of the clock part 1 sets the object and its record.
-const AHEAD = 60;
+// How far ahead of the clock part 1 sets the object and its record. The
+// pin must still be ahead once the dry run and the rebuild of one small
+// object have finished, which take a few seconds; 300 s is a margin of
+// roughly a hundred times that, so only a pathological machine runs past
+// it, and then the check fails (it does not pass having proved nothing).
+const AHEAD = 300;
 
 let failures = 0;
 function check(ok, what) {
@@ -100,9 +107,20 @@ function compiledWithOther(a, b, label) {
     exists(TEXT) && pinned.every((f) => second(f) === t) && t > Date.now() / 1000,
     `${label}: the object compiled with the other flags is there, and it${pinned.length > 1 ? " and its record share" : " has"} one second, later than the clock`
   );
+  // The pin proves something only while it is still ahead of the clock.
+  const stillAhead = (when) => {
+    const ahead = Date.now() < t * 1000;
+    check(
+      ahead,
+      `${label}: the pinned second is still ahead of the clock after ${when}` +
+        (ahead ? "" : " (pinned second expired during the rebuild; rerun)")
+    );
+  };
   const n = willCompile(a);
+  stillAhead("the dry run");
   check(n.includes(TEXT), `${label}: back on the first flags, the object compiled with the other flags is compiled again`);
   const did = compiles(make(a, [TEXT]));
+  stillAhead("the rebuild");
   check(did.includes(TEXT), `${label}: and building compiles it`);
   check(willCompile(a).length === 0, `${label}: then nothing is left to compile`);
 }
