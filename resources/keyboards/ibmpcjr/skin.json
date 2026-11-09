@@ -1,8 +1,8 @@
 { "id": "ibmpcjr", "name": "IBM PCjr", "profile": "chiclet", "blankCaps": true,
-  "sublabelPosition": "top",
-  "case": { "light": "#38383A", "dark": "#2A2A2C" },
+  "sublabelPosition": "top", "capInset": 3,
+  "case": { "light": "#38383A", "dark": "#2A2A2C", "textLight": "#D8D6CF", "textDark": "#BDBAB1" },
   "bezel": { "top": 10, "bottom": 10, "sides": 6 },
   "key": { "radius": 3, "shadow": true, "light": "#D3D0C7", "dark": "#BDBAB1", "textLight": "#232323", "textDark": "#1C1C1C",
            "font": "system", "fontSize": 22, "pressedLight": "#ECE9E1", "pressedDark": "#D6D3CA" },
   "credits": "Layout after the IBM PCjr (1983) 62-key Freeboard; colours after its charcoal case and light chiclet keys.",
-  "notes": "Faithful: the Freeboard's 62 keys in their rows and order, small square chiclets with wide gaps on the dark case, and the legends printed apart from the keys as the Freeboard had them on the case: here each cap is blank but for its legend in small type at the top, shifted character first. There is no backtick or backslash key, as on the machine. Letters type lower case and Shift upper case. Approximated: widths are compressed to fit a phone; the legends sit at the top of each cap rather than on the case above it, since a skin draws nothing outside a key; the arrows are drawn as an inverted T at the right of the bottom two rows; and the Fn legends (F1 to F10, Break, PgUp and the rest) are left off. Mapped to none: Tab, Ctrl, Alt, Ins and Del (no control or editing layer). No IBM logo is drawn." }
+  "notes": "Faithful: the Freeboard's 62 keys in their rows and order, small blank chiclets with wide gaps on the dark case, and the legends printed on the case above each key as the Freeboard had them, in small light type, shifted character first. There is no backtick or backslash key, as on the machine. Letters type lower case and Shift upper case. Approximated: widths are compressed to fit a phone; each cap is square at its own height, so wide keys are long rather than square, and each legend shares its key's touch area; the arrows are drawn as an inverted T at the right of the bottom two rows; and the Fn legends (F1 to F10, Break, PgUp and the rest) are left off. Mapped to none: Tab, Ctrl, Alt, Ins and Del (no control or editing layer). No IBM logo is drawn." }

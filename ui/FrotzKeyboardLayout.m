@@ -72,6 +72,16 @@ static NSNumber *OptionalBool(NSDictionary *dict, NSString *key, NSString **erro
     return value;
 }
 
+// Newer flags take only JSON true/false; "repeat" and "shadow" keep accepting numbers as they always have.
+static NSNumber *OptionalStrictBool(NSDictionary *dict, NSString *key, NSString **error) {
+    id value = dict[key];
+    if (value && (![value isKindOfClass: [NSNumber class]] || CFGetTypeID((__bridge CFTypeRef)value) != CFBooleanGetTypeID())) {
+        Fail(error, [NSString stringWithFormat: @"\"%@\" is not true or false", key]);
+        return nil;
+    }
+    return value;
+}
+
 static CGFloat OptionalNumber(NSDictionary *dict, NSString *key, CGFloat fallback, NSString **error) {
     NSNumber *n = Optional(dict, key, [NSNumber class], error);
     return n ? [n doubleValue] : fallback;
@@ -119,14 +129,16 @@ static UIColor *DynamicColor(NSDictionary *dict, NSString *lightKey, NSString *d
 
 @interface FrotzKeyboardKey ()
 -(instancetype)initWithLabel:(NSString *)label text:(NSString *)text action:(FrotzKeyAction)action width:(CGFloat)width
-                       group:(NSString *)group repeats:(BOOL)repeats sublabel:(nullable NSString *)sublabel NS_DESIGNATED_INITIALIZER;
+                       group:(NSString *)group repeats:(BOOL)repeats sublabel:(nullable NSString *)sublabel
+                  shiftLabel:(nullable NSString *)shiftLabel accessibilityName:(NSString *)accessibilityName NS_DESIGNATED_INITIALIZER;
 -(instancetype)init NS_UNAVAILABLE;
 @end
 
 @implementation FrotzKeyboardKey
 
 -(instancetype)initWithLabel:(NSString *)label text:(NSString *)text action:(FrotzKeyAction)action width:(CGFloat)width
-                       group:(NSString *)group repeats:(BOOL)repeats sublabel:(NSString *)sublabel {
+                       group:(NSString *)group repeats:(BOOL)repeats sublabel:(NSString *)sublabel
+                  shiftLabel:(NSString *)shiftLabel accessibilityName:(NSString *)accessibilityName {
     if ((self = [super init])) {
         _label = [label copy];
         _text = [text copy];
@@ -135,6 +147,8 @@ static UIColor *DynamicColor(NSDictionary *dict, NSString *lightKey, NSString *d
         _group = [group copy];
         _repeats = repeats;
         _sublabel = [sublabel copy];
+        _shiftLabel = [shiftLabel copy];
+        _accessibilityName = [accessibilityName copy];
     }
     return self;
 }
@@ -177,19 +191,27 @@ static UIColor *DynamicColor(NSDictionary *dict, NSString *lightKey, NSString *d
         Fail(error, @"a key has a width of zero or less");
     NSString *group = Optional(dict, @"group", [NSString class], error) ?: @"alpha";
     NSString *sublabel = Optional(dict, @"sublabel", [NSString class], error);
+    NSString *shiftLabel = Optional(dict, @"shiftLabel", [NSString class], error);
+    // What VoiceOver says: a faithful legend is often a symbol or half a name ("HOME" for CLR/HOME).
+    NSString *a11y = Optional(dict, @"a11y", [NSString class], error);
+    if (!a11y.length)
+        a11y = label.length || a != FrotzKeyActionSpace ? label : @"space"; // a faithful space bar is blank
     if (*error) {
         *error = [NSString stringWithFormat: @"key \"%@\": %@", label, *error];
         return nil;
     }
     return [[self alloc] initWithLabel: label text: text action: a width: width group: group
-                               repeats: repeats ? [repeats boolValue] : repeatsByDefault sublabel: sublabel];
+                               repeats: repeats ? [repeats boolValue] : repeatsByDefault sublabel: sublabel
+                            shiftLabel: shiftLabel accessibilityName: a11y];
 }
 
 -(FrotzKeyboardKey *)upperCasedKey {
     if (_action != FrotzKeyActionText)
         return self;
+    NSString *name = [_accessibilityName isEqualToString: _label] ? [_label uppercaseString] : _accessibilityName;
     return [[FrotzKeyboardKey alloc] initWithLabel: [_label uppercaseString] text: [_text uppercaseString] action: _action
-                                             width: _width group: _group repeats: _repeats sublabel: _sublabel];
+                                             width: _width group: _group repeats: _repeats sublabel: _sublabel
+                                        shiftLabel: _shiftLabel accessibilityName: name];
 }
 
 @end
@@ -345,12 +367,14 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
         return nil;
     NSString *error = nil;
     NSDictionary *key = Optional(json, @"key", [NSDictionary class], &error);
-    UIColor *caseColor = DynamicColor(Optional(json, @"case", [NSDictionary class], &error), @"light", @"dark", &error);
+    NSDictionary *caseJSON = Optional(json, @"case", [NSDictionary class], &error);
+    UIColor *caseColor = DynamicColor(caseJSON, @"light", @"dark", &error);
     UIColor *keyColor = DynamicColor(key, @"light", @"dark", &error);
     UIColor *textColor = DynamicColor(key, @"textLight", @"textDark", &error);
     if (!caseColor || !keyColor || !textColor)
         Fail(&error, @"case or key colours missing");
     UIColor *pressedColor = DynamicColor(key, @"pressedLight", @"pressedDark", &error);
+    UIColor *caseTextColor = DynamicColor(caseJSON, @"textLight", @"textDark", &error);
     NSDictionary *profiles = @{ @"flat": @(FrotzKeyProfileFlat), @"rounded": @(FrotzKeyProfileRounded),
                                 @"sculpted": @(FrotzKeyProfileSculpted), @"chiclet": @(FrotzKeyProfileChiclet) };
     NSString *profileName = Optional(json, @"profile", [NSString class], &error) ?: @"rounded";
@@ -365,7 +389,10 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     NSString *legendCase = Optional(json, @"legendCase", [NSString class], &error) ?: @"asis";
     if (![legendCase isEqualToString: @"upper"] && ![legendCase isEqualToString: @"asis"])
         Fail(&error, [NSString stringWithFormat: @"unknown legendCase \"%@\"", legendCase]);
-    NSNumber *blankCaps = OptionalBool(json, @"blankCaps", &error);
+    NSNumber *blankCaps = OptionalStrictBool(json, @"blankCaps", &error);
+    CGFloat capInset = OptionalNumber(json, @"capInset", 0, &error);
+    if (capInset < 0)
+        Fail(&error, @"capInset is negative");
     NSDictionary *bezel = Optional(json, @"bezel", [NSDictionary class], &error);
     CGFloat sides = OptionalNumber(bezel, @"sides", 4, &error);
     CGFloat top = OptionalNumber(bezel, @"top", 8, &error), bottom = OptionalNumber(bezel, @"bottom", 8, &error);
@@ -414,6 +441,8 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     skin->_sublabelPosition = [positions[positionName] integerValue];
     skin->_upperCaseLegends = [legendCase isEqualToString: @"upper"];
     skin->_blankCaps = [blankCaps boolValue];
+    skin->_capInset = skin->_sublabelPosition == FrotzSublabelPositionTop ? capInset : 0;
+    skin->_caseTextColor = caseTextColor ?: textColor;
     skin->m_keyColor = keyColor;
     skin->m_textColor = textColor;
     skin->m_pressedColor = pressedColor ?: keyColor;
