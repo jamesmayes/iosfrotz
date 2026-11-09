@@ -1760,21 +1760,19 @@ extern void gli_ios_set_focus(window_t *winNum);
 }
 
 #if DEBUG
-// FROTZ_INAPP_KEYBOARD=<skin-id> until the settings choose a keyboard.
+// FROTZ_INAPP_KEYBOARD=<skin-id> until the settings choose a keyboard; read once, so a failed
+// load isn't retried on every appearance and clearing the skin sticks.
 -(void)showInAppKeyboardIfRequested {
     NSDictionary *env = [[NSProcessInfo processInfo] environment];
-    NSString *skinID = env[@"FROTZ_INAPP_KEYBOARD"];
-    if (m_keyboardController.skinID || skinID.length == 0)
-        return;
-    m_keyboardController.skinID = skinID;
-    if (m_keyboardController.keyboardView && [env[@"FROTZ_INAPP_KEYBOARD_SELFTEST"] boolValue])
+    if ([m_keyboardController applySkinFromEnvironment] && [env[@"FROTZ_INAPP_KEYBOARD_SELFTEST"] boolValue])
         [self performSelector: @selector(runKeyboardSelfTest) withObject: nil afterDelay: 2.0];
 }
 
 // Drives the keyboard's own key handling through the typing API, since the simulator can't be
 // tapped from a script. Each entry is "tap:<label>", "wait:<seconds>", "story:" (log the end of
 // the transcript), "select:last2", "type:<text>" (straight to typeText:, for what no Classic key types),
-// "clear:", "hit:<label>" (which view a real touch at that key's centre would reach) or "note:<text>".
+// "clear:", "hit:<label>" (which view a real touch at that key's centre would reach), "notes:show|hide"
+// (the notes page programmatically), "notes:edit" (raise the notes keyboard), "kb:show|hide", "state:" (keyboard source and region) or "note:<text>".
 -(void)runKeyboardSelfTest {
     NSArray *script = @[ @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"tap:⌫", @"tap:⌫", @"tap:o", @"tap:k", @"tap:return", @"wait:2", @"story:",
                          @"tap:i", @"tap:n", @"tap:v", @"tap:space", @"tap:return", @"wait:2", @"story:",
@@ -1786,6 +1784,10 @@ extern void gli_ios_set_focus(window_t *winNum);
                          @"hit:q", @"hit:⇧", @"hit:space", @"hit:return", @"hit:123",
                          @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"tap:space", @"wait:0.5", @"tap:a", @"tap:t", @"wait:0.5", @"clear:",
                          @"tap:x", @"tap:space", @"wait:0.5", @"clear:",
+                         @"state:", @"notes:show", @"wait:0.5", @"state:", @"notes:hide", @"wait:0.5", @"state:",
+                         @"kb:hide", @"state:", @"notes:show", @"wait:0.5", @"state:", @"notes:hide", @"wait:0.5", @"state:",
+                         @"notes:show", @"notes:edit", @"wait:1", @"state:", @"notes:hide", @"wait:1", @"state:",
+                         @"kb:show", @"state:",
                          @"note:two touches at once: not scriptable, tapKeyWithLabel: presses one key at a time" ];
     [self keyboardSelfTestStep: 0 ofScript: script];
 }
@@ -1808,7 +1810,24 @@ extern void gli_ios_set_focus(window_t *winNum);
         UITextPosition *start = [m_inputLine positionFromPosition: end offset: -2];
         if (start)
             m_inputLine.selectedTextRange = [m_inputLine textRangeFromPosition: start toPosition: end];
-    } else if ([verb isEqualToString: @"clear"])
+    } else if ([verb isEqualToString: @"notes"]) {
+        if ([arg isEqualToString: @"show"])
+            [m_notesController show];
+        else if ([arg isEqualToString: @"edit"])
+            [m_notesController activateKeyboard]; // the player opening the notes keyboard
+        else
+            [m_notesController hide];
+    } else if ([verb isEqualToString: @"kb"]) {
+        if ([arg isEqualToString: @"show"])
+            [m_keyboardController showAnimated: NO];
+        else
+            [m_keyboardController hideAnimated: NO];
+    } else if ([verb isEqualToString: @"state"])
+        NSLog(@"kbselftest %d state source=%@ inAppShowing=%d kbShown=%d kbdSize=%@ lineFirstResponder=%d notesVisible=%d notesEditing=%d",
+              (int)step, m_keyboardSource == FrotzKeyboardSourceInApp ? @"InApp" : @"System", m_keyboardController.isShowing,
+              m_kbShown, NSStringFromCGSize(m_kbdSize), [m_inputLine isFirstResponder], m_notesController.isVisible,
+              m_notesController.isEditingNotes);
+    else if ([verb isEqualToString: @"clear"])
         [m_inputLine setText: @""];
     else if ([verb isEqualToString: @"hit"]) {
         FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
@@ -1966,9 +1985,9 @@ extern void gli_ios_set_focus(window_t *winNum);
         [m_notesController hide];
 }
 
--(void)notesPageDidBecomeVisible:(BOOL)visible {
+-(void)notesPageDidBecomeVisible:(BOOL)visible keyboardFollows:(BOOL)keyboardFollows {
     if (visible)
-        [m_keyboardController notesPageDidBecomeVisible];
+        [m_keyboardController notesPageDidBecomeVisibleKeyboardFollows: keyboardFollows];
     else
         [m_keyboardController storyPageDidBecomeVisible];
 }
@@ -4940,8 +4959,8 @@ static void setScreenDims(char *storyNameBuf) {
 // Re-requesting first responder (after settings, on return to the foreground) brings the
 // system keyboard back; do the same for the in-app one.
 - (void)textFieldDidBeginEditing:(UITextField *)textField {
-    if (textField == m_inputLine && [self usesInAppKeyboard] && !m_kbLocked)
-        [m_keyboardController showAnimated: YES];
+    if (textField == m_inputLine && [self usesInAppKeyboard])
+        [m_keyboardController inputLineDidBeginEditing];
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {

@@ -27,6 +27,11 @@
 
 @end
 
+@interface NotesViewController () {
+    BOOL m_notesPageShown;  // what the delegate was last told
+}
+@end
+
 @implementation NotesViewController
 @synthesize delegate = m_delegate;
 @synthesize fontName = m_fontName;
@@ -222,31 +227,39 @@ static const int kNotesTitleHeight = 24;
 }
 
 - (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
-    if (scrollView == m_scrollView) {
-        CGPoint ofst = [scrollView contentOffset];
-        CGRect frame = [scrollView frame];
-        [self reportNotesPageVisible: ofst.x >= frame.size.width];
-        if (ofst.x >= frame.size.width) {
-            if (m_chainResponder && [m_chainResponder isFirstResponder])
-                [m_notesView becomeFirstResponder];
-        } else {
-            if (m_chainResponder && [m_notesView isFirstResponder] && [m_chainResponder canBecomeFirstResponder]) {
-                [m_chainResponder becomeFirstResponder];
-                [scrollView setContentOffset:CGPointMake(scrollView.contentInset.left, scrollView.contentInset.top)];
-            }
-            else
-                [m_notesView resignFirstResponder];
+    if (scrollView == m_scrollView)
+        [self settleOnPageVia: @"decelerate"];
+}
+
+// The scroll view has come to rest on a page; move first responder to match.
+-(void)settleOnPageVia:(NSString *)site {
+    UIScrollView *scrollView = m_scrollView;
+    CGPoint ofst = [scrollView contentOffset];
+    CGRect frame = [scrollView frame];
+    [self pageDidChange: ofst.x >= frame.size.width keyboardFollows: YES via: site];
+    if (ofst.x >= frame.size.width) {
+        if (m_chainResponder && [m_chainResponder isFirstResponder])
+            [m_notesView becomeFirstResponder];
+    } else {
+        if (m_chainResponder && [m_notesView isFirstResponder] && [m_chainResponder canBecomeFirstResponder]) {
+            [m_chainResponder becomeFirstResponder];
+            [scrollView setContentOffset:CGPointMake(scrollView.contentInset.left, scrollView.contentInset.top)];
         }
-        [m_delegate showKeyboardLockState];
+        else
+            [m_notesView resignFirstResponder];
     }
+    [m_delegate showKeyboardLockState];
 }
 
 -(void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
     CGPoint ofst = [scrollView contentOffset];
+    // A drag let go exactly on a page boundary never decelerates, so settle here.
+    if (scrollView == m_scrollView && !decelerate)
+        [self settleOnPageVia: @"drag-end"];
     if (scrollView == m_scrollView && decelerate) {
         [m_notesView setEditable: YES];
         if (m_chainResponder && ofst.x >= scrollView.frame.size.width*0.75)
-            [self reportNotesPageVisible: YES];
+            [self pageDidChange: YES keyboardFollows: YES via: @"drag"];
         if (m_chainResponder && [m_chainResponder isFirstResponder] && ofst.x >= scrollView.frame.size.width*0.75) {
             [m_notesView becomeFirstResponder];
         }
@@ -255,10 +268,21 @@ static const int kNotesTitleHeight = 24;
 }
 
 
-// Lets the story controller hand the keyboard over before the first responder moves.
--(void)reportNotesPageVisible:(BOOL)visible {
-    if ([m_delegate respondsToSelector: @selector(notesPageDidBecomeVisible:)])
-        [m_delegate notesPageDidBecomeVisible: visible];
+// Every page change comes through here, so the story controller can hand the keyboard over
+// before first responder moves. Telling it twice is harmless; only changes go out.
+-(void)pageDidChange:(BOOL)notesVisible keyboardFollows:(BOOL)keyboardFollows via:(NSString *)site {
+    if (notesVisible == m_notesPageShown)
+        return;
+    m_notesPageShown = notesVisible;
+#if DEBUG
+    NSLog(@"kbpage %@ via %@", notesVisible ? @"notes" : @"story", site);
+#endif
+    if ([m_delegate respondsToSelector: @selector(notesPageDidBecomeVisible:keyboardFollows:)])
+        [m_delegate notesPageDidBecomeVisible: notesVisible keyboardFollows: keyboardFollows];
+}
+
+-(BOOL)isEditingNotes {
+    return [m_notesView isFirstResponder];
 }
 
 -(BOOL)isVisible {
@@ -268,13 +292,14 @@ static const int kNotesTitleHeight = 24;
 
 -(void)show {
     CGRect frame = [m_scrollView frame];
+    [self pageDidChange: YES keyboardFollows: NO via: @"show"];
     [m_notesView setEditable: YES];
     [m_scrollView setContentOffset:CGPointMake(frame.size.width, 0)];
 }
 
 -(void)hide {
+    [self pageDidChange: NO keyboardFollows: NO via: @"hide"];
     [m_scrollView setContentOffset:CGPointMake(0, 0)];
-    [self reportNotesPageVisible: NO];
 }
 
 
@@ -332,8 +357,10 @@ static const int kNotesTitleHeight = 24;
     CGRect frame = m_scrollView.frame;
     frame.origin.x = frame.size.width*2; // make sure notes aren't temporarily visible during rotation
     [m_notesBGView  setFrame: frame];
-    if ([m_scrollView contentOffset].x > 0)
+    if ([m_scrollView contentOffset].x > 0) {
+        [self pageDidChange: NO keyboardFollows: NO via: @"rotate"];
         [m_scrollView setContentOffset: CGPointMake(0, 0)];
+    }
 }
 
 - (void)autosize {
@@ -357,10 +384,9 @@ static const int kNotesTitleHeight = 24;
     
     frame.size.width *= 2;
     [m_scrollView setContentSize: frame.size];
-    if ([m_scrollView contentOffset].x > frame.size.width/4)
-        [m_scrollView setContentOffset: CGPointMake(frame.size.width/2, 0)];
-    else
-        [m_scrollView setContentOffset: CGPointMake(0, 0)];
+    BOOL onNotes = [m_scrollView contentOffset].x > frame.size.width/4;
+    [self pageDidChange: onNotes keyboardFollows: NO via: @"autosize"];
+    [m_scrollView setContentOffset: CGPointMake(onNotes ? frame.size.width/2 : 0, 0)];
 
     [self updateTextContainerInset];
 }

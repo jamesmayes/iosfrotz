@@ -20,6 +20,7 @@
 #import "FrotzKeyboardController.h"
 #import "StoryMainViewController.h"
 #import "StoryInputLine.h"
+#import "NotesViewController.h"
 #import "iosfrotz.h"
 
 static const NSTimeInterval kRedockDuration = 0.25;
@@ -32,6 +33,11 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
     BOOL m_onNotesPage;
     BOOL m_handedToNotes;      // the in-app source is off while the notes page is up
     BOOL m_showOnStoryPage;    // and it was showing when the notes page took over
+    BOOL m_restoringStoryPage; // the input line's first-responder change is ours, not a request to show
+    CGRect m_dockedFold;       // the fold band the laptop placement was made for
+#if DEBUG
+    BOOL m_envSkinApplied;
+#endif
 }
 
 -(instancetype)initWithStoryController:(StoryMainViewController *)smvc postureObserver:(FrotzPostureObserver *)observer {
@@ -126,6 +132,7 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
 
 -(void)applyPlacementForLaptop:(BOOL)laptop frame:(CGRect)frame {
     m_dockedForLaptop = laptop;
+    m_dockedFold = laptop ? m_observer.foldFrameInView : CGRectNull;
     _keyboardView.topInset = laptop ? CGRectGetHeight(m_observer.foldFrameInView) : 0;
     _keyboardView.fillsHeight = laptop;
     _keyboardView.frame = frame;
@@ -143,7 +150,9 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
         return;
     BOOL laptop = [self laptopPostureInBounds: m_smvc.view.bounds];
     CGRect frame = [self keyboardFrameForLaptop: laptop];
-    if (laptop == m_dockedForLaptop && CGRectEqualToRect(frame, _keyboardView.frame))
+    // The band can change height with the same top, which moves the keys but not the frame.
+    BOOL sameFold = !laptop || CGRectEqualToRect(m_observer.foldFrameInView, m_dockedFold);
+    if (laptop == m_dockedForLaptop && sameFold && CGRectEqualToRect(frame, _keyboardView.frame))
         return;
     NSTimeInterval duration = animated && !UIAccessibilityIsReduceMotionEnabled() ? kRedockDuration : 0;
     [UIView animateWithDuration: duration animations: ^{
@@ -189,6 +198,11 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
     [m_smvc keyboardRegionDidChange: CGRectZero visible: NO source: FrotzKeyboardSourceInApp];
 }
 
+-(void)inputLineDidBeginEditing {
+    if (!m_restoringStoryPage && !m_smvc.KBLocked)
+        [self showAnimated: YES];
+}
+
 -(void)toggleAnimated:(BOOL)animated {
     if (self.isShowing)
         [self hideAnimated: animated];
@@ -199,7 +213,7 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
 #pragma mark Notes page
 
 // The notes text view needs the system keyboard, so the in-app one steps aside for it.
--(void)notesPageDidBecomeVisible {
+-(void)notesPageDidBecomeVisibleKeyboardFollows:(BOOL)keyboardFollows {
     if (m_onNotesPage)
         return;
     m_onNotesPage = YES;
@@ -208,9 +222,10 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
     m_handedToNotes = YES;
     m_showOnStoryPage = self.isShowing;
     [self hideAnimated: NO];
-    // The input line is first responder even with the keyboard hidden; let it go, or the notes
-    // page would take first responder from it and raise a keyboard nobody asked for.
-    if (!m_showOnStoryPage)
+    // The input line is first responder even with the keyboard hidden. Let it go unless the
+    // notes view is about to take the keyboard from it (a swipe with the keyboard up); otherwise
+    // the switch to the system source would raise a keyboard nobody asked for.
+    if (!(m_showOnStoryPage && keyboardFollows))
         [m_smvc.inputLine resignFirstResponder];
     [m_smvc setInAppKeyboardActive: NO];
 }
@@ -222,10 +237,30 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
     if (!m_handedToNotes || !_keyboardView)
         return;
     m_handedToNotes = NO;
+    m_restoringStoryPage = YES;
+    // Put the notes keyboard away while the source is still System, so its notifications clear
+    // the region and the in-app source never comes on with a system keyboard on screen.
+    NotesViewController *notes = m_smvc.notesController;
+    if (notes.isEditingNotes)
+        [notes dismissKeyboard];
     [m_smvc setInAppKeyboardActive: YES];
     if (m_showOnStoryPage && !m_smvc.KBLocked)
         [self showAnimated: NO];
+    m_restoringStoryPage = NO;
 }
+
+#if DEBUG
+-(BOOL)applySkinFromEnvironment {
+    if (m_envSkinApplied)
+        return NO;
+    m_envSkinApplied = YES;
+    NSString *skinID = [[NSProcessInfo processInfo] environment][@"FROTZ_INAPP_KEYBOARD"];
+    if (skinID.length == 0 || _skinID)
+        return NO;
+    self.skinID = skinID;
+    return _keyboardView != nil;
+}
+#endif
 
 #pragma mark FrotzKeyboardViewDelegate
 
