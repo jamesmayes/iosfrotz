@@ -1687,7 +1687,8 @@ extern void gli_ios_set_focus(window_t *winNum);
 -(void)showKeyboardLockState {
     BOOL notesVisible = (m_notesController && [m_notesController isVisible]);
 
-    BOOL locked = m_kbLocked && !notesVisible && ![m_inputLine isFirstResponder];
+    // The input line stays first responder under the in-app keyboard, so it can't say "hidden" there.
+    BOOL locked = m_kbLocked && !notesVisible && ([self usesInAppKeyboard] ? !m_kbShown : ![m_inputLine isFirstResponder]);
     UIImage *image = [UIImage imageNamed: locked ? @"icon-keyboard-locked" : @"icon-keyboard"];
     if (m_kbdToggleItem.image != image)
         [m_kbdToggleItem setImage: image];
@@ -1749,30 +1750,114 @@ extern void gli_ios_set_focus(window_t *winNum);
     // Cheap: RichTextView's setFrame: ignores an unchanged rect.
     [self layoutStatusLine];
     [m_postureObserver refresh];
-#if DEBUG
-    if (m_fakeInAppKeyboard) // DEBUG scaffolding, removed by the in-app keyboard task
-        m_fakeInAppKeyboard.frame = [self fakeInAppKeyboardFrame];
-#endif
+    [m_keyboardController layoutIfNeeded];
+}
+
+#pragma mark - In-app keyboard
+
+-(BOOL)usesInAppKeyboard {
+    return m_keyboardController.isInAppKeyboardActive;
 }
 
 #if DEBUG
-// DEBUG scaffolding, removed by the in-app keyboard task
--(CGRect)fakeInAppKeyboardFrame {
-    CGFloat height = [[[NSProcessInfo processInfo] environment][@"FROTZ_FAKE_INAPP_KB_HEIGHT"] doubleValue];
-    CGRect bounds = self.view.bounds;
-    return CGRectMake(0, bounds.size.height - height, bounds.size.width, height);
+// FROTZ_INAPP_KEYBOARD=<skin-id> until the settings choose a keyboard; read once, so a failed
+// load isn't retried on every appearance and clearing the skin sticks.
+-(void)showInAppKeyboardIfRequested {
+    NSDictionary *env = [[NSProcessInfo processInfo] environment];
+    if ([m_keyboardController applySkinFromEnvironment] && [env[@"FROTZ_INAPP_KEYBOARD_SELFTEST"] boolValue])
+        [self performSelector: @selector(runKeyboardSelfTest) withObject: nil afterDelay: 2.0];
 }
 
-// DEBUG scaffolding, removed by the in-app keyboard task
--(void)showFakeInAppKeyboardIfRequested {
-    if (m_fakeInAppKeyboard || [[[NSProcessInfo processInfo] environment][@"FROTZ_FAKE_INAPP_KB_HEIGHT"] doubleValue] <= 0)
+// Drives the keyboard's own key handling through the typing API, since the simulator can't be
+// tapped from a script. Each entry is "tap:<label>", "wait:<seconds>", "story:" (log the end of
+// the transcript), "select:last2", "type:<text>" (straight to typeText:, for what no Classic key types),
+// "clear:", "hit:<label>" (which view a real touch at that key's centre would reach), "notes:show|hide"
+// (the notes page programmatically), "notes:edit" (raise the notes keyboard), "kb:show|hide", "state:" (keyboard source and region) or "note:<text>".
+-(void)runKeyboardSelfTest {
+    NSArray *script = @[ @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"tap:⌫", @"tap:⌫", @"tap:o", @"tap:k", @"tap:return", @"wait:2", @"story:",
+                         @"tap:i", @"tap:n", @"tap:v", @"tap:space", @"tap:return", @"wait:2", @"story:",
+                         @"tap:⇧", @"tap:N", @"tap:123", @"tap:1", @"tap:⌫", @"tap:⌫",
+                         @"note:single-key: not exercised",
+                         @"tap:ABC", @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"select:last2", @"tap:x",
+                         @"tap:⌫", @"tap:⌫", @"tap:⌫",
+                         @"type:é", @"tap:⌫", @"type:e\u0301", @"tap:⌫",
+                         @"hit:q", @"hit:⇧", @"hit:space", @"hit:return", @"hit:123",
+                         @"tap:l", @"tap:o", @"tap:o", @"tap:k", @"tap:space", @"wait:0.5", @"tap:a", @"tap:t", @"wait:0.5", @"clear:",
+                         @"tap:x", @"tap:space", @"wait:0.5", @"clear:",
+                         @"state:", @"notes:show", @"wait:0.5", @"state:", @"notes:hide", @"wait:0.5", @"state:",
+                         @"kb:hide", @"state:", @"notes:show", @"wait:0.5", @"state:", @"notes:hide", @"wait:0.5", @"state:",
+                         @"notes:show", @"notes:edit", @"wait:1", @"state:", @"notes:hide", @"wait:1", @"state:",
+                         @"kb:show", @"state:",
+                         @"note:two touches at once: not scriptable, tapKeyWithLabel: presses one key at a time" ];
+    [self keyboardSelfTestStep: 0 ofScript: script];
+}
+
+-(void)keyboardSelfTestStep:(NSUInteger)step ofScript:(NSArray<NSString *> *)script {
+    if (step >= script.count) {
+        NSLog(@"kbselftest done");
         return;
-    [self setInAppKeyboardActive: YES];
-    m_fakeInAppKeyboard = [[UIView alloc] initWithFrame: [self fakeInAppKeyboardFrame]];
-    m_fakeInAppKeyboard.backgroundColor = [UIColor systemTealColor];
-    [self.view addSubview: m_fakeInAppKeyboard]; // not m_background, which pages with the notes
-    [self keyboardRegionWillChange: m_fakeInAppKeyboard.frame visible: YES source: FrotzKeyboardSourceInApp animationDuration: 0.25];
-    [self keyboardRegionDidChange: m_fakeInAppKeyboard.frame visible: YES source: FrotzKeyboardSourceInApp];
+    }
+    NSString *entry = script[step];
+    NSRange colon = [entry rangeOfString: @":"];
+    NSString *verb = [entry substringToIndex: colon.location], *arg = [entry substringFromIndex: NSMaxRange(colon)];
+    NSTimeInterval next = 0.3;
+    if ([verb isEqualToString: @"tap"]) {
+        FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
+        if (![keyboard tapKeyWithLabel: arg])
+            NSLog(@"kbselftest %d no key \"%@\" in layer %@", (int)step, arg, keyboard.keyLayer);
+    } else if ([verb isEqualToString: @"select"]) {
+        UITextPosition *end = m_inputLine.endOfDocument;
+        UITextPosition *start = [m_inputLine positionFromPosition: end offset: -2];
+        if (start)
+            m_inputLine.selectedTextRange = [m_inputLine textRangeFromPosition: start toPosition: end];
+    } else if ([verb isEqualToString: @"notes"]) {
+        if ([arg isEqualToString: @"show"])
+            [m_notesController show];
+        else if ([arg isEqualToString: @"edit"])
+            [m_notesController activateKeyboard]; // the player opening the notes keyboard
+        else
+            [m_notesController hide];
+    } else if ([verb isEqualToString: @"kb"]) {
+        if ([arg isEqualToString: @"show"])
+            [m_keyboardController showAnimated: NO];
+        else
+            [m_keyboardController hideAnimated: NO];
+    } else if ([verb isEqualToString: @"state"])
+        NSLog(@"kbselftest %d state source=%@ inAppShowing=%d kbShown=%d kbdSize=%@ lineFirstResponder=%d notesVisible=%d notesEditing=%d",
+              (int)step, m_keyboardSource == FrotzKeyboardSourceInApp ? @"InApp" : @"System", m_keyboardController.isShowing,
+              m_kbShown, NSStringFromCGSize(m_kbdSize), [m_inputLine isFirstResponder], m_notesController.isVisible,
+              m_notesController.isEditingNotes);
+    else if ([verb isEqualToString: @"clear"])
+        [m_inputLine setText: @""];
+    else if ([verb isEqualToString: @"hit"]) {
+        FrotzKeyboardView *keyboard = m_keyboardController.keyboardView;
+        CGPoint center = [keyboard centerOfKeyWithLabel: arg];
+        CGPoint pt = [keyboard convertPoint: center toView: nil];
+        UIView *hit = [keyboard.window hitTest: pt withEvent: nil];
+        NSLog(@"kbselftest %d hit %@ at %@ -> %@%@, key %@", (int)step, arg, NSStringFromCGPoint(pt), NSStringFromClass([hit class]),
+              hit == keyboard ? @" (keyboard)" : @" (NOT the keyboard)", [keyboard labelOfKeyAtPoint: center]);
+    } else if ([verb isEqualToString: @"type"]) {
+        [m_inputLine typeText: arg];
+        NSLog(@"kbselftest %d utf16 length=%lu", (int)step, (unsigned long)m_inputLine.text.length);
+    } else if ([verb isEqualToString: @"wait"])
+        next = [arg doubleValue];
+    else if ([verb isEqualToString: @"story"]) {
+        NSString *story = m_storyView.text ?: @"";
+        NSLog(@"kbselftest %d story tail=%@", (int)step, [story substringFromIndex: story.length > 160 ? story.length - 160 : 0]);
+    } else if ([verb isEqualToString: @"note"])
+        NSLog(@"kbselftest %d %@", (int)step, arg);
+    NSLog(@"kbselftest %d %@", (int)step, entry);
+    NSLog(@"kbselftest %d text=%@", (int)step, m_inputLine.text);
+    if ([m_inputLine.text hasSuffix: @" "])
+        NSLog(@"kbselftest %d (text ends in a space; the log trims it)", (int)step);
+    if ([arg isEqualToString: @"v"]) {
+        CompletionLabel *completion = [m_inputLine valueForKey: @"m_completionLabel"]; // DEBUG only; no accessor for it
+        NSLog(@"kbselftest %d completion=%@", (int)step, completion.superview ? completion.text : nil);
+    }
+    __weak StoryMainViewController *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(next * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf keyboardSelfTestStep: step + 1 ofScript: script];
+    });
 }
 #endif
 
@@ -1788,7 +1873,7 @@ extern void gli_ios_set_focus(window_t *winNum);
     else
         [self scheduleVerticalBarMeasurement]; // the keyboard's did-show handles the other case
 #if DEBUG
-    [self showFakeInAppKeyboardIfRequested]; // DEBUG scaffolding, removed by the in-app keyboard task
+    [self showInAppKeyboardIfRequested];
 #endif
 }
 
@@ -1869,7 +1954,10 @@ extern void gli_ios_set_focus(window_t *winNum);
 {
     BOOL kbdWasShown = m_kbShown;
     // Not unlocked here: the keyboard may stay locked when hidden by triple-tap.
-    [m_inputLine resignFirstResponder];
+    if ([self usesInAppKeyboard])
+        [m_keyboardController hideAnimated: YES]; // reports the region hidden; no notifications come
+    else
+        [m_inputLine resignFirstResponder];
     [self showKeyboardLockState];
     return kbdWasShown ? m_inputLine : nil;
 }
@@ -1883,7 +1971,9 @@ extern void gli_ios_set_focus(window_t *winNum);
             // Re-requesting first responder for the field that already has it makes UIKit post
             // keyboardWillShow/DidShow again, which (via the scrolling those handlers do) can
             // re-enter here and loop.
-            if (![m_inputLine isFirstResponder])
+            if ([self usesInAppKeyboard])
+                [m_keyboardController showAnimated: YES];
+            else if (![m_inputLine isFirstResponder])
                 [m_inputLine becomeFirstResponder];
         } else
             m_kbShown = YES; // will becomeFirsResponder in viewDidAppear
@@ -1893,6 +1983,13 @@ extern void gli_ios_set_focus(window_t *winNum);
 -(void)hideNotes {
     if (m_notesController)
         [m_notesController hide];
+}
+
+-(void)notesPageDidBecomeVisible:(BOOL)visible keyboardFollows:(BOOL)keyboardFollows {
+    if (visible)
+        [m_keyboardController notesPageDidBecomeVisibleKeyboardFollows: keyboardFollows];
+    else
+        [m_keyboardController storyPageDidBecomeVisible];
 }
 
 -(void)unlockKeyboard {
@@ -1911,7 +2008,9 @@ extern void gli_ios_set_focus(window_t *winNum);
         }
     }
     [self unlockKeyboard];
-    if (m_kbShown)
+    if ([self usesInAppKeyboard])
+        [m_keyboardController toggleAnimated: YES];
+    else if (m_kbShown)
         [m_inputLine resignFirstResponder];
     else
         [m_inputLine becomeFirstResponder];
@@ -1980,7 +2079,7 @@ static UIImage *GlkGetImageCallback(int imageNum) {
     self.automaticallyAdjustsScrollViewInsets = NO;
     self.view = [[UIView alloc] initWithFrame:frame];
     m_postureObserver = [[FrotzPostureObserver alloc] initWithView: self.view];
-    m_postureObserver.delegate = self;
+    m_keyboardController = [[FrotzKeyboardController alloc] initWithStoryController: self postureObserver: m_postureObserver]; // takes the observer's delegate
     float navHeight = self.view.safeAreaInsets.top;
     frame.origin.y = navHeight;
     frame.size.height -= navHeight;
@@ -2250,14 +2349,6 @@ static UIImage *GlkGetImageCallback(int imageNum) {
 // and put it back when the items return to the horizontal bar.
 -(void)updateTitleViewForVerticalBar {
     self.navigationItem.titleView = [self hasVerticalBar] ? nil : [m_frotzInfoController view];
-}
-
-// Only logged for now; the keyboard layouts that keep clear of the fold build on it.
--(void)postureObserverDidChange:(FrotzPostureObserver *)observer {
-#if DEBUG
-    NSLog(@"posture=%ld angle=%.0f fold=%@ laptop=%d", (long)observer.posture, observer.hingeAngleDegrees,
-          NSStringFromCGRect(observer.foldFrameInView), observer.isLaptopPosture);
-#endif
 }
 
 // YES when the system is placing bar items on a vertical bar along one edge (iPhone Duo, iOS 27.1
@@ -2847,21 +2938,24 @@ static CGSize KeyboardOverlapInWindow(CGRect frameInView, UIView *view) {
 }
 
 -(void) setInAppKeyboardActive:(BOOL)active {
+    // The gated handlers won't see the outgoing keyboard leave, so clear what was laid out for it
+    // first; the incoming system keyboard's notifications then start from a clean state. While the
+    // in-app source is on, m_kbShown records only the in-app keyboard.
+    BOOL wasActive = m_keyboardSource == FrotzKeyboardSourceInApp;
+    if (active != wasActive && m_kbShown) {
+        FrotzKeyboardSource outgoing = wasActive ? FrotzKeyboardSourceInApp : FrotzKeyboardSourceSystem;
+        [self keyboardRegionWillChange: CGRectZero visible: NO source: outgoing animationDuration: 0.3];
+        [self keyboardRegionDidChange: CGRectZero visible: NO source: outgoing];
+    }
     // An empty inputView keeps the input line first responder (caret, hardware keys) with no
     // system keyboard over the in-app one.
     m_inputLine.inputView = active ? [[UIView alloc] initWithFrame: CGRectZero] : nil;
     m_keyboardSource = active ? FrotzKeyboardSourceInApp : FrotzKeyboardSourceSystem;
-    // The gated handlers never saw the system keyboard leave, so forget the frames they laid out
-    // for, or its return would be dropped as a repeat.
+    // Nor did they see the system keyboard leave, so forget the frames they laid out for, or its
+    // return would be dropped as a repeat.
     m_handledKbWillShowFrame = m_handledKbDidShowFrame = CGRectNull;
-    BOOL isFirstResponder = [m_inputLine isFirstResponder];
-    if (isFirstResponder)
+    if ([m_inputLine isFirstResponder])
         [m_inputLine reloadInputViews];
-    // A first responder gets the system keyboard back, and its notifications redo the layout.
-    if (!active && !isFirstResponder) {
-        [self keyboardRegionWillChange: CGRectZero visible: NO source: FrotzKeyboardSourceSystem animationDuration: 0.3];
-        [self keyboardRegionDidChange: CGRectZero visible: NO source: FrotzKeyboardSourceSystem];
-    }
 }
 
 -(BOOL) isKBShown {
@@ -4860,6 +4954,13 @@ static void setScreenDims(char *storyNameBuf) {
 - (UIMenu *)textField:(UITextField *)textField editMenuForCharactersInRanges:(NSArray<NSValue *> *)ranges
      suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(26.0)) {
     return [self inputLineEditMenuWithSuggestedActions: suggestedActions];
+}
+
+// Re-requesting first responder (after settings, on return to the foreground) brings the
+// system keyboard back; do the same for the in-app one.
+- (void)textFieldDidBeginEditing:(UITextField *)textField {
+    if (textField == m_inputLine && [self usesInAppKeyboard])
+        [m_keyboardController inputLineDidBeginEditing];
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {

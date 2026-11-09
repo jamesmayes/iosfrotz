@@ -13,6 +13,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 @protocol LockableKeyboard <NSObject>
 -(void)showKeyboardLockState;
+@optional
+// Before first responder can move to or from the notes. keyboardFollows: the notes view is about to
+// take the keyboard over from the input line (a swipe), rather than the page changing on its own.
+-(void)notesPageDidBecomeVisible:(BOOL)visible keyboardFollows:(BOOL)keyboardFollows;
 @end
 
 @interface NotesViewController : UIViewController <UIScrollViewDelegate, UITextViewDelegate, FileSelected> {
@@ -45,6 +49,7 @@ NS_ASSUME_NONNULL_BEGIN
 -(void) keyboardWillShow:(CGRect)kbBounds;
 -(void) keyboardWillHide;
 @property (nonatomic, getter=isVisible, readonly) BOOL visible;
+@property (nonatomic, readonly) BOOL isEditingNotes;    // the notes text view is first responder
 -(void)show;
 -(void)hide;
 -(void)loadView;

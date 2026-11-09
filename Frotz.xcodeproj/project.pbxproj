@@ -347,6 +347,7 @@
 		44EDC1032494267B0074E8B0 /* Launch Screen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 44EDC1022494267B0074E8B0 /* Launch Screen.storyboard */; };
 		44F2F5B811447AE0001AE868 /* CompletionLabel.m in Sources */ = {isa = PBXBuildFile; fileRef = 44F2F5B711447AE0001AE868 /* CompletionLabel.m */; };
 		F7A3C2E14B9D0A6E00C1D203 /* FrotzPostureObserver.m in Sources */ = {isa = PBXBuildFile; fileRef = F7A3C2E14B9D0A6E00C1D202 /* FrotzPostureObserver.m */; };
+		F7A3C2E14B9D0A6E00C1D303 /* FrotzKeyboardController.m in Sources */ = {isa = PBXBuildFile; fileRef = F7A3C2E14B9D0A6E00C1D302 /* FrotzKeyboardController.m */; };
 		6504CC755AE88CA78EE858B3 /* FrotzKeyboardLayout.m in Sources */ = {isa = PBXBuildFile; fileRef = A6855C81C4EAAAABFD9F4334 /* FrotzKeyboardLayout.m */; };
 		85060105417650D969B4B2EA /* FrotzKeyboardView.m in Sources */ = {isa = PBXBuildFile; fileRef = ABB43E3E2F7B64F142B43BBB /* FrotzKeyboardView.m */; };
 		88A9FAE3C2059E8452ACF56A /* keyboards in Resources */ = {isa = PBXBuildFile; fileRef = AA42488D14CF8C9B9A9E1371 /* keyboards */; };
@@ -1191,8 +1192,11 @@
 		44F2F5B711447AE0001AE868 /* CompletionLabel.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = CompletionLabel.m; sourceTree = "<group>"; };
 		F7A3C2E14B9D0A6E00C1D201 /* FrotzPostureObserver.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = FrotzPostureObserver.h; sourceTree = "<group>"; };
 		F7A3C2E14B9D0A6E00C1D202 /* FrotzPostureObserver.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = FrotzPostureObserver.m; sourceTree = "<group>"; };
+		F7A3C2E14B9D0A6E00C1D301 /* FrotzKeyboardController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = FrotzKeyboardController.h; sourceTree = "<group>"; };
+		F7A3C2E14B9D0A6E00C1D302 /* FrotzKeyboardController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = FrotzKeyboardController.m; sourceTree = "<group>"; };
 		31A37B2AB4B2B8CB6FE9AE26 /* FrotzKeyboardLayout.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = FrotzKeyboardLayout.h; sourceTree = "<group>"; };
 		A6855C81C4EAAAABFD9F4334 /* FrotzKeyboardLayout.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = FrotzKeyboardLayout.m; sourceTree = "<group>"; };
+		F7A3C2E14B9D0A6E00C1D304 /* FrotzKeyboardTypes.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = FrotzKeyboardTypes.h; sourceTree = "<group>"; };
 		DB1D207F27A5508E67172048 /* FrotzKeyboardView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = FrotzKeyboardView.h; sourceTree = "<group>"; };
 		ABB43E3E2F7B64F142B43BBB /* FrotzKeyboardView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = FrotzKeyboardView.m; sourceTree = "<group>"; };
 		AA42488D14CF8C9B9A9E1371 /* keyboards */ = {isa = PBXFileReference; lastKnownFileType = folder; name = keyboards; path = resources/keyboards; sourceTree = SOURCE_ROOT; };
@@ -1320,8 +1324,11 @@
 				44F2F5B711447AE0001AE868 /* CompletionLabel.m */,
 				F7A3C2E14B9D0A6E00C1D201 /* FrotzPostureObserver.h */,
 				F7A3C2E14B9D0A6E00C1D202 /* FrotzPostureObserver.m */,
+				F7A3C2E14B9D0A6E00C1D301 /* FrotzKeyboardController.h */,
+				F7A3C2E14B9D0A6E00C1D302 /* FrotzKeyboardController.m */,
 				31A37B2AB4B2B8CB6FE9AE26 /* FrotzKeyboardLayout.h */,
 				A6855C81C4EAAAABFD9F4334 /* FrotzKeyboardLayout.m */,
+				F7A3C2E14B9D0A6E00C1D304 /* FrotzKeyboardTypes.h */,
 				DB1D207F27A5508E67172048 /* FrotzKeyboardView.h */,
 				ABB43E3E2F7B64F142B43BBB /* FrotzKeyboardView.m */,
 				446B9EA50E2075D1002BDD65 /* FileBrowser.h */,
@@ -2666,6 +2673,7 @@
 				44FB39FA0E62406C00142D85 /* ColorPicker.m in Sources */,
 				44F2F5B811447AE0001AE868 /* CompletionLabel.m in Sources */,
 				F7A3C2E14B9D0A6E00C1D203 /* FrotzPostureObserver.m in Sources */,
+				F7A3C2E14B9D0A6E00C1D303 /* FrotzKeyboardController.m in Sources */,
 				6504CC755AE88CA78EE858B3 /* FrotzKeyboardLayout.m in Sources */,
 				85060105417650D969B4B2EA /* FrotzKeyboardView.m in Sources */,
 				446B9EAB0E2075D1002BDD65 /* FileBrowser.m in Sources */,

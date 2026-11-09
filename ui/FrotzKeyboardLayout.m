@@ -41,38 +41,75 @@ static NSDictionary *LoadKeyboardJSON(NSString *itemID, NSString *file) {
     return obj;
 }
 
-static id Typed(NSDictionary *dict, NSString *key, Class cls) {
-    id value = dict[key];
-    return [value isKindOfClass: cls] ? value : nil;
+// Optional fields: an absent one keeps its default, but one that is present and wrong spoils the
+// file. Problems collect in *error, and the first one found is the one reported.
+static void Fail(NSString **error, NSString *why) {
+    if (!*error)
+        *error = why;
 }
 
-static CGFloat NumberOr(NSDictionary *dict, NSString *key, CGFloat fallback) {
-    NSNumber *n = Typed(dict, key, [NSNumber class]);
+static id Optional(NSDictionary *dict, NSString *key, Class cls, NSString **error) {
+    id value = dict[key];
+    if (!value)
+        return nil;
+    // JSON true/false arrive as NSNumber; a number field wants a real number.
+    BOOL isBool = CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID();
+    if (![value isKindOfClass: cls] || (isBool && cls == [NSNumber class])) {
+        NSString *kind = cls == [NSString class] ? @"a string" : cls == [NSNumber class] ? @"a number"
+                       : cls == [NSArray class] ? @"an array" : @"an object";
+        Fail(error, [NSString stringWithFormat: @"\"%@\" is not %@", key, kind]);
+        return nil;
+    }
+    return value;
+}
+
+static NSNumber *OptionalBool(NSDictionary *dict, NSString *key, NSString **error) {
+    id value = dict[key];
+    if (value && ![value isKindOfClass: [NSNumber class]]) {
+        Fail(error, [NSString stringWithFormat: @"\"%@\" is not true or false", key]);
+        return nil;
+    }
+    return value;
+}
+
+static CGFloat OptionalNumber(NSDictionary *dict, NSString *key, CGFloat fallback, NSString **error) {
+    NSNumber *n = Optional(dict, key, [NSNumber class], error);
     return n ? [n doubleValue] : fallback;
 }
 
+// "#RRGGBB" and nothing else.
 static UIColor *ColorFromHex(id value) {
-    if (![value isKindOfClass: [NSString class]])
-        return nil;
-    NSString *hex = value;
-    if ([hex hasPrefix: @"#"])
-        hex = [hex substringFromIndex: 1];
-    if (hex.length != 6)
+    static NSRegularExpression *pattern;
+    if (!pattern)
+        pattern = [NSRegularExpression regularExpressionWithPattern: @"^#[0-9A-Fa-f]{6}$" options: 0 error: nil];
+    if (![value isKindOfClass: [NSString class]]
+        || ![pattern firstMatchInString: value options: 0 range: NSMakeRange(0, [value length])])
         return nil;
     unsigned int rgb = 0;
-    NSScanner *scanner = [NSScanner scannerWithString: hex];
-    if (![scanner scanHexInt: &rgb] || !scanner.atEnd)
-        return nil;
+    [[NSScanner scannerWithString: [value substringFromIndex: 1]] scanHexInt: &rgb];
     return [UIColor colorWithRed: ((rgb >> 16) & 0xFF) / 255.0 green: ((rgb >> 8) & 0xFF) / 255.0
                             blue: (rgb & 0xFF) / 255.0 alpha: 1.0];
 }
 
-// A light/dark pair from {"light": ..., "dark": ...}; a missing dark uses light.
-static UIColor *DynamicColor(NSDictionary *dict, NSString *lightKey, NSString *darkKey) {
-    UIColor *light = ColorFromHex(dict[lightKey]);
+static UIColor *OptionalColor(NSDictionary *dict, NSString *key, NSString **error) {
+    id value = dict[key];
+    if (!value)
+        return nil;
+    UIColor *color = ColorFromHex(value);
+    if (!color)
+        Fail(error, [NSString stringWithFormat: @"\"%@\" is not #RRGGBB", key]);
+    return color;
+}
+
+// A light/dark pair from {"light": ..., "dark": ...}; a missing dark uses light. Nil if light is absent.
+static UIColor *DynamicColor(NSDictionary *dict, NSString *lightKey, NSString *darkKey, NSString **error) {
+    UIColor *light = OptionalColor(dict, lightKey, error);
+    UIColor *dark = OptionalColor(dict, darkKey, error);
+    if (dark && !dict[lightKey])
+        Fail(error, [NSString stringWithFormat: @"\"%@\" without \"%@\"", darkKey, lightKey]);
     if (!light)
         return nil;
-    UIColor *dark = ColorFromHex(dict[darkKey]) ?: light;
+    dark = dark ?: light;
     return [UIColor colorWithDynamicProvider: ^UIColor *(UITraitCollection *tc) {
         return tc.userInterfaceStyle == UIUserInterfaceStyleDark ? dark : light;
     }];
@@ -115,37 +152,37 @@ static UIColor *DynamicColor(NSDictionary *dict, NSString *lightKey, NSString *d
 
 +(nullable instancetype)keyWithJSON:(id)json error:(NSString **)error {
     if (![json isKindOfClass: [NSDictionary class]]) {
-        *error = @"a key is not an object";
+        Fail(error, @"a key is not an object");
         return nil;
     }
     NSDictionary *dict = json;
-    NSString *label = Typed(dict, @"label", [NSString class]);
+    NSString *label = Optional(dict, @"label", [NSString class], error);
     if (!label) {
-        *error = @"a key has no label";
+        Fail(error, @"a key has no label");
         return nil;
     }
-    NSString *actionName = Typed(dict, @"action", [NSString class]) ?: @"text";
+    NSString *actionName = Optional(dict, @"action", [NSString class], error) ?: @"text";
     NSNumber *action = [self actionNames][actionName];
-    if (!action) {
-        *error = [NSString stringWithFormat: @"unknown action \"%@\"", actionName];
-        return nil;
-    }
+    if (!action)
+        Fail(error, [NSString stringWithFormat: @"unknown action \"%@\"", actionName]);
     FrotzKeyAction a = [action integerValue];
-    NSString *text = Typed(dict, @"text", [NSString class]);
+    NSString *text = Optional(dict, @"text", [NSString class], error);
     if (!text)
         text = a == FrotzKeyActionSpace ? @" " : label;
     BOOL repeatsByDefault = (a == FrotzKeyActionBackspace || a == FrotzKeyActionUp || a == FrotzKeyActionDown
                              || a == FrotzKeyActionLeft || a == FrotzKeyActionRight);
-    NSNumber *repeats = Typed(dict, @"repeat", [NSNumber class]);
-    CGFloat width = NumberOr(dict, @"width", 1);
-    if (width <= 0) {
-        *error = @"a key has a width of zero or less";
+    NSNumber *repeats = OptionalBool(dict, @"repeat", error);
+    CGFloat width = OptionalNumber(dict, @"width", 1, error);
+    if (width <= 0)
+        Fail(error, @"a key has a width of zero or less");
+    NSString *group = Optional(dict, @"group", [NSString class], error) ?: @"alpha";
+    NSString *sublabel = Optional(dict, @"sublabel", [NSString class], error);
+    if (*error) {
+        *error = [NSString stringWithFormat: @"key \"%@\": %@", label, *error];
         return nil;
     }
-    return [[self alloc] initWithLabel: label text: text action: a width: width
-                                 group: Typed(dict, @"group", [NSString class]) ?: @"alpha"
-                               repeats: repeats ? [repeats boolValue] : repeatsByDefault
-                              sublabel: Typed(dict, @"sublabel", [NSString class])];
+    return [[self alloc] initWithLabel: label text: text action: a width: width group: group
+                               repeats: repeats ? [repeats boolValue] : repeatsByDefault sublabel: sublabel];
 }
 
 -(FrotzKeyboardKey *)upperCasedKey {
@@ -187,15 +224,21 @@ static UIColor *DynamicColor(NSDictionary *dict, NSString *lightKey, NSString *d
 
 static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     if (![json isKindOfClass: [NSArray class]] || [json count] == 0) {
-        *error = @"a layer is not a non-empty array of rows";
+        Fail(error, @"a layer is not a non-empty array of rows");
         return nil;
     }
     NSMutableArray *rows = [NSMutableArray array];
     for (id rowJSON in json) {
-        if (![rowJSON isKindOfClass: [NSDictionary class]] || ![rowJSON[@"keys"] isKindOfClass: [NSArray class]]) {
-            *error = @"a row has no keys array";
+        if (![rowJSON isKindOfClass: [NSDictionary class]] || ![rowJSON[@"keys"] isKindOfClass: [NSArray class]]
+            || [rowJSON[@"keys"] count] == 0) {
+            Fail(error, @"a row has no keys");
             return nil;
         }
+        CGFloat indent = OptionalNumber(rowJSON, @"indent", 0, error);
+        if (indent < 0)
+            Fail(error, @"a row has a negative indent");
+        if (*error)
+            return nil;
         NSMutableArray *keys = [NSMutableArray array];
         for (id keyJSON in rowJSON[@"keys"]) {
             FrotzKeyboardKey *key = [FrotzKeyboardKey keyWithJSON: keyJSON error: error];
@@ -203,7 +246,7 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
                 return nil;
             [keys addObject: key];
         }
-        [rows addObject: [[FrotzKeyboardRow alloc] initWithIndent: NumberOr(rowJSON, @"indent", 0) keys: keys]];
+        [rows addObject: [[FrotzKeyboardRow alloc] initWithIndent: indent keys: keys]];
     }
     return rows;
 }
@@ -212,20 +255,30 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     NSDictionary *json = LoadKeyboardJSON(layoutID, @"layout.json");
     if (!json)
         return nil;
-    NSDictionary *layersJSON = Typed(json, @"layers", [NSDictionary class]);
     NSString *error = nil;
+    NSString *name = Optional(json, @"name", [NSString class], &error) ?: layoutID;
+    CGFloat keyAspect = OptionalNumber(json, @"keyAspect", 1.0, &error);
+    if (keyAspect <= 0)
+        Fail(&error, @"keyAspect is zero or less");
+    CGFloat gap = OptionalNumber(json, @"gap", 6, &error);
+    if (gap < 0)
+        Fail(&error, @"gap is negative");
+    NSDictionary *layersJSON = Optional(json, @"layers", [NSDictionary class], &error);
     NSMutableDictionary *layers = [NSMutableDictionary dictionary];
-    for (NSString *name in layersJSON) {
-        NSArray *rows = ParseRows(layersJSON[name], &error);
-        if (!rows) {
-            LogMalformed(@"layout.json", layoutID, [NSString stringWithFormat: @"layer \"%@\": %@", name, error]);
-            return nil;
-        }
-        layers[name] = rows;
+    for (NSString *layerName in layersJSON) {
+        if (error)
+            break;
+        NSArray *rows = ParseRows(layersJSON[layerName], &error);
+        if (!rows)
+            error = [NSString stringWithFormat: @"layer \"%@\": %@", layerName, error];
+        else
+            layers[layerName] = rows;
     }
     NSArray<FrotzKeyboardRow *> *defaultRows = layers[FrotzKeyboardLayerDefault];
-    if (!defaultRows) {
-        LogMalformed(@"layout.json", layoutID, @"no default layer");
+    if (!defaultRows)
+        Fail(&error, @"no default layer");
+    if (error) {
+        LogMalformed(@"layout.json", layoutID, error);
         return nil;
     }
     if (!layers[FrotzKeyboardLayerShift]) {
@@ -238,16 +291,17 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
         }
         layers[FrotzKeyboardLayerShift] = shiftRows;
     }
-    return [[self alloc] initWithID: layoutID json: json layers: layers];
+    return [[self alloc] initWithID: layoutID name: name layers: layers keyAspect: MAX(0.1, keyAspect) gap: gap];
 }
 
--(instancetype)initWithID:(NSString *)layoutID json:(NSDictionary *)json layers:(NSDictionary *)layers {
+-(instancetype)initWithID:(NSString *)layoutID name:(NSString *)name layers:(NSDictionary *)layers
+                keyAspect:(CGFloat)keyAspect gap:(CGFloat)gap {
     if ((self = [super init])) {
         _layoutID = [layoutID copy];
-        _name = [(Typed(json, @"name", [NSString class]) ?: layoutID) copy];
+        _name = [name copy];
         _layers = [layers copy];
-        _keyAspect = MAX(0.1, NumberOr(json, @"keyAspect", 1.0));
-        _gap = MAX(0, NumberOr(json, @"gap", 6));
+        _keyAspect = keyAspect;
+        _gap = gap;
         for (NSArray<FrotzKeyboardRow *> *rows in [layers objectEnumerator]) {
             _maxRowCount = MAX(_maxRowCount, rows.count);
             for (FrotzKeyboardRow *row in rows)
@@ -289,52 +343,70 @@ static NSArray<FrotzKeyboardRow *> *ParseRows(id json, NSString **error) {
     NSDictionary *json = LoadKeyboardJSON(skinID, @"skin.json");
     if (!json)
         return nil;
-    NSDictionary *key = Typed(json, @"key", [NSDictionary class]);
-    UIColor *caseColor = DynamicColor(Typed(json, @"case", [NSDictionary class]), @"light", @"dark");
-    UIColor *keyColor = DynamicColor(key, @"light", @"dark");
-    UIColor *textColor = DynamicColor(key, @"textLight", @"textDark");
-    if (!caseColor || !keyColor || !textColor) {
-        LogMalformed(@"skin.json", skinID, @"case or key colours missing or not #RRGGBB");
-        return nil;
-    }
+    NSString *error = nil;
+    NSDictionary *key = Optional(json, @"key", [NSDictionary class], &error);
+    UIColor *caseColor = DynamicColor(Optional(json, @"case", [NSDictionary class], &error), @"light", @"dark", &error);
+    UIColor *keyColor = DynamicColor(key, @"light", @"dark", &error);
+    UIColor *textColor = DynamicColor(key, @"textLight", @"textDark", &error);
+    if (!caseColor || !keyColor || !textColor)
+        Fail(&error, @"case or key colours missing");
+    UIColor *pressedColor = DynamicColor(key, @"pressedLight", @"pressedDark", &error);
     NSDictionary *profiles = @{ @"flat": @(FrotzKeyProfileFlat), @"rounded": @(FrotzKeyProfileRounded),
                                 @"sculpted": @(FrotzKeyProfileSculpted), @"chiclet": @(FrotzKeyProfileChiclet) };
-    NSString *profileName = Typed(json, @"profile", [NSString class]) ?: @"rounded";
-    if (!profiles[profileName]) {
-        LogMalformed(@"skin.json", skinID, [NSString stringWithFormat: @"unknown profile \"%@\"", profileName]);
-        return nil;
-    }
-    FrotzKeyboardSkin *skin = [[self alloc] init];
-    skin->_skinID = [skinID copy];
-    skin->_name = [(Typed(json, @"name", [NSString class]) ?: skinID) copy];
-    skin->_profile = [profiles[profileName] integerValue];
-    NSDictionary *bezel = Typed(json, @"bezel", [NSDictionary class]);
-    CGFloat sides = NumberOr(bezel, @"sides", 4);
-    skin->_bezelInsets = UIEdgeInsetsMake(NumberOr(bezel, @"top", 8), sides, NumberOr(bezel, @"bottom", 8), sides);
-    skin->_cornerRadius = skin->_profile == FrotzKeyProfileFlat ? 0 : NumberOr(key, @"radius", 6);
-    skin->_shadow = skin->_profile == FrotzKeyProfileRounded || skin->_profile == FrotzKeyProfileChiclet
-                    ? [Typed(key, @"shadow", [NSNumber class]) boolValue] : NO;
-    skin->_caseColor = caseColor;
-    skin->m_keyColor = keyColor;
-    skin->m_textColor = textColor;
-    skin->m_pressedColor = DynamicColor(key, @"pressedLight", @"pressedDark") ?: keyColor;
-    skin->m_fontName = Typed(key, @"font", [NSString class]) ?: @"system";
-    skin->m_fontSize = MAX(6, NumberOr(key, @"fontSize", 22));
+    NSString *profileName = Optional(json, @"profile", [NSString class], &error) ?: @"rounded";
+    if (!profiles[profileName])
+        Fail(&error, [NSString stringWithFormat: @"unknown profile \"%@\"", profileName]);
+    NSString *name = Optional(json, @"name", [NSString class], &error) ?: skinID;
+    NSDictionary *bezel = Optional(json, @"bezel", [NSDictionary class], &error);
+    CGFloat sides = OptionalNumber(bezel, @"sides", 4, &error);
+    CGFloat top = OptionalNumber(bezel, @"top", 8, &error), bottom = OptionalNumber(bezel, @"bottom", 8, &error);
+    if (sides < 0 || top < 0 || bottom < 0)
+        Fail(&error, @"a bezel inset is negative");
+    CGFloat radius = OptionalNumber(key, @"radius", 6, &error);
+    if (radius < 0)
+        Fail(&error, @"radius is negative");
+    NSNumber *shadow = OptionalBool(key, @"shadow", &error);
+    NSString *fontName = Optional(key, @"font", [NSString class], &error) ?: @"system";
+    CGFloat fontSize = OptionalNumber(key, @"fontSize", 22, &error);
+    if (fontSize <= 0)
+        Fail(&error, @"fontSize is zero or less");
 
     NSMutableDictionary *keyColors = [NSMutableDictionary dictionary], *pressed = [NSMutableDictionary dictionary],
                         *text = [NSMutableDictionary dictionary];
-    NSDictionary *groups = Typed(json, @"groups", [NSDictionary class]);
+    NSDictionary *groups = Optional(json, @"groups", [NSDictionary class], &error);
     for (NSString *group in groups) {
-        NSDictionary *g = Typed(groups, group, [NSDictionary class]);
-        UIColor *c = DynamicColor(g, @"light", @"dark");
+        NSString *groupError = nil;
+        NSDictionary *g = Optional(groups, group, [NSDictionary class], &groupError);
+        UIColor *c = DynamicColor(g, @"light", @"dark", &groupError);
         if (c)
             keyColors[group] = c;
         // A pressed modifier lights up like a letter key, as on iOS.
-        pressed[group] = DynamicColor(g, @"pressedLight", @"pressedDark") ?: keyColor;
-        UIColor *t = DynamicColor(g, @"textLight", @"textDark");
+        pressed[group] = DynamicColor(g, @"pressedLight", @"pressedDark", &groupError) ?: keyColor ?: [UIColor clearColor];
+        UIColor *t = DynamicColor(g, @"textLight", @"textDark", &groupError);
         if (t)
             text[group] = t;
+        if (groupError)
+            Fail(&error, [NSString stringWithFormat: @"group \"%@\": %@", group, groupError]);
     }
+    if (error) {
+        LogMalformed(@"skin.json", skinID, error);
+        return nil;
+    }
+
+    FrotzKeyboardSkin *skin = [[self alloc] init];
+    skin->_skinID = [skinID copy];
+    skin->_name = [name copy];
+    skin->_profile = [profiles[profileName] integerValue];
+    skin->_bezelInsets = UIEdgeInsetsMake(top, sides, bottom, sides);
+    skin->_cornerRadius = skin->_profile == FrotzKeyProfileFlat ? 0 : radius;
+    skin->_shadow = skin->_profile == FrotzKeyProfileRounded || skin->_profile == FrotzKeyProfileChiclet
+                    ? [shadow boolValue] : NO;
+    skin->_caseColor = caseColor;
+    skin->m_keyColor = keyColor;
+    skin->m_textColor = textColor;
+    skin->m_pressedColor = pressedColor ?: keyColor;
+    skin->m_fontName = fontName;
+    skin->m_fontSize = MAX(6, fontSize);
     skin->m_keyColors = keyColors;
     skin->m_pressedColors = pressed;
     skin->m_textColors = text;

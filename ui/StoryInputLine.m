@@ -692,4 +692,40 @@ const int kCompletionViewTag = 21;
     iosif_feed_input(@"\x1b");
 }
 
+-(void)typeSpecialKey:(FrotzKeyboardSpecialKey)key {
+    // Left, right and escape only mean something to the game in single-key mode (where the key
+    // commands send them); while editing a line, left and right move the caret instead.
+    BOOL singleKey = (ipzAllowInput & kIPZNoEcho) || cwin == 1;
+    NSString *text = self.text ?: @"";
+    NSRange r = [self selectedCharacterRange];
+    switch (key) {
+        case FrotzKeyboardSpecialKeyUp:
+            [self upArrow: nil];
+            break;
+        case FrotzKeyboardSpecialKeyDown:
+            [self downArrow: nil];
+            break;
+        case FrotzKeyboardSpecialKeyLeft:
+            if (singleKey)
+                [self leftArrow: nil];
+            else if (r.length)
+                [self setCaretOffset: r.location];
+            else if (r.location > 0)
+                [self setCaretOffset: [text rangeOfComposedCharacterSequenceAtIndex: r.location-1].location];
+            break;
+        case FrotzKeyboardSpecialKeyRight:
+            if (singleKey)
+                [self rightArrow: nil];
+            else if (r.length)
+                [self setCaretOffset: NSMaxRange(r)];
+            else if (r.location < text.length)
+                [self setCaretOffset: NSMaxRange([text rangeOfComposedCharacterSequenceAtIndex: r.location])];
+            break;
+        case FrotzKeyboardSpecialKeyEscape:
+            if (singleKey)
+                [self escapeKey: nil];
+            break;
+    }
+}
+
 @end

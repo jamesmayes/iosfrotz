@@ -5,9 +5,10 @@
 
 #import "FrotzKeyboardView.h"
 
-static const CGFloat kMinKeyHeight = 36, kMaxKeyHeight = 64;
+static const CGFloat kMinKeyHeight = 36, kMaxKeyHeight = 64, kMaxFillKeyHeight = 96;
 static const NSTimeInterval kRepeatDelay = 0.4, kRepeatInterval = 0.08;
 static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
+static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down and up; only a real slide-off cancels
 
 #pragma mark - Key view
 
@@ -129,8 +130,8 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
 @end
 
 @interface FrotzKeyboardView ()
--(void)keyTouchDown:(FrotzKeyView *)keyView;
--(void)keyTouchUp:(FrotzKeyView *)keyView inside:(BOOL)inside;
+-(void)keyTouchDown:(FrotzKeyView *)keyView touch:(nullable UITouch *)touch;
+-(void)keyTouchUp:(FrotzKeyView *)keyView touch:(nullable UITouch *)touch inside:(BOOL)inside;
 @end
 
 @implementation FrotzKeyAccessibilityElement
@@ -140,8 +141,8 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
     FrotzKeyView *keyView = self.keyView;
     if (!keyView)
         return NO;
-    [keyboard keyTouchDown: keyView];
-    [keyboard keyTouchUp: keyView inside: YES];
+    [keyboard keyTouchDown: keyView touch: nil];
+    [keyboard keyTouchUp: keyView touch: nil inside: YES];
     return YES;
 }
 
@@ -154,6 +155,8 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
     NSMapTable<UITouch *, FrotzKeyView *> *m_touchKeys;
     NSTimer *m_repeatTimer;
     FrotzKeyView *m_repeatKey;
+    UITouch *m_repeatTouch;    // the touch that owns the repeat; nil for accessibility and DEBUG taps
+    BOOL m_keysRebuilt;        // tell VoiceOver once the new elements are in place
     NSTimeInterval m_lastShiftTap;
     UIImpactFeedbackGenerator *m_feedback;
 }
@@ -177,13 +180,31 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
     [m_repeatTimer invalidate];
 }
 
+// One unit of key width in a view this wide, after the side safe areas, bezel and gaps.
+// Never below a point, so a view too narrow for its gaps squashes keys rather than flips them.
+-(CGFloat)unitWidthForWidth:(CGFloat)width {
+    UIEdgeInsets safe = self.safeAreaInsets, bezel = _skin.bezelInsets;
+    CGFloat units = MAX(1, _layout.unitsPerRow), gap = _layout.gap;
+    return MAX(1, (width - safe.left - safe.right - bezel.left - bezel.right - (units - 1) * gap) / units);
+}
+
 -(CGFloat)preferredHeightForWidth:(CGFloat)width {
     UIEdgeInsets bezel = _skin.bezelInsets;
-    CGFloat units = MAX(1, _layout.unitsPerRow), gap = _layout.gap;
+    CGFloat gap = _layout.gap;
     NSUInteger rows = _layout.maxRowCount;
-    CGFloat keyHeight = ((width - bezel.left - bezel.right - (units - 1) * gap) / units) / _layout.keyAspect;
+    CGFloat keyHeight = [self unitWidthForWidth: width] / _layout.keyAspect;
     keyHeight = MIN(kMaxKeyHeight, MAX(kMinKeyHeight, keyHeight));
     return ceil(bezel.top + bezel.bottom + rows * keyHeight + (rows > 0 ? rows - 1 : 0) * gap);
+}
+
+-(void)setTopInset:(CGFloat)topInset {
+    _topInset = topInset;
+    [self setNeedsLayout];
+}
+
+-(void)setFillsHeight:(BOOL)fillsHeight {
+    _fillsHeight = fillsHeight;
+    [self setNeedsLayout];
 }
 
 #pragma mark Layers and shift
@@ -226,8 +247,8 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
         }
     }
     [self updateLatchedKeys];
+    m_keysRebuilt = YES;
     [self setNeedsLayout];
-    UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, nil);
 }
 
 #pragma mark Layout
@@ -235,10 +256,14 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
 -(void)layoutSubviews {
     [super layoutSubviews];
     CGRect rect = UIEdgeInsetsInsetRect(UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets), _skin.bezelInsets);
-    CGFloat units = MAX(1, _layout.unitsPerRow), gap = _layout.gap;
+    rect.origin.y += _topInset;
+    rect.size.height = MAX(0, rect.size.height - _topInset);
+    CGFloat gap = _layout.gap;
     NSUInteger rows = MAX(1, _layout.maxRowCount);
-    CGFloat unitWidth = (rect.size.width - (units - 1) * gap) / units;
-    CGFloat keyHeight = (rect.size.height - (rows - 1) * gap) / rows;
+    CGFloat unitWidth = [self unitWidthForWidth: self.bounds.size.width];
+    CGFloat keyHeight = MAX(1, (rect.size.height - (rows - 1) * gap) / rows);
+    if (_fillsHeight)
+        keyHeight = MIN(kMaxFillKeyHeight, keyHeight); // past this the keys stop looking like keys
     UIFont *font = [_skin fontForKeyHeight: keyHeight];
     BOOL chiclet = _skin.profile == FrotzKeyProfileChiclet;
 
@@ -248,7 +273,7 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
     for (FrotzKeyboardRow *row in _layout.layers[_keyLayer]) {
         CGFloat x = rect.origin.x + row.indent * (unitWidth + gap);
         for (FrotzKeyboardKey *key in row.keys) {
-            CGFloat w = key.width * unitWidth + (key.width - 1) * gap;
+            CGFloat w = MAX(1, key.width * unitWidth + (key.width - 1) * gap); // a sub-unit key on a cramped row
             CGRect frame = CGRectMake(round(x), round(y), round(w), round(keyHeight));
             if (chiclet)
                 frame = CGRectInset(frame, round(MIN(w, keyHeight) * 0.12), round(MIN(w, keyHeight) * 0.12));
@@ -267,6 +292,10 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
         y += keyHeight + gap;
     }
     self.accessibilityElements = elements;
+    if (m_keysRebuilt) {
+        m_keysRebuilt = NO;
+        UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, nil);
+    }
 }
 
 -(void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
@@ -278,53 +307,133 @@ static const NSTimeInterval kShiftDoubleTapInterval = 0.35;
 
 #pragma mark Touches
 
-// The key under a point, counting half the gap around each key so a near miss still lands.
--(nullable FrotzKeyView *)keyViewAtPoint:(CGPoint)pt {
+// A key's frame plus half the gap around it, so a near miss still lands.
+-(CGRect)hitRectForKey:(FrotzKeyView *)keyView {
     CGFloat slop = -_layout.gap / 2 - 1;
+    return CGRectInset(keyView.frame, slop, slop);
+}
+
+-(nullable FrotzKeyView *)keyViewAtPoint:(CGPoint)pt {
     for (FrotzKeyView *kv in m_keyViews)
-        if (CGRectContainsPoint(CGRectInset(kv.frame, slop, slop), pt))
+        if (CGRectContainsPoint([self hitRectForKey: kv], pt))
             return kv;
     return nil;
 }
+
+#if DEBUG
+static NSString *PhaseName(UITouchPhase phase) {
+    switch (phase) {
+        case UITouchPhaseBegan: return @"began";
+        case UITouchPhaseMoved: return @"moved";
+        case UITouchPhaseStationary: return @"stationary";
+        case UITouchPhaseEnded: return @"ended";
+        case UITouchPhaseCancelled: return @"cancelled";
+        default: return [NSString stringWithFormat: @"phase%ld", (long)phase];
+    }
+}
+
+-(void)logTouch:(UITouch *)touch key:(nullable FrotzKeyView *)keyView {
+    CGPoint pt = [touch locationInView: self];
+    NSLog(@"kbtouch %@ %@ key=%@ inside=%d", PhaseName(touch.phase), NSStringFromCGPoint(pt),
+          keyView ? keyView.key.label : @"(none)", keyView ? [self touch: touch isOnKey: keyView] : 0);
+}
+#define LOG_TOUCH(t, kv) [self logTouch: (t) key: (kv)]
+#else
+#define LOG_TOUCH(t, kv)
+#endif
 
 -(void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [m_feedback prepare];
     for (UITouch *touch in touches) {
         FrotzKeyView *kv = [self keyViewAtPoint: [touch locationInView: self]];
+        LOG_TOUCH(touch, kv);
         if (!kv)
             continue;
         [m_touchKeys setObject: kv forKey: touch];
-        [self keyTouchDown: kv];
+        [self keyTouchDown: kv touch: touch];
     }
 }
 
 -(void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    // A touch stays with the key it went down on; sliding off and releasing cancels the key.
+    // A touch stays with the key it went down on; sliding off and releasing cancels the key,
+    // and sliding off a repeating key stops it for good.
     for (UITouch *touch in touches) {
         FrotzKeyView *kv = [m_touchKeys objectForKey: touch];
-        if (kv)
-            kv.pressed = [self keyViewAtPoint: [touch locationInView: self]] == kv;
+        LOG_TOUCH(touch, kv);
+        if (!kv)
+            continue;
+        if (touch == m_repeatTouch && ![self touch: touch isOnKey: kv])
+            [self stopRepeat];
+        [self updatePressedForKey: kv];
     }
 }
 
 -(void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     for (UITouch *touch in touches) {
         FrotzKeyView *kv = [m_touchKeys objectForKey: touch];
+        LOG_TOUCH(touch, kv);
         if (!kv)
             continue;
+        BOOL inside = [self touch: touch isOnKey: kv];
         [m_touchKeys removeObjectForKey: touch];
-        [self keyTouchUp: kv inside: [self keyViewAtPoint: [touch locationInView: self]] == kv];
+        [self keyTouchUp: kv touch: touch inside: inside];
     }
 }
 
 -(void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     for (UITouch *touch in touches) {
         FrotzKeyView *kv = [m_touchKeys objectForKey: touch];
+        LOG_TOUCH(touch, kv);
         if (!kv)
             continue;
         [m_touchKeys removeObjectForKey: touch];
-        [self keyTouchUp: kv inside: NO];
+        [self keyTouchUp: kv touch: touch inside: NO];
     }
+}
+
+// Against this key's own rect, not the first key whose slop holds the point (that can be a
+// neighbour), and with room for the finger to roll.
+-(BOOL)touch:(UITouch *)touch isOnKey:(FrotzKeyView *)keyView {
+    CGFloat slop = -MAX(kReleaseSlop, _layout.gap / 2 + 1);
+    return CGRectContainsPoint(CGRectInset(keyView.frame, slop, slop), [touch locationInView: self]);
+}
+
+// Lit while any touch that went down on it is still over it, so two fingers on one key
+// don't put each other's highlight out.
+-(void)updatePressedForKey:(FrotzKeyView *)keyView {
+    BOOL pressed = NO;
+    for (UITouch *touch in m_touchKeys)
+        if ([m_touchKeys objectForKey: touch] == keyView && [self touch: touch isOnKey: keyView]) {
+            pressed = YES;
+            break;
+        }
+    keyView.pressed = pressed;
+}
+
+// Hidden or taken off screen: whatever was held is let go without acting, and repeats stop.
+-(void)releaseAllKeys {
+    [self stopRepeat];
+    [m_touchKeys removeAllObjects];
+    for (FrotzKeyView *kv in m_keyViews)
+        kv.pressed = NO;
+}
+
+-(void)setHidden:(BOOL)hidden {
+    if (hidden)
+        [self releaseAllKeys];
+    [super setHidden: hidden];
+}
+
+-(void)willMoveToSuperview:(UIView *)newSuperview {
+    [super willMoveToSuperview: newSuperview];
+    if (!newSuperview)
+        [self releaseAllKeys];
+}
+
+-(void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (!self.window)
+        [self releaseAllKeys];
 }
 
 #pragma mark Keys
@@ -341,16 +450,19 @@ static BOOL ActsOnTouchDown(FrotzKeyAction action) {
     }
 }
 
--(void)keyTouchDown:(FrotzKeyView *)keyView {
+// touch is nil for accessibility and DEBUG taps, which press and release at once.
+-(void)keyTouchDown:(FrotzKeyView *)keyView touch:(UITouch *)touch {
     keyView.pressed = YES;
     [m_feedback impactOccurred];
     FrotzKeyboardKey *key = keyView.key;
     if (!ActsOnTouchDown(key.action))
         return;
-    [self stopRepeat];
     [self performKey: key];
-    if (key.repeats) {
+    // One repeat at a time, and it belongs to the touch that started it; a second finger
+    // types its key once rather than take the repeat over. (A key that changed the layer is gone.)
+    if (key.repeats && !m_repeatTimer && [m_keyViews containsObject: keyView]) {
         m_repeatKey = keyView;
+        m_repeatTouch = touch;
         __weak FrotzKeyboardView *weakSelf = self;
         m_repeatTimer = [NSTimer scheduledTimerWithTimeInterval: kRepeatDelay repeats: NO block: ^(NSTimer *timer) {
             [weakSelf startRepeating: key];
@@ -370,12 +482,13 @@ static BOOL ActsOnTouchDown(FrotzKeyAction action) {
     [m_repeatTimer invalidate];
     m_repeatTimer = nil;
     m_repeatKey = nil;
+    m_repeatTouch = nil;
 }
 
--(void)keyTouchUp:(FrotzKeyView *)keyView inside:(BOOL)inside {
-    keyView.pressed = NO;
-    if (keyView == m_repeatKey)
+-(void)keyTouchUp:(FrotzKeyView *)keyView touch:(UITouch *)touch inside:(BOOL)inside {
+    if (keyView == m_repeatKey && touch == m_repeatTouch)
         [self stopRepeat];
+    [self updatePressedForKey: keyView];
     if (inside && !ActsOnTouchDown(keyView.key.action))
         [self performKey: keyView.key];
 }
@@ -436,11 +549,22 @@ static BOOL ActsOnTouchDown(FrotzKeyAction action) {
 }
 
 #if DEBUG
+-(CGPoint)centerOfKeyWithLabel:(NSString *)label {
+    for (FrotzKeyView *kv in m_keyViews)
+        if ([kv.key.label isEqualToString: label])
+            return CGPointMake(CGRectGetMidX(kv.frame), CGRectGetMidY(kv.frame));
+    return CGPointMake(NAN, NAN);
+}
+
+-(nullable NSString *)labelOfKeyAtPoint:(CGPoint)pt {
+    return [self keyViewAtPoint: pt].key.label;
+}
+
 -(BOOL)tapKeyWithLabel:(NSString *)label {
     for (FrotzKeyView *kv in [m_keyViews copy]) {
         if ([kv.key.label isEqualToString: label]) {
-            [self keyTouchDown: kv];
-            [self keyTouchUp: kv inside: YES];
+            [self keyTouchDown: kv touch: nil];
+            [self keyTouchUp: kv touch: nil inside: YES];
             return YES;
         }
     }
