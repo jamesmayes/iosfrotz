@@ -123,6 +123,13 @@ static int effective_style(void)
     return cur_style | (cur_font == FIXED_WIDTH_FONT ? FIXED_WIDTH_STYLE : 0);
 }
 
+/* The bytes out_buf[ds_start, ds_end) are what the last os_display_string
+   call wrote to the main window, if ds_start >= 0. Any flush invalidates
+   it. os_read_line uses it to find the core's redraw of a partial line
+   (screen_write_input -> os_display_string) exactly, instead of guessing
+   from the tail of the buffer. */
+static int ds_start = -1, ds_end = -1;
+
 static unsigned int cur_attr(void)
 {
     return (unsigned int) (effective_style() & 0xff) | ((unsigned int) cur_fg << 8)
@@ -136,6 +143,7 @@ static void flush_output(void)
     out_buf[out_len] = '\0';
     js_output(out_buf, (int) cur_attr());
     out_len = 0;
+    ds_start = ds_end = -1;
 }
 
 /* Encode one 16-bit character as UTF-8 into dst (room for 3 bytes). */
@@ -259,6 +267,22 @@ void os_display_char(unsigned int c)
 void os_display_string(const zchar *s)
 {
     zchar c;
+    int len = 0, plain = 1;
+    const zchar *q;
+    if (cwin == 0) {
+        /* Keep a plain string (no style codes, so no flush inside) in one
+           piece in out_buf: if it might not fit, flush first. Input lines
+           are at most INPUT_BUFFER_SIZE characters, far below OUT_CAP / 3,
+           so a redrawn partial line never straddles a flush. */
+        for (q = s; *q != 0; q++, len++)
+            if (*q == ZC_NEW_FONT || *q == ZC_NEW_STYLE)
+                plain = 0;
+        if (plain && 3 * len <= OUT_CAP && out_len + 3 * len > OUT_CAP)
+            flush_output();
+        ds_start = -1;
+    }
+    if (cwin == 0 && plain)
+        ds_start = out_len;
     while ((c = *s++) != 0) {
         if (c == ZC_NEW_FONT || c == ZC_NEW_STYLE) {
             int arg = (unsigned char) *s++;
@@ -270,6 +294,8 @@ void os_display_string(const zchar *s)
             os_display_char(c);
         }
     }
+    if (cwin == 0 && plain && ds_start >= 0)
+        ds_end = out_len;
 }
 
 void os_backspace(void)
@@ -312,16 +338,23 @@ int os_string_width(const zchar *s)
     return width;
 }
 
-/* Set by a lower-window newline after a read timed out. That is when the
-   core sets input_redraw and redraws the partial line before continuing
-   the read (screen_new_line, console_read_input). */
-static int newline_since_timeout = 0;
+/* A mirror of the core's input_redraw (screen.c): screen_new_line sets it
+   for every new line in the input window (it then calls os_new_line), and
+   console_read_input clears it at the start of every read, after using it
+   to decide whether to redraw a continued read's partial line. So it is
+   set here on every lower-window new line and cleared only at the entry
+   to os_read_line, where the shim consumes it, never on a timeout. A new
+   line printed during os_read_line itself (flush_buffer wrapping a pending
+   word) sets it again, exactly as it does in the core. */
+static int redraw_pending = 0;
+static int input_win = 0;   /* cwin at the last read, the core's input_window */
 
 void os_new_line(bool wrapping)
 {
     if (cwin != 0)
         return;          /* upper-window line moves arrive via os_set_cursor */
-    newline_since_timeout = 1;
+    if (cwin == input_win)
+        redraw_pending = 1;
     out_utf8(wrapping ? ' ' : '\n');
 }
 
@@ -495,24 +528,32 @@ zchar os_read_line(int max, zchar *buf, int timeout, int width, int continued)
 {
     char line[4 * INPUT_BUFFER_SIZE];
     char initial[4 * INPUT_BUFFER_SIZE];
-    int nbytes, ilen, i, n, timed_out, skip;
+    int nbytes, ilen, i, n, timed_out, skip, redrawn;
     const unsigned char *p;
     (void) width;
 
+    /* Consume the mirrored input_redraw, as console_read_input just did. */
+    redrawn = continued && redraw_pending;
+    redraw_pending = 0;
+    input_win = cwin;
+
     ilen = zchars_to_utf8(buf, initial, (int) sizeof initial);
     if (continued) {
-        /* If the timeout routine moved to a new line, the core has just
-           redrawn the partial line (console_read_input calls
-           screen_write_input when input_redraw is set), and it is at the
-           tail of the output buffer. Take it back out, as for initial
-           text: the player edits it in the input field, and on Enter the
-           whole line is echoed once, on the new line. So nothing of it is
-           in the transcript any more. Without a redraw the partial line
-           was never shown (a timeout echoes nothing), and line_shown is
-           kept for initial text shown before the first read. */
-        if (newline_since_timeout && ilen > 0 && out_len >= ilen
-                && memcmp(out_buf + out_len - ilen, initial, (size_t) ilen) == 0) {
-            out_len -= ilen;
+        /* If the core redrew the partial line (console_read_input calls
+           screen_write_input when input_redraw is set), that redraw was the
+           last os_display_string, and nothing has been written since: it
+           is exactly out_buf[ds_start, ds_end) with ds_end == out_len, and
+           os_display_string kept it in one piece. Take it back out, as for
+           initial text: the player edits it in the input field, and on
+           Enter the whole line is echoed once, on the new line. So nothing
+           of it is in the transcript any more. Without a redraw the partial
+           line was never shown (a timeout echoes nothing), and line_shown
+           is kept for initial text shown before the first read. */
+        if (redrawn && ilen > 0 && ds_start >= 0 && ds_end == out_len
+                && ds_end - ds_start == ilen
+                && memcmp(out_buf + ds_start, initial, (size_t) ilen) == 0) {
+            out_len = ds_start;
+            ds_start = ds_end = -1;
             line_shown_len = 0;
         }
         /* The core does not flush text the timeout routine printed before
@@ -543,7 +584,6 @@ zchar os_read_line(int max, zchar *buf, int timeout, int width, int continued)
     timed_out = nbytes < 0;
     if (timed_out)
         nbytes = -nbytes - 1;
-    newline_since_timeout = 0;
 
     /* The page returns the whole line (initial or partial text included),
        so it replaces buf. */
