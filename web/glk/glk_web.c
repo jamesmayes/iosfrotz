@@ -312,6 +312,14 @@ static gidispatch_rock_t (*reg_arr)(void *array, glui32 len, char *typecode) = N
 static void (*unreg_arr)(void *array, glui32 len, char *typecode,
                          gidispatch_rock_t rock) = NULL;
 
+/* glkweb_set_pending_hook: a layer above Glk that holds text back. */
+static void (*pending_hook)(strid_t str) = NULL;
+
+void glkweb_set_pending_hook(void (*fn)(strid_t str))
+{
+    pending_hook = fn;
+}
+
 static void *xalloc(size_t n)
 {
     void *p = calloc(1, n);
@@ -677,6 +685,9 @@ static void persist_file(const char *path)
 static void stream_destroy(stream_t *s)
 {
     window_t *w;
+    /* Text held back for this stream is written while it still exists. */
+    if (pending_hook)
+        (*pending_hook)(s);
     if (s == curstr)
         curstr = NULL;
     for (w = winlist; w; w = w->next)
@@ -2098,6 +2109,8 @@ void glkweb_file_did_write(const char *path)
 
 void glkweb_finish(void)
 {
+    if (pending_hook)
+        (*pending_hook)(NULL);
     flush_all();
     js_exit();
 }

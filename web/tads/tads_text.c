@@ -24,8 +24,14 @@
  *     and Windows-1252 from then on, input included: the same guess
  *     osparse.c makes, without its Cyrillic and Mac Roman cases.
  *   - A character split across two calls is kept (at most 3 bytes) and
- *     finished by the next call; if the next call goes to another stream,
- *     or input is requested, what was kept is written as U+FFFD first.
+ *     finished by the next call. When it can no longer be finished (the
+ *     next call goes to another stream or does not continue it, a line is
+ *     requested, its stream is about to be destroyed, the game ends), what
+ *     was kept is resolved and written to its own stream: as U+FFFD for
+ *     TADS 3, and for TADS 2 as Windows-1252, switching the session to it
+ *     (an unfinished UTF-8 sequence is not UTF-8). glk_web.c reports the
+ *     destruction of a stream and the end of the game through
+ *     glkweb_set_pending_hook, so the stream is never used once freed.
  *   - A line is read with glk_request_line_event_uni into a buffer of
  *     len - 1 characters. A resumed line (os_gets_timeout after a
  *     timeout) is decoded first, and its length given to Glk in characters.
@@ -47,6 +53,7 @@
 #include "os.h"
 #include "glk.h"
 #include "tads_web.h"
+#include "glk_web.h"
 
 extern winid_t mainwin;
 
@@ -152,15 +159,52 @@ static strid_t carry_str = NULL;
 
 #define CHUNK 256
 
-/* Write the kept bytes of an unfinished character as U+FFFD, to the
-   stream they were written to. */
+/* Resolve the n bytes of a character that was never finished into out
+   (room for 4); returns how many characters. TADS 3 only writes UTF-8, so
+   they are one malformed character, U+FFFD. For TADS 2 they show the text
+   is not UTF-8 (a Windows-1252 "é" is 0xE9, which also starts a 3-byte
+   UTF-8 sequence): the session switches to Windows-1252, as for any other
+   invalid string, and they are written as such. */
+static size_t resolve(const unsigned char *b, int n, glui32 *out)
+{
+    int i;
+    if (utf8_only) {
+        out[0] = 0xFFFD;
+        return 1;
+    }
+    legacy = 1;
+    for (i = 0; i < n; i++)
+        out[i] = cp1252_decode(b[i]);
+    return (size_t) n;
+}
+
+/* Write the kept bytes of an unfinished character, resolved, to the stream
+   they were written to. Called at every point the character can no longer
+   be finished: output to another stream, a line request, the stream about
+   to be destroyed, the end of the game. */
 static void flush_carry(void)
 {
-    glui32 bad = 0xFFFD;
-    if (carry_len && carry_str)
-        glk_put_buffer_stream_uni(carry_str, &bad, 1);
+    glui32 out[4];
+    size_t n;
+    strid_t str = carry_str;
+    if (!carry_len || !str) {
+        carry_len = 0;
+        carry_str = NULL;
+        return;
+    }
+    n = resolve(carry, carry_len, out);
     carry_len = 0;
     carry_str = NULL;
+    glk_put_buffer_stream_uni(str, out, (glui32) n);
+}
+
+/* glk_web.c calls this before it destroys a stream, and with NULL when the
+   game ends (glkweb_set_pending_hook), so carry_str never outlives its
+   stream and nothing kept is lost at the end. */
+static void pending_hook(strid_t str)
+{
+    if (carry_len && (!str || str == carry_str))
+        flush_carry();
 }
 
 /* Write n characters, CHUNK at a time. */
@@ -187,16 +231,17 @@ void os_put_buffer(const char *buf, size_t len)
     /* Finish the character the last call left unfinished. */
     if (carry_len) {
         int need = utf8_seq_len(carry[0]);
+        glui32 c = 0xFFFFFFFF;
         while (carry_len < need && i < len && (p[i] & 0xC0) == 0x80)
             carry[carry_len++] = p[i++];
         if (carry_len < need && i == len)
             return;                         /* still unfinished */
-        if (carry_len == need) {
-            glui32 c = utf8_seq(carry, need);
-            out[n++] = c == 0xFFFFFFFF ? 0xFFFD : c;
-        } else {
-            out[n++] = 0xFFFD;
-        }
+        if (carry_len == need)
+            c = utf8_seq(carry, need);
+        if (c != 0xFFFFFFFF)
+            out[n++] = c;
+        else
+            n += resolve(carry, carry_len, out + n);
         carry_len = 0;
         carry_str = NULL;
     }
@@ -214,6 +259,7 @@ void os_put_buffer(const char *buf, size_t len)
             memcpy(carry, p + i, len - i);
             carry_len = (int) (len - i);
             carry_str = str;
+            glkweb_set_pending_hook(pending_hook);
             break;
         } else if (!k || i + k > len || (c = utf8_seq(p + i, k)) == 0xFFFFFFFF) {
             out[n++] = 0xFFFD;

@@ -21,11 +21,15 @@ let mark = "";
 let inputs = [];
 let lines = [];
 let rootWidth = 800; // narrowed and widened by the "shrink"/"grow" marks
+const texts = new Map(); // window id -> text sent since the last clearText
+let exited = false;
 
 const glkCheck = {
   rect: (id) => rects.get(id) || null,
   count: (k) => counts.get(k) || 0,
   mark(m) { mark = m; },
+  textHas: (id, s) => (texts.get(id) || "").includes(s),
+  clearText() { texts.clear(); },
 };
 
 const glkWeb = {
@@ -39,6 +43,7 @@ const glkWeb = {
   },
   text(id, s) {
     const plain = s.replace(/\x01./g, "");
+    texts.set(id, (texts.get(id) || "") + plain);
     for (const w of ["xyzzy", "plugh"]) if (plain.includes(w)) bump(`echoed-${w}`);
   },
   grid(id, cols, rows, ch) {
@@ -88,7 +93,7 @@ const glkWeb = {
   persistFile(p) { bump(`persist:${p}`); },
   deleteFile(p) { bump(`delete:${p}`); },
   setStory() {},
-  exit() {},
+  exit() { exited = true; },
 };
 
 (async () => {
@@ -106,7 +111,11 @@ const glkWeb = {
     if (!(e && e.name === "ExitStatus")) throw e;
     status = e.status;
   }
-  process.exit(status || !/PASSED/.test(out) ? 1 : 0);
+  // glk-check.c leaves "fin" and a Windows-1252 "é" (0xE9, an unfinished
+  // UTF-8 prefix) held in TADS's text adapter for the end of the game.
+  const fin = exited && [...texts.values()].some((t) => t.includes("fin\u00e9"));
+  console.log(`${fin ? "ok  " : "FAIL"} TADS 2: an unfinished UTF-8 prefix at the end of the game is written, as Windows-1252`);
+  process.exit(status || !fin || !/PASSED/.test(out) ? 1 : 0);
 })().catch((e) => {
   console.error(e);
   process.exit(1);

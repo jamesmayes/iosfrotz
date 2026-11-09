@@ -5,6 +5,8 @@
 #ifndef WEB_GLK_WEB_H
 #define WEB_GLK_WEB_H
 
+#include "glk.h"
+
 /* Before glk_main: measure the page, open nothing yet. story_path names the
    story file in MEMFS; its stem (up to the first '.') names the saves. */
 void glkweb_init(const char *story_path);
@@ -15,6 +17,14 @@ void glkweb_init(const char *story_path);
    the same rules as a Glk file stream. Other paths are ignored. */
 void glkweb_file_will_open(const char *path);
 void glkweb_file_did_write(const char *path);
+
+/* For a layer that holds text back before it reaches Glk (TADS's decoder,
+   web/tads/tads_text.c, keeps the bytes of an unfinished character): fn is
+   called with a stream just before that stream is destroyed (a file or
+   memory stream closed, a window closed), and with NULL at the start of
+   glkweb_finish, so the layer can write what it holds while the stream
+   still exists, and never keeps a pointer to a freed one. NULL removes it. */
+void glkweb_set_pending_hook(void (*fn)(strid_t str));
 
 /* After glk_main returns: flush output and tell the page the game ended. */
 void glkweb_finish(void);

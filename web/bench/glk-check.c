@@ -13,7 +13,13 @@
  * setting is fixed per request; overdue timers wait on the page between
  * consecutive timer events; deleting a /saves file reaches the page and the
  * file no longer exists; gestalt for line and char input; style_distinguish
- * against the CSS in glulx.html.
+ * against the CSS in glulx.html. And TADS's text adapter
+ * (tads/tads_text.c, linked in): the bytes of an unfinished character held
+ * for a window that is then closed are written before it goes, never to a
+ * freed stream (or to the window that takes its memory) when a line is
+ * requested; for TADS 2, an unfinished sequence is resolved as
+ * Windows-1252 when output moves on, at a line request, and at the end of
+ * the game (which bench/check-glk.js checks on the page after exit).
  */
 
 #include <emscripten.h>
@@ -39,6 +45,14 @@ EM_JS(int, rect_of, (glui32 rock_id, int what), {
 });
 EM_JS(int, driver_count, (const char *what), {
     return Module.glkCheck.count(UTF8ToString(what));
+});
+/* Has the page been sent s (UTF-8) in window id's text, since the last
+   driver_clear? */
+EM_JS(int, text_has, (int id, const char *s), {
+    return Module.glkCheck.textHas(id, UTF8ToString(s)) ? 1 : 0;
+});
+EM_JS(void, driver_clear, (void), {
+    Module.glkCheck.clearText();
 });
 EM_JS(void, driver_mark, (const char *what), {
     Module.glkCheck.mark(UTF8ToString(what));
@@ -303,6 +317,83 @@ static void gestalt_and_styles(void)
     glk_window_close(glk_window_get_root(), NULL);
 }
 
+/* tads/tads_text.c, which the TADS builds link in place of osbuffer.c. */
+winid_t mainwin = NULL;
+void os_put_buffer(const char *buf, size_t len);
+void os_get_buffer(char *buf, size_t len, size_t init);
+char *os_fill_buffer(char *buf, size_t len);
+void tadsweb_text_utf8(int on);
+int tadsweb_text_legacy(void);
+
+/* Read a line through os_get_buffer / os_fill_buffer, as osglk.c does. */
+static void tads_line(char *buf, size_t len)
+{
+    event_t ev;
+    os_get_buffer(buf, len, 0);
+    driver_mark("tads-line");
+    do
+        glk_select(&ev); /* "plugh" */
+    while (ev.type != evtype_LineInput);
+    os_fill_buffer(buf, ev.val1);
+}
+
+static void tads_text(void)
+{
+    winid_t a, banner, other;
+    int ida, idb;
+    char buf[64];
+
+    /* TADS 3: half of "é" to a banner, the banner deleted, a window opened
+       (calloc hands it the freed stream's memory), then a line read. The
+       half character must not follow the stream into either window. */
+    tadsweb_text_utf8(1);
+    a = glk_window_open(NULL, 0, 0, wintype_TextBuffer, 10);
+    ida = next_id++;
+    mainwin = a;
+    banner = glk_window_open(a, winmethod_Above | winmethod_Fixed, 3, wintype_TextBuffer, 11);
+    next_id += 2;
+    glk_set_window(banner);
+    os_put_buffer("x\xC3", 2);
+    glk_window_close(banner, NULL);
+    other = glk_window_open(a, winmethod_Above | winmethod_Fixed, 3, wintype_TextBuffer, 12);
+    idb = next_id++;
+    next_id++;
+    driver_clear();
+    glk_set_window(other);
+    os_put_buffer("y", 1);
+    glk_set_window(a);
+    tads_line(buf, sizeof buf);
+    check(strcmp(buf, "plugh") == 0, "TADS: a line after a banner closed on half a character");
+    check(text_has(idb, "y") && !text_has(idb, "\xEF\xBF\xBD") && !text_has(ida, "\xEF\xBF\xBD"),
+          "TADS: half a character for a closed banner reaches no other window");
+    glk_window_close(other, NULL);
+
+    /* TADS 2: a Windows-1252 "é" (0xE9, also the start of a 3-byte UTF-8
+       sequence) at the end of a string is Windows-1252 once the next
+       string does not continue it. */
+    tadsweb_text_utf8(0);
+    driver_clear();
+    os_put_buffer("caf\xE9", 4);
+    os_put_buffer(" ok", 3);
+    flush();
+    check(text_has(ida, "caf\xC3\xA9 ok") && tadsweb_text_legacy(),
+          "TADS 2: an unfinished UTF-8 prefix the next string does not finish is Windows-1252");
+
+    /* The same at a line request. */
+    tadsweb_text_utf8(0);
+    driver_clear();
+    os_put_buffer("th\xE9", 3);
+    tads_line(buf, sizeof buf);
+    check(text_has(ida, "th\xC3\xA9") && !text_has(ida, "\xEF\xBF\xBD") && tadsweb_text_legacy(),
+          "TADS 2: an unfinished UTF-8 prefix at a line request is Windows-1252");
+
+    /* And at the end of the game: left held, for glk_main's caller to end
+       the game (glkweb_finish); check-glk.js looks for it on the page. */
+    tadsweb_text_utf8(0);
+    driver_clear();
+    os_put_buffer("fin\xE9", 4);
+}
+
 void glk_main(void)
 {
     arrangement();
@@ -312,6 +403,7 @@ void glk_main(void)
     timers();
     deletion();
     gestalt_and_styles();
+    tads_text();
     printf("%s\n", failures ? "FAILED" : "PASSED");
 }
 
@@ -319,5 +411,6 @@ int main(void)
 {
     glkweb_init("/check.ulx");
     glk_main();
+    glkweb_finish();
     return failures ? 1 : 0;
 }
