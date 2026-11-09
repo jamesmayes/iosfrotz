@@ -308,7 +308,7 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     m_rows = rows;
     if (!m_rows.layers[_keyLayer])
         _keyLayer = [FrotzKeyboardLayerDefault copy];
-    [self rebuildKeys];
+    [self rebuildKeysFromRows: nil];
 }
 
 #pragma mark Layers and shift
@@ -322,8 +322,9 @@ static const CGFloat kReleaseSlop = 16; // a finger rolls a little between down 
     }
     if ([layer isEqualToString: _keyLayer])
         return;
+    NSArray<FrotzKeyboardRow *> *oldRows = m_rows.layers[_keyLayer];
     _keyLayer = [layer copy];
-    [self rebuildKeys];
+    [self rebuildKeysFromRows: oldRows];
 }
 
 -(void)showPendingLayer {
@@ -368,7 +369,11 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
 }
 
 -(void)rebuildKeys {
-    NSArray<FrotzKeyboardRow *> *oldRows = m_rows.layers[_keyLayer];
+    [self rebuildKeysFromRows: m_rows.layers[_keyLayer]];
+}
+
+// oldRows are the rows the current key views were built from, so held keys can find their place.
+-(void)rebuildKeysFromRows:(nullable NSArray<FrotzKeyboardRow *> *)oldRows {
     NSArray<FrotzKeyView *> *oldViews = [m_keyViews copy];
     // A layer waiting on a held key is shown now, so nothing is left to wait for.
     m_layerTouch = nil;
@@ -392,7 +397,7 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
     // key's frame to slide off or release on.
     for (UITouch *touch in m_touchKeys) {
         FrotzKeyTouch *press = [m_touchKeys objectForKey: touch];
-        NSUInteger index = [oldViews indexOfObject: press.keyView];
+        NSUInteger index = oldRows ? [oldViews indexOfObject: press.keyView] : NSNotFound;
         NSUInteger newIndex = index == NSNotFound ? NSNotFound : CorrespondingKeyIndex(oldRows, rows, index);
         FrotzKeyView *kv = newIndex != NSNotFound ? m_keyViews[newIndex] : [self keyViewWithLabel: press.keyView.key.label];
         if (kv) {
@@ -486,6 +491,10 @@ static NSUInteger CorrespondingKeyIndex(NSArray<FrotzKeyboardRow *> *from, NSArr
         if (CGRectGetMinX(lower.frame) < CGRectGetMinX(upper.frame) - 1)
             lowerCorners |= kCALayerMinXMinYCorner; // an L: the lower half sticks out on the left
         lower.layer.maskedCorners = lowerCorners;
+        if (upper.pressed != lower.pressed) { // a held half remapped before the join; light both
+            upper.pressed = YES;
+            lower.pressed = YES;
+        }
         [self bringSubviewToFront: upper];
         [upper setNeedsLayout];
         return element;
@@ -850,6 +859,13 @@ static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
     m_heldActions = nil;
 }
 
+-(nullable FrotzKeyView *)keyViewWithAction:(FrotzKeyAction)action {
+    for (FrotzKeyView *kv in m_keyViews)
+        if (kv.key.action == action)
+            return kv;
+    return nil;
+}
+
 -(BOOL)tapKeyWithLabel:(NSString *)label {
     FrotzKeyView *kv = [self keyViewWithLabel: label];
     if (!kv)
@@ -976,6 +992,32 @@ static FrotzKeyboardSpecialKey SpecialKeyForArrow(FrotzKeyAction action) {
                              kv.key.label, NSStringFromCGRect(kv.frame), NSStringFromCGRect(other.frame),
                              NSStringFromCGPoint(farLower), [self point: farLower isOnKey: kv], NSStringFromCGPoint(farUpper),
                              [self point: farUpper isOnKey: other], NSStringFromCGPoint(outside), [self point: outside isOnKey: kv]]];
+    }
+
+    // 4. Hold Return and backspace, tap 123 (Classic): the symbols rows differ, so each held key
+    // must move to its own key there, not to whatever sits in its old place.
+    FrotzKeyView *returnView = [self keyViewWithAction: FrotzKeyActionReturn], *symbolsView = [self keyViewWithAction: FrotzKeyActionSymbols];
+    if (returnView && symbolsView && [self keyViewWithLabel: backspace] && m_rows.layers[FrotzKeyboardLayerSymbols]) {
+        FrotzKeyTouch *ret = [self finger: a downOn: returnView.key.label];
+        bs = [self finger: b downOn: backspace];
+        [self tapKeyWithLabel: symbolsView.key.label];
+        [self layoutIfNeeded];
+        BOOL retOK = ret.keyView.key.action == FrotzKeyActionReturn && [m_keyViews containsObject: ret.keyView] && ret.keyView.pressed;
+        BOOL bsOK = bs.keyView.key.action == FrotzKeyActionBackspace && [m_keyViews containsObject: bs.keyView] && bs.keyView.pressed
+            && m_repeatPress == bs;
+        [self overlapCheck: @"4-symbols-remaps-held-keys" ok: [_keyLayer isEqualToString: FrotzKeyboardLayerSymbols] && retOK && bsOK
+                    detail: [NSString stringWithFormat: @"layer=%@ return on \"%@\" onNewView=%d lit=%d; backspace on \"%@\" onNewView=%d lit=%d owner=%d",
+                             _keyLayer, ret.keyView.key.label, [m_keyViews containsObject: ret.keyView], ret.keyView.pressed,
+                             bs.keyView.key.label, [m_keyViews containsObject: bs.keyView], bs.keyView.pressed, m_repeatPress == bs]];
+        [self repeatOnce];
+        [self fingerUp: a];
+        [self fingerUp: b];
+        // The repeat sends backspace, Return's release sends return.
+        NSString *sent = [m_heldActions componentsJoinedByString: @","];
+        NSString *expected = [NSString stringWithFormat: @"%@,%@", [bs.key.accessibilityName lowercaseString], [ret.key.accessibilityName lowercaseString]];
+        [self overlapCheck: @"4-held-keys-act-as-pressed" ok: [sent isEqualToString: expected] && !ret.keyView.pressed && !bs.keyView.pressed
+                    detail: [NSString stringWithFormat: @"expected %@, lit after release=%d,%d", expected, ret.keyView.pressed, bs.keyView.pressed]];
+        [self tapKeyWithLabel: [self keyViewWithAction: FrotzKeyActionLetters].key.label];
     }
     m_heldActions = nil;
     NSLog(@"kboverlap done");
