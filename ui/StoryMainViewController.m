@@ -1946,6 +1946,13 @@ extern void gli_ios_set_focus(window_t *winNum);
         [m_notesController hide];
 }
 
+-(void)notesPageDidBecomeVisible:(BOOL)visible {
+    if (visible)
+        [m_keyboardController notesPageDidBecomeVisible];
+    else
+        [m_keyboardController storyPageDidBecomeVisible];
+}
+
 -(void)unlockKeyboard {
     if (m_kbLocked) {
         m_kbLocked = NO;
@@ -2892,21 +2899,24 @@ static CGSize KeyboardOverlapInWindow(CGRect frameInView, UIView *view) {
 }
 
 -(void) setInAppKeyboardActive:(BOOL)active {
+    // The gated handlers won't see the outgoing keyboard leave, so clear what was laid out for it
+    // first; the incoming system keyboard's notifications then start from a clean state. While the
+    // in-app source is on, m_kbShown records only the in-app keyboard.
+    BOOL wasActive = m_keyboardSource == FrotzKeyboardSourceInApp;
+    if (active != wasActive && m_kbShown) {
+        FrotzKeyboardSource outgoing = wasActive ? FrotzKeyboardSourceInApp : FrotzKeyboardSourceSystem;
+        [self keyboardRegionWillChange: CGRectZero visible: NO source: outgoing animationDuration: 0.3];
+        [self keyboardRegionDidChange: CGRectZero visible: NO source: outgoing];
+    }
     // An empty inputView keeps the input line first responder (caret, hardware keys) with no
     // system keyboard over the in-app one.
     m_inputLine.inputView = active ? [[UIView alloc] initWithFrame: CGRectZero] : nil;
     m_keyboardSource = active ? FrotzKeyboardSourceInApp : FrotzKeyboardSourceSystem;
-    // The gated handlers never saw the system keyboard leave, so forget the frames they laid out
-    // for, or its return would be dropped as a repeat.
+    // Nor did they see the system keyboard leave, so forget the frames they laid out for, or its
+    // return would be dropped as a repeat.
     m_handledKbWillShowFrame = m_handledKbDidShowFrame = CGRectNull;
-    BOOL isFirstResponder = [m_inputLine isFirstResponder];
-    if (isFirstResponder)
+    if ([m_inputLine isFirstResponder])
         [m_inputLine reloadInputViews];
-    // A first responder gets the system keyboard back, and its notifications redo the layout.
-    if (!active && !isFirstResponder) {
-        [self keyboardRegionWillChange: CGRectZero visible: NO source: FrotzKeyboardSourceSystem animationDuration: 0.3];
-        [self keyboardRegionDidChange: CGRectZero visible: NO source: FrotzKeyboardSourceSystem];
-    }
 }
 
 -(BOOL) isKBShown {

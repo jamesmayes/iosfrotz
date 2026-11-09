@@ -38,6 +38,8 @@ NS_ASSUME_NONNULL_BEGIN
 -(void)hideAnimated:(BOOL)animated;
 -(void)toggleAnimated:(BOOL)animated;
 -(void)layoutIfNeeded;                                           // after the story view's layout; re-docks only when the target frame changed
+-(void)storyPageDidBecomeVisible;                                // the notes page hands the keyboard back
+-(void)notesPageDidBecomeVisible;                                // the notes text view uses the system keyboard meanwhile
 @end
 
 NS_ASSUME_NONNULL_END

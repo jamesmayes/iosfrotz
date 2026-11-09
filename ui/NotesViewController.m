@@ -225,6 +225,7 @@ static const int kNotesTitleHeight = 24;
     if (scrollView == m_scrollView) {
         CGPoint ofst = [scrollView contentOffset];
         CGRect frame = [scrollView frame];
+        [self reportNotesPageVisible: ofst.x >= frame.size.width];
         if (ofst.x >= frame.size.width) {
             if (m_chainResponder && [m_chainResponder isFirstResponder])
                 [m_notesView becomeFirstResponder];
@@ -244,6 +245,8 @@ static const int kNotesTitleHeight = 24;
     CGPoint ofst = [scrollView contentOffset];
     if (scrollView == m_scrollView && decelerate) {
         [m_notesView setEditable: YES];
+        if (m_chainResponder && ofst.x >= scrollView.frame.size.width*0.75)
+            [self reportNotesPageVisible: YES];
         if (m_chainResponder && [m_chainResponder isFirstResponder] && ofst.x >= scrollView.frame.size.width*0.75) {
             [m_notesView becomeFirstResponder];
         }
@@ -251,6 +254,12 @@ static const int kNotesTitleHeight = 24;
     }
 }
 
+
+// Lets the story controller hand the keyboard over before the first responder moves.
+-(void)reportNotesPageVisible:(BOOL)visible {
+    if ([m_delegate respondsToSelector: @selector(notesPageDidBecomeVisible:)])
+        [m_delegate notesPageDidBecomeVisible: visible];
+}
 
 -(BOOL)isVisible {
     CGPoint ofst = [m_scrollView contentOffset];
@@ -265,6 +274,7 @@ static const int kNotesTitleHeight = 24;
 
 -(void)hide {
     [m_scrollView setContentOffset:CGPointMake(0, 0)];
+    [self reportNotesPageVisible: NO];
 }
 
 

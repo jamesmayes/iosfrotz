@@ -13,6 +13,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @protocol LockableKeyboard <NSObject>
 -(void)showKeyboardLockState;
+@optional
+-(void)notesPageDidBecomeVisible:(BOOL)visible; // before first responder moves to or from the notes
 @end
 
 @interface NotesViewController : UIViewController <UIScrollViewDelegate, UITextViewDelegate, FileSelected> {

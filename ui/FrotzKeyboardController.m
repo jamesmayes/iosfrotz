@@ -29,6 +29,9 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
     __weak StoryMainViewController *m_smvc;
     FrotzPostureObserver *m_observer;
     BOOL m_dockedForLaptop;
+    BOOL m_onNotesPage;
+    BOOL m_handedToNotes;      // the in-app source is off while the notes page is up
+    BOOL m_showOnStoryPage;    // and it was showing when the notes page took over
 }
 
 -(instancetype)initWithStoryController:(StoryMainViewController *)smvc postureObserver:(FrotzPostureObserver *)observer {
@@ -75,6 +78,11 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
     _keyboardView.delegate = self;
     _keyboardView.hidden = YES;
     [m_smvc.view addSubview: _keyboardView]; // not the paging background, which scrolls with the notes
+    if (m_onNotesPage) {
+        m_handedToNotes = YES;
+        m_showOnStoryPage = !m_smvc.KBLocked;
+        return;
+    }
     [m_smvc setInAppKeyboardActive: YES];
     if (wasShowing || !m_smvc.KBLocked)
         [self showAnimated: NO];
@@ -186,6 +194,37 @@ static const CGFloat kMaxDockedHeightFraction = 0.45; // landscape phones keep s
         [self hideAnimated: animated];
     else
         [self showAnimated: animated];
+}
+
+#pragma mark Notes page
+
+// The notes text view needs the system keyboard, so the in-app one steps aside for it.
+-(void)notesPageDidBecomeVisible {
+    if (m_onNotesPage)
+        return;
+    m_onNotesPage = YES;
+    if (!self.isInAppKeyboardActive)
+        return;
+    m_handedToNotes = YES;
+    m_showOnStoryPage = self.isShowing;
+    [self hideAnimated: NO];
+    // The input line is first responder even with the keyboard hidden; let it go, or the notes
+    // page would take first responder from it and raise a keyboard nobody asked for.
+    if (!m_showOnStoryPage)
+        [m_smvc.inputLine resignFirstResponder];
+    [m_smvc setInAppKeyboardActive: NO];
+}
+
+-(void)storyPageDidBecomeVisible {
+    if (!m_onNotesPage)
+        return;
+    m_onNotesPage = NO;
+    if (!m_handedToNotes || !_keyboardView)
+        return;
+    m_handedToNotes = NO;
+    [m_smvc setInAppKeyboardActive: YES];
+    if (m_showOnStoryPage && !m_smvc.KBLocked)
+        [self showAnimated: NO];
 }
 
 #pragma mark FrotzKeyboardViewDelegate
