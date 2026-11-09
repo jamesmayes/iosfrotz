@@ -1821,6 +1821,9 @@ extern void gli_ios_set_focus(window_t *winNum);
     NSDictionary<NSString *, NSArray *> *faithful = @{
         @"apple2plus": @[ @"←", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:Q", @"tap:1", @"tap:SHIFT", @"tap:1",
                           @"tap:SHIFT", @"tap:N", @"tap:g", @"tap:←", @"tap:ESC", @"tap:RESET" ],
+        @"c64": @[ @"DEL", @"RETURN", @"SHIFT", @"tap:SHIFT", @"tap:Q", @"tap:£", @"tap:SHIFT", @"tap:1", @"tap:←", @"tap:↑",
+                   @"tap:LOCK", @"tap:A", @"tap:B", @"tap:LOCK", @"tap:c", @"clear:", @"tap:f1", @"tap:f3", @"tap:SHIFT", @"tap:⇕",
+                   @"tap:⇕", @"tap:x", @"clear:", @"tap:STOP", @"tap:RESTORE", @"tap:C=", @"tap:CTRL" ],
     };
     NSArray *keys = faithful[m_keyboardController.skinID];
     if (keys) {
