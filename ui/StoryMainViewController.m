@@ -4211,8 +4211,11 @@ static UIColor *scanColor(NSString *colorStr) {
 #if DEBUG
         applyStyle = applyStyle && ![FrotzDebugSelfTest overridesKeyboardStyle];
 #endif
-        if (applyStyle)
+        if (applyStyle) {
             m_keyboardController.skinID = m_keyboardStyle;
+            if (!m_keyboardController.skinID)
+                m_keyboardStyle = nil; // a style that no longer loads means the system keyboard
+        }
     }
 }
 
@@ -4223,6 +4226,8 @@ static UIColor *scanColor(NSString *colorStr) {
     if (self.navigationController.presentedViewController)
         [m_inputLine resignFirstResponder];
     m_keyboardController.skinID = m_keyboardStyle;
+    if (m_keyboardController && !m_keyboardController.skinID)
+        m_keyboardStyle = nil; // it didn't load; the system keyboard stays
     [self savePrefs];
 }
 
