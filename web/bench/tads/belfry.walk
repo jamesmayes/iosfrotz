@@ -1,0 +1,211 @@
+# The Silent Belfry (bench/tads/belfry.t): a RESTORE with no save (caught
+# as a RuntimeError), the solution, SAVE, RESTORE and UNDO, then 15 rounds
+# of wandering between the inn and the belfry. 208 commands.
+restore
+look
+e
+take lantern
+take mug
+x mug
+light lantern
+w
+n
+d
+take clapper
+u
+u
+fix bell
+ring bell
+score
+save
+d
+restore
+d
+undo
+i
+x bell
+drop mug
+x lantern
+d
+s
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+e
+look
+w
+n
+u
+ring bell
+d
+d
+look
+u
+s
+i
+score

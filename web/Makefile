@@ -9,8 +9,10 @@
 #   make git        -> dist/git.js + dist/git.wasm
 #   make tads2      -> dist/tads2.js + dist/tads2.wasm (TADS 2, tads/tads2 on
 #                      the browser Glk, through tads/osglk.c and web/tads/)
-#   make bench-tads -> dist/bench/tads2-{async,sync}.{js,wasm}, Node builds
-#                      for bench/measure-tads.js
+#   make tads3      -> dist/tads3.js + dist/tads3.wasm (TADS 3, tads/tads3,
+#                      C++, with -fwasm-exceptions)
+#   make bench-tads -> dist/bench/tads{2,3}-{async,sync}.{js,wasm}, Node
+#                      builds for bench/measure.js --tads
 #   make bench      -> dist/bench/git-async.{js,wasm} and git-sync.{js,wasm},
 #                      Node builds of git for bench/run-bench.js
 #   make check      -> builds dist/bench/glk-check.{js,wasm} (bench/glk-check.c
@@ -117,6 +119,48 @@ TADS_GLK_SYNC  := $(GIDISP_OBJ) $(OBJDIR)/glk/glk_unicode.o $(OBJDIR)/glk/glk_da
                   $(OBJDIR)/glk/glk_web_sync.o
 EMXX ?= em++
 
+# ---- TADS 3 ----
+#
+# The Xcode target's TADS 3 sources (tads/tads3, C++) and C++ defines
+# (-DVMGLOB_STRUCT -DOS_DECLARATIVE_TLS -DTC_TARGET_T3 -DTADSNET), the same
+# Glk OS layer objects as TADS 2, the four OS files from tads/tads2 that
+# TADS 3 needs too (osifc, osrestad, osstzprs, ostzposix), and the startup
+# file tads/tads3_web.cpp (main_t3 of tads/t23run.cpp). Two things differ
+# from Apple's headers, and are fixed on the command line, not in the
+# sources: -include sys/stat.h (rcmain, vmfilnam, vmnetfil, vmnetfillcl
+# use S_IFDIR and friends, which Apple's headers bring in indirectly), and
+# -D__GNU_LIBRARY__ for sha2.cpp only (its byte-order probe otherwise does
+# `#include _ENDIAN_H`, which musl defines as an empty include guard; with
+# it, sha2.cpp takes its glibc branch: <endian.h> and <byteswap.h>).
+#
+# TADS 3 raises its errors with setjmp/longjmp (err_try, tads3/vmerr.h); it
+# throws no C++ exceptions. -fwasm-exceptions makes both wasm exception
+# handling (Safari 15.2+), and every TADS 3 object is built with it. The
+# Glk and plain C objects have no setjmp and are shared with TADS 2.
+TADS3_SRC := charmap md5 osifcnet rcmain resload resnoexe sha2 std_dbg std \
+             tccmdutl tcerr tcerrmsg tcgen tcglob tchostsi tclibprs tcmain \
+             tcprs_rt tcprs tcprsnf tcprsnl tcprsstm tcsrc tct3_d tct3 tct3nl \
+             tct3stm tct3unas tctok utf8 vmanonfn vmbif vmbifl vmbifnet \
+             vmbifreg vmbift3 vmbiftad vmbiftio vmbignum vmbignumlib vmbt3_nd \
+             vmbytarr vmcfgmem vmcoll vmconhmp vmconnom vmconsol vmcrc vmcset \
+             vmdate vmdict vmdynfunc vmerr vmerrmsg vmfile vmfilnam vmfilobj \
+             vmfref vmfunc vmglob vmgram vmhash vmhostsi vmhosttx vmhttpreq \
+             vmhttpsrv vmimage vmimg_nd vmimgrb vmini_nd vminit vminitim \
+             vmintcls vmisaac vmiter vmlog vmlookup vmlst vmmain vmmcreg vmmeta \
+             vmnet vmnetcfg vmnetfil vmnetfillcl vmnetui vmobj vmop vmpack vmpat \
+             vmpool vmpoolim vmpreini vmrefcnt vmregex vmrun vmrunsym vmsa \
+             vmsave vmsort vmsortv vmsrcf vmstack vmstr vmstrbuf vmstrcmp \
+             vmtmpfil vmtobj vmtype vmtypedh vmtz vmtzobj vmundo vmvec vmwrtimg
+TADS3_EH := -fwasm-exceptions
+TADS3_CXXFLAGS := $(TADS_CFLAGS) -I$(TADS)/tads3/unix -std=gnu++11 \
+                  -DVMGLOB_STRUCT -DOS_DECLARATIVE_TLS -DTC_TARGET_T3 -DTADSNET \
+                  $(TADS3_EH) -include sys/stat.h
+TADS3_OBJ := $(addprefix $(OBJDIR)/tads3/,$(addsuffix .o,$(TADS3_SRC) osnetunix \
+                  vmuni_cs t3askf t3indlg osportable tads3_web)) \
+             $(addprefix $(OBJDIR)/tads/,$(addsuffix .o,$(TADS_OS_SRC) tads_web)) \
+             $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,osifc osrestad osstzprs ostzposix))
+TADS3_HEADERS := $(TADS_HEADERS) $(wildcard $(TADS)/tads3/*.h $(TADS)/tads3/unix/*.h)
+
 LDFLAGS_COMMON := -O2 \
            -sALLOW_MEMORY_GROWTH \
            -sINVOKE_RUN=0 \
@@ -150,6 +194,13 @@ TADS2_LDFLAGS := $(LDFLAGS_COMMON) \
            -sEXPORT_NAME=createTads2 \
            -sENVIRONMENT=web
 
+# TADS 3: the same again, linked with wasm exceptions.
+TADS3_LDFLAGS := $(LDFLAGS_COMMON) $(TADS3_EH) \
+           -sASYNCIFY \
+           -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK) \
+           -sEXPORT_NAME=createTads3 \
+           -sENVIRONMENT=web
+
 # Node builds for the measurement: the same code, with and without ASYNCIFY.
 BENCH_LDFLAGS := $(LDFLAGS_COMMON) -sEXPORT_NAME=createGit -sENVIRONMENT=node
 
@@ -158,11 +209,14 @@ all: frotz git
 frotz: $(DIST)/frotz.js $(DIST)/frotz.wasm
 git: $(DIST)/git.js $(DIST)/git.wasm
 tads2: $(DIST)/tads2.js $(DIST)/tads2.wasm
+tads3: $(DIST)/tads3.js $(DIST)/tads3.wasm
 # Each link writes a .js and a .wasm; both are named, so a missing .wasm is
 # rebuilt even when its .js is present.
 bench: $(BENCH)/git-async.js $(BENCH)/git-async.wasm $(BENCH)/git-sync.js $(BENCH)/git-sync.wasm
 bench-tads: $(BENCH)/tads2-async.js $(BENCH)/tads2-async.wasm \
-            $(BENCH)/tads2-sync.js $(BENCH)/tads2-sync.wasm
+            $(BENCH)/tads2-sync.js $(BENCH)/tads2-sync.wasm \
+            $(BENCH)/tads3-async.js $(BENCH)/tads3-async.wasm \
+            $(BENCH)/tads3-sync.js $(BENCH)/tads3-sync.wasm
 
 check: $(BENCH)/glk-check.js $(BENCH)/glk-check.wasm $(BENCH)/git-sync.js $(BENCH)/git-sync.wasm
 	node bench/check-glk.js
@@ -171,7 +225,7 @@ check: $(BENCH)/glk-check.js $(BENCH)/glk-check.wasm $(BENCH)/git-sync.js $(BENC
 
 # dist/ itself is created with dist/obj (the links order on $(OBJDIR)), so
 # that `dist` can be the phony target that builds the site.
-$(OBJDIR) $(OBJDIR)/git $(OBJDIR)/glk $(OBJDIR)/tads $(OBJDIR)/tads2 $(BENCH):
+$(OBJDIR) $(OBJDIR)/git $(OBJDIR)/glk $(OBJDIR)/tads $(OBJDIR)/tads2 $(OBJDIR)/tads3 $(BENCH):
 	mkdir -p $@
 
 # Link flags per output. dist/obj/<name>.ldflags holds the flags the output
@@ -194,7 +248,12 @@ LINK_tads2     := $(TADS2_LDFLAGS)
 LINK_tads2-async := $(LDFLAGS_COMMON) -sEXPORT_NAME=createTads2 -sENVIRONMENT=node \
                     -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK)
 LINK_tads2-sync  := $(LDFLAGS_COMMON) -sEXPORT_NAME=createTads2 -sENVIRONMENT=node
-LINK_OUTPUTS   := frotz git git-async git-sync glk-check tads2 tads2-async tads2-sync
+LINK_tads3     := $(TADS3_LDFLAGS)
+LINK_tads3-async := $(LDFLAGS_COMMON) $(TADS3_EH) -sEXPORT_NAME=createTads3 -sENVIRONMENT=node \
+                    -sASYNCIFY -sASYNCIFY_STACK_SIZE=$(GIT_ASYNC_STACK)
+LINK_tads3-sync  := $(LDFLAGS_COMMON) $(TADS3_EH) -sEXPORT_NAME=createTads3 -sENVIRONMENT=node
+LINK_OUTPUTS   := frotz git git-async git-sync glk-check tads2 tads2-async tads2-sync \
+                  tads3 tads3-async tads3-sync
 OUT_frotz      := $(DIST)/frotz
 OUT_git        := $(DIST)/git
 OUT_git-async  := $(BENCH)/git-async
@@ -203,6 +262,9 @@ OUT_glk-check  := $(BENCH)/glk-check
 OUT_tads2      := $(DIST)/tads2
 OUT_tads2-async := $(BENCH)/tads2-async
 OUT_tads2-sync  := $(BENCH)/tads2-sync
+OUT_tads3      := $(DIST)/tads3
+OUT_tads3-async := $(BENCH)/tads3-async
+OUT_tads3-sync  := $(BENCH)/tads3-sync
 
 stale_link = $(shell printf '%s\n' '$(LINK_$(1))' | cmp -s - $(OBJDIR)/$(1).ldflags 2>/dev/null || echo stale)
 $(foreach n,$(LINK_OUTPUTS),$(if $(call stale_link,$(n)),$(eval $(OUT_$(n)).js $(OUT_$(n)).wasm: FORCE)))
@@ -259,6 +321,26 @@ $(OBJDIR)/tads/tads_web.o: tads/tads_web.c $(TADS_HEADERS) | $(OBJDIR)/tads
 $(OBJDIR)/tads/tads2_web.o: tads/tads2_web.c $(TADS_HEADERS) | $(OBJDIR)/tads
 	$(EMCC) $(TADS_CFLAGS) $(WEB_CFLAGS) -c $< -o $@
 
+$(OBJDIR)/tads3/%.o: $(TADS)/tads3/%.cpp $(TADS3_HEADERS) | $(OBJDIR)/tads3
+	$(EMXX) $(TADS3_CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/tads3/sha2.o: $(TADS)/tads3/sha2.cpp $(TADS3_HEADERS) | $(OBJDIR)/tads3
+	$(EMXX) $(TADS3_CXXFLAGS) -D__GNU_LIBRARY__ -c $< -o $@
+
+$(OBJDIR)/tads3/osnetunix.o: $(TADS)/tads3/unix/osnetunix.cpp $(TADS3_HEADERS) | $(OBJDIR)/tads3
+	$(EMXX) $(TADS3_CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/tads3/%.o: $(TADS)/%.cpp $(TADS3_HEADERS) | $(OBJDIR)/tads3
+	$(EMXX) $(TADS3_CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/tads3/osportable.o: $(TADS)/tads2/osportable.cc $(TADS3_HEADERS) | $(OBJDIR)/tads3
+	$(EMXX) $(TADS3_CXXFLAGS) -c $< -o $@
+
+# -Wno-unused-parameter: the TADS 3 headers this includes (t3std.h,
+# vmconsol.h, vmmaincn.h) have unused parameters in inline methods.
+$(OBJDIR)/tads3/tads3_web.o: tads/tads3_web.cpp $(TADS3_HEADERS) | $(OBJDIR)/tads3
+	$(EMXX) $(TADS3_CXXFLAGS) $(WEB_CFLAGS) -Wno-unused-parameter -c $< -o $@
+
 # One link writes both files. A pattern rule with two targets is a single
 # recipe for both (in every GNU make), so a missing or stale .wasm relinks
 # too. Each rule's pattern only matches its own pair ("frotz%js" matches
@@ -296,10 +378,22 @@ $(BENCH)/tads2-sync%js $(BENCH)/tads2-sync%wasm: $(TADS2_OBJ) $(TADS_GLK_SYNC) |
 	$(EMXX) $(LINK_tads2-sync) $(TADS2_OBJ) $(TADS_GLK_SYNC) -o $(BENCH)/tads2-sync.js
 	$(call stamp_link,tads2-sync)
 
+$(DIST)/tads3%js $(DIST)/tads3%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) | $(OBJDIR)
+	$(EMXX) $(LINK_tads3) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(DIST)/tads3.js
+	$(call stamp_link,tads3)
+
+$(BENCH)/tads3-async%js $(BENCH)/tads3-async%wasm: $(TADS3_OBJ) $(TADS_GLK_ASYNC) | $(BENCH)
+	$(EMXX) $(LINK_tads3-async) $(TADS3_OBJ) $(TADS_GLK_ASYNC) -o $(BENCH)/tads3-async.js
+	$(call stamp_link,tads3-async)
+
+$(BENCH)/tads3-sync%js $(BENCH)/tads3-sync%wasm: $(TADS3_OBJ) $(TADS_GLK_SYNC) | $(BENCH)
+	$(EMXX) $(LINK_tads3-sync) $(TADS3_OBJ) $(TADS_GLK_SYNC) -o $(BENCH)/tads3-sync.js
+	$(call stamp_link,tads3-sync)
+
 # Objects reached only through a pattern rule would count as intermediate
 # and be deleted after the link; keep them so rebuilds are incremental.
 .SECONDARY: $(CORE_OBJ) $(WEB_OBJ) $(GIT_OBJ) $(GLK_ASYNC_OBJ) $(GLK_SYNC_OBJ) $(CHECK_OBJ) \
-            $(TADS2_OBJ)
+            $(TADS2_OBJ) $(TADS3_OBJ)
 
 # The site is rebuilt from scratch every time: it is a copy, and a stale
 # hashed file left behind would be harmless but confusing.
@@ -315,4 +409,4 @@ serve-dev: all
 clean:
 	rm -rf $(DIST) $(SITE)
 
-.PHONY: all frotz git tads2 bench bench-tads check dist serve serve-dev clean FORCE
+.PHONY: all frotz git tads2 tads3 bench bench-tads check dist serve serve-dev clean FORCE

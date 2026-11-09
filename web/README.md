@@ -35,8 +35,9 @@ make            # both interpreters
 make frotz      # -> dist/frotz.js (~63 KB) + dist/frotz.wasm (~145 KB)
 make git        # -> dist/git.js (~71 KB) + dist/git.wasm (~265 KB)
 make tads2      # -> dist/tads2.js (~77 KB) + dist/tads2.wasm (~606 KB)
+make tads3      # -> dist/tads3.js (~97 KB) + dist/tads3.wasm (~2.3 MB)
 make bench      # -> dist/bench/git-{async,sync}.{js,wasm}, Node builds for the measurement
-make bench-tads # -> dist/bench/tads2-{async,sync}.{js,wasm}, the same for TADS
+make bench-tads # -> dist/bench/tads{2,3}-{async,sync}.{js,wasm}, the same for TADS
 make check      # the checks below; must stay green
 make serve-dev  # serve web/ itself (unhashed) on :8000, for editing the page
 make clean      # removes dist/ and dist-site/
@@ -72,6 +73,14 @@ make clean      # removes dist/ and dist-site/
 - `tads/tads2_web.c` is the startup file (`main_t2` of `tads/t23run.cpp`, which this build does not use because it pulls in TADS 3). It refuses a file without the TADS 2 signature (`TADS2 bin` LF CR ^Z) and calls `trdmain`.
 - TADS raises its errors with `setjmp`/`longjmp`. Emscripten implements them by default with JS `invoke_*` wrappers, and ASYNCIFY unwinds through them: in Node, *The Keeper's Errand* (below) plays its 217-command walkthrough, including SAVE, RESTORE and UNDO, identically under ASYNCIFY and without it.
 - **Test game.** `bench/tads/errand.t` is a small game written for this repo (public domain), on `adv.t` and `std.t` from `tads/tads2`, whose notice says "You may modify and use this file in any way you want". `bench/tads/errand.gam` is its compiled form, made with the TADS 2 compiler built natively from `tads/tads2` (`tcd.c` and friends) in a scratch directory; the compiler is not part of the build. `bench/tads/errand.walk` is its walkthrough.
+
+### How TADS 3 is built
+
+- `make tads3` → `dist/tads3.js` + `dist/tads3.wasm`. The sources are the Xcode target's TADS 3 files (`tads/tads3/*.cpp`, `tads3/unix/osnetunix.cpp`, `tads/vmuni_cs.cpp`, `t3askf.cpp`, `t3indlg.cpp`, `tads2/osportable.cc`) with its C++ defines (`-DVMGLOB_STRUCT -DOS_DECLARATIVE_TLS -DTC_TARGET_T3 -DTADSNET`), the same Glk OS layer objects as TADS 2, the four `tads/tads2` OS files TADS 3 needs too (`osifc.c`, `osrestad.c`, `osstzprs.c`, `ostzposix.c`), and `tads/tads3_web.cpp`, the startup file (`main_t3` of `tads/t23run.cpp`). It refuses a file without the T3 signature (`T3-image` CR LF ^Z).
+- Two differences from Apple's headers are handled on the command line, not in the sources: `-include sys/stat.h` (four files use `S_IFDIR` and friends, which Apple's headers bring in indirectly), and `-D__GNU_LIBRARY__` for `sha2.cpp` only (its byte-order probe otherwise does `#include _ENDIAN_H`, which musl defines as an empty include guard). `vmdate.cpp` gives two `-Wnontrivial-memcall` warnings at the default level; they are left as they are.
+- **Exceptions.** TADS 3 raises its errors with `setjmp`/`longjmp` (`err_try`/`err_throw`, `tads3/vmerr.h`) and throws no C++ exceptions. Every TADS 3 object is compiled and linked with `-fwasm-exceptions`, so `longjmp` is wasm exception handling (emscripten 7 emits the legacy form, which Safari has supported since 15.2), not JS `invoke_*` wrappers. emcc warns at every link that "ASYNCIFY=1 is not compatible with -fwasm-exceptions. Parts of the program that mix ASYNCIFY and exceptions will not compile." It links, and it works for TADS: measured on two small programs with the same flags, an await in a `setjmp` body and an await after the `longjmp` returned both work, while an await inside a C++ `catch` block traps (`RuntimeError: unreachable`). TADS 3 has no C++ `catch` blocks, and its own handler resumes bytecode after `err_end` (`goto resume_execution` in `vmrun.cpp`), outside the catch. Anything added later that waits for input inside a C++ `catch` would break.
+- The same JS-`longjmp` build (no `-fwasm-exceptions`) also works; it is 2,200,764 bytes of wasm against 2,297,252.
+- **Test game.** `bench/tads/belfry.t` is a small game written for this repo (public domain) that uses no library: the repo has neither adv3 nor the TADS 3 system headers, so it declares the intrinsic function sets and metaclasses itself, in the order of the VM's tables. Every turn it does library-like work (it enumerates every object to find what is in scope, matches the command with regular expressions, builds lists and strings, takes an undo savepoint and redraws the status line). Its walkthrough (`belfry.walk`, 208 commands) starts with a RESTORE of a file that does not exist, caught as a `RuntimeError` (error 103), so the VM's `longjmp` path runs under ASYNCIFY; it also covers SAVE, RESTORE and UNDO. `bench/tads/belfry.t3` was compiled with `t3make -nodef -nopre`, built natively from `tads/tads3` in a scratch directory (its `tcmakecl.cpp` needs a `t3test.h` the repo lacks, so a one-line stub stood in). This tree's `vmpreini.cpp` has preinit compiled out (`#if 0`), hence `-nopre`. The compiler is not part of the build.
 
 ### The harness and `make check`
 
