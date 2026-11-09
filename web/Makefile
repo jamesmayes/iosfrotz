@@ -98,13 +98,17 @@ GIT_HEADERS := $(wildcard $(GIT)/*.h) $(GIT)/labels.inc $(GLKIOS)/glk.h \
 #
 # The sources and defines of the Xcode target `tads` (Frotz.xcodeproj),
 # less what is only for TADS 3: tads/tads2 for the VM, tads/*.c for the OS
-# layer on Glk (osglk.c, osglkban.c, osbuffer.c, ...), and tads2/osportable.cc
+# layer on Glk (osglk.c, osglkban.c, ...), and tads2/osportable.cc
 # (C++), the portable half of the OS layer. Compiled unmodified; what they
 # need from the iOS app comes from web/tads/ (README.md, "TADS"):
 #   - web/tads/shim comes first on the include path, so osglk.c's
 #     unconditional "iosfrotz.h", "glkios.h" and "git.h" are stand-ins;
 #   - osansi1.c, which opens TADS's files, gets -include tads/tads_stdio.h,
 #     so /saves files go through browser storage (tads_web.c);
+#   - tads/osbuffer.c is replaced by tads/tads_text.c, which converts the
+#     game's text (UTF-8 for TADS 3) to and from Glk's characters; osbuffer.c
+#     hands the browser Glk bytes, which it takes as Latin-1 (README.md,
+#     "Text encoding");
 #   - tads/tads2_web.c is the startup file (main_t2 of tads/t23run.cpp).
 #
 # TADS 2 raises its errors with setjmp/longjmp (ERRBEGIN, tads2/ler.h). It
@@ -125,14 +129,14 @@ TADS2_SRC := argize bif bifgdum cmap cmd dat dbgtr emt errmsg execmd fio fioxor 
              getstr ler linfdum lst mch mcm mcs obj objcomp oem_glk oserr osifc \
              osrestad osstzprs ostzposix out output ply qas regex run runstat \
              suprun tcgdum trd voc vocab voccomp
-TADS_OS_SRC := memicmp osansi1 osansi2 osansi3 osbuffer osglk osglkban osparse
+TADS_OS_SRC := memicmp osansi1 osansi2 osansi3 osglk osglkban osparse
 TADS2_SJLJ := -sSUPPORT_LONGJMP=wasm
 # The four tads/tads2 OS files TADS 3 links too (see "TADS 3").
 TADS2_SHARED := osifc osrestad osstzprs ostzposix
 TADS2_SJLJ_OBJ := $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,$(filter-out $(TADS2_SHARED),$(TADS2_SRC)) osportable))
 TADS2_OBJ := $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,$(TADS2_SRC) osportable)) \
              $(addprefix $(OBJDIR)/tads/,$(addsuffix .o,$(TADS_OS_SRC) t2askf t2indlg)) \
-             $(OBJDIR)/tads/tads_web.o $(OBJDIR)/tads/tads2_web.o
+             $(OBJDIR)/tads/tads_web.o $(OBJDIR)/tads/tads_text.o $(OBJDIR)/tads/tads2_web.o
 TADS_HEADERS := $(wildcard $(TADS)/*.h $(TADS)/tads2/*.h) $(wildcard tads/shim/*.h) \
                 tads/tads_web.h tads/tads_stdio.h $(GLKIOS)/glk.h $(GLKIOS)/gi_dispa.h \
                 glk/glk_web.h glk/glk_web_fileref.h
@@ -186,7 +190,7 @@ TADS3_CXXFLAGS := $(TADS_CFLAGS) -I$(TADS)/tads3/unix -std=gnu++11 \
                   $(TADS3_EH) -include sys/stat.h
 TADS3_OBJ := $(addprefix $(OBJDIR)/tads3/,$(addsuffix .o,$(TADS3_SRC) osnetunix \
                   vmuni_cs t3askf t3indlg osportable tads3_web)) \
-             $(addprefix $(OBJDIR)/tads/,$(addsuffix .o,$(TADS_OS_SRC) tads_web)) \
+             $(addprefix $(OBJDIR)/tads/,$(addsuffix .o,$(TADS_OS_SRC) tads_web tads_text)) \
              $(addprefix $(OBJDIR)/tads2/,$(addsuffix .o,osifc osrestad osstzprs ostzposix))
 TADS3_HEADERS := $(TADS_HEADERS) $(wildcard $(TADS)/tads3/*.h $(TADS)/tads3/unix/*.h)
 
@@ -405,6 +409,9 @@ $(OBJDIR)/tads/%.o: $(TADS)/%.c $(TADS_HEADERS) | $(OBJDIR)/tads
 	$(EMCC) $(TADS_CFLAGS) -c $< -o $@
 
 $(OBJDIR)/tads/tads_web.o: tads/tads_web.c $(TADS_HEADERS) | $(OBJDIR)/tads
+	$(EMCC) $(TADS_CFLAGS) $(WEB_CFLAGS) -c $< -o $@
+
+$(OBJDIR)/tads/tads_text.o: tads/tads_text.c $(TADS_HEADERS) | $(OBJDIR)/tads
 	$(EMCC) $(TADS_CFLAGS) $(WEB_CFLAGS) -c $< -o $@
 
 $(OBJDIR)/tads/tads2_web.o: tads/tads2_web.c $(TADS_HEADERS) | $(OBJDIR)/tads

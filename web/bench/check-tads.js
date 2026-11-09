@@ -14,7 +14,14 @@
 //     Glk file prompt); the file is the interpreter's own save format;
 //   - RESTORE asks the page to load the file before it is read, and works;
 //   - a file without the interpreter's signature is refused with a message
-//     in the story window.
+//     in the story window;
+//   - text crosses the port in the game's character set (web/tads/
+//     tads_text.c): bench/tads/utf8.t3 (TADS 3, UTF-8) prints non-ASCII
+//     text and reports each typed line's characters and code points, a
+//     timed line keeps its non-ASCII text when it is resumed, and an
+//     over-long line is cut at a whole character; bench/tads/cp1252.gam
+//     (TADS 2, Windows-1252) prints its text and gets a typed line back in
+//     Windows-1252.
 // Exits 1 if any check fails.
 
 "use strict";
@@ -41,6 +48,7 @@ async function play(engine, story, commands) {
   const inputs = [];
   const calls = [];
   let next = 0;
+  let partial = null;
   let exited = false;
   let Module = null;
   const glkWeb = {
@@ -58,10 +66,25 @@ async function play(engine, story, commands) {
       grid = s;
     },
     inputsBegin() { inputs.length = 0; },
-    input(id, kind) { inputs.push({ id, kind }); },
+    input(id, kind, initial) {
+      inputs.push({ id, kind });
+      if (kind === 1 && initial) calls.push(["initial", initial]);
+    },
     wait(timeoutMs) {
       const line = inputs.find((i) => i.kind === 1);
       const ch = inputs.find((i) => i.kind === 2);
+      // { timer: text }: the timer fires with `text` typed so far.
+      const cmd = commands[next];
+      if (line && cmd && typeof cmd === "object" && timeoutMs >= 0) {
+        next++;
+        partial = cmd.timer;
+        calls.push(["timer", cmd.timer]);
+        // The Glk library returns the timer once it is due (glk_web.c's
+        // timer_due), so let the interval pass first.
+        const end = Date.now() + timeoutMs + 1;
+        while (Date.now() < end) { /* wait */ }
+        return { type: 1 };
+      }
       if (line && next < commands.length) {
         calls.push(["line", commands[next]]);
         return { type: 3, win: line.id, text: commands[next++] };
@@ -70,7 +93,11 @@ async function play(engine, story, commands) {
       if (timeoutMs >= 0) return { type: 1 };
       throw new Error("done");
     },
-    cancelLine: () => "",
+    cancelLine() {
+      const t = partial || "";
+      partial = null;
+      return t;
+    },
     cancelChar() {},
     pollArrange: () => false,
     loadFile(p) {
@@ -133,6 +160,38 @@ async function checkGame(engine, file, sig, setup, label) {
 (async () => {
   await checkGame("tads2", "errand.gam", "TADS2 save", ["open drawer", "take key"], "TADS 2");
   await checkGame("tads3", "belfry.t3", "T3-state-v", ["e", "take lantern"], "TADS 3");
+
+  // Text encoding.
+  {
+    const long = "é".repeat(300);
+    const r = await play("tads3", path.join(WEB, "bench", "tads", "utf8.t3"),
+      ["café ☕ 😀", "timed", { timer: "Grüße" }, "Grüße, Welt", long, "a😀".repeat(100), "quit"]);
+    ok(r.text.includes("Grüße aus Zürich: café, naïve, Ελληνικά, 日本語, ☕."),
+      "TADS 3: UTF-8 output is shown as its characters");
+    ok(r.text.includes("Display charset utf-8."), "TADS 3: the game is told the display is UTF-8");
+    ok(r.text.includes("got [café ☕ \ufffd] 8: 63 61 66 E9 20 2615 20 FFFD"),
+      "TADS 3: a typed non-ASCII line reaches the game as its characters (U+FFFD past U+FFFF)");
+    const initial = r.calls.findIndex((c) => c[0] === "initial");
+    ok(initial > r.calls.findIndex((c) => c[0] === "timer") && r.calls[initial][1] === "Grüße",
+      "TADS 3: a timed line is resumed with its non-ASCII text");
+    ok(r.text.includes("timed 2 then 6") && r.text.includes("first [Grüße] 5: 47 72 FC DF 65") &&
+       r.text.includes("then [Grüße, Welt] 11: 47 72 FC DF 65 2C 20 57 65 6C 74"),
+      "TADS 3: the timed-out and resumed lines reach the game intact");
+    const got = [...r.text.matchAll(/got \[(é*)\] (\d+):/g)].filter((m) => m[1].length > 10)[0];
+    ok(got && got[1].length === Number(got[2]) && got[1].length === 127,
+      `TADS 3: a 300-character "é" line is cut at a whole character (${got ? got[2] : "none"} of 255 bytes)`);
+    // "a😀" x 100 reaches the game as "a\ufffd" x 100, 4 bytes a pair: 63
+    // pairs and an "a" fill 253 of the 255 bytes.
+    const cut = [...r.text.matchAll(/got \[((?:a\ufffd)+a?)\] (\d+):/g)][0];
+    ok(cut && cut[1].length === 127 && Number(cut[2]) === 127,
+      `TADS 3: a line of 3-byte characters is cut at a whole character (${cut ? cut[2] : "none"} characters)`);
+    ok(!/Ã|ߘ/.test(r.text), "TADS 3: nothing is mis-decoded");
+  }
+  {
+    const r = await play("tads2", path.join(WEB, "bench", "tads", "cp1252.gam"), ["café “x”", "quit"]);
+    ok(r.text.includes("Café naïve, € 5, “quoted”."), "TADS 2: Windows-1252 output is shown as its characters");
+    ok(r.text.includes("got [café “x”] 8 bytes"), "TADS 2: a typed line reaches the game in Windows-1252");
+  }
 
   // The wrong file for each interpreter.
   const glulx = path.join(WEB, "games", "glulxercise.ulx");

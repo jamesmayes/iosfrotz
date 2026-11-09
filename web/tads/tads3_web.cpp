@@ -38,6 +38,9 @@ int main(int argc, char **argv)
         return 1;
     }
     glkweb_init(argv[1]);
+    /* tads/osansi3.c names UTF-8 as the display and keyboard character
+       set (os_get_charmap). */
+    tadsweb_text_utf8(1);
     tadsweb_validate(argv[1], "T3-image\015\012\032", 11, "TADS 3");
 
     args[0] = (char *) "tads3";
