@@ -344,22 +344,47 @@ void os_erase_area(int top, int left, int bottom, int right, int windowNum)
     grid_clear(top, left, bottom, right);
 }
 
+static void grid_copy_row(int dst, int src, int left, int right)
+{
+    int c;
+    for (c = left - 1; c <= right - 1; c++) {
+        grid_ch[dst][c] = grid_ch[src][c];
+        grid_attr[dst][c] = grid_attr[src][c];
+    }
+}
+
 void os_scroll_area(int top, int left, int bottom, int right, int units)
 {
-    /* The lower window scrolls in the browser. A scroll inside the upper
-       window (rare: only if a game prints past its last row with scrolling
-       on) moves its rows up. */
-    int r, c;
-    if (top > grid_height || units <= 0)
-        return;
+    /* The lower window scrolls in the browser, so only the part of the
+       rectangle inside the upper-window grid is scrolled here (rare: a game
+       printing past the last row of a window with scrolling on, or a V6
+       window). units > 0 moves the rows up, units < 0 moves them down;
+       the rows left behind are cleared. Coordinates are 1-based and
+       inclusive. */
+    int height, n, r;
+    if (top < 1) top = 1;
+    if (left < 1) left = 1;
+    if (bottom > grid_height) bottom = grid_height;
     if (bottom > MAX_ROWS) bottom = MAX_ROWS;
+    if (right > h_screen_cols) right = h_screen_cols;
     if (right > MAX_COLS) right = MAX_COLS;
-    for (r = top - 1; r <= bottom - 1 - units; r++)
-        for (c = left - 1; c <= right - 1; c++) {
-            grid_ch[r][c] = grid_ch[r + units][c];
-            grid_attr[r][c] = grid_attr[r + units][c];
-        }
-    grid_clear(bottom - units + 1, left, bottom, right);
+    if (top > bottom || left > right || units == 0)
+        return;
+    height = bottom - top + 1;
+    n = units > 0 ? units : -units;
+    if (n >= height) {
+        grid_clear(top, left, bottom, right);
+        return;
+    }
+    if (units > 0) {
+        for (r = top - 1; r <= bottom - 1 - n; r++)
+            grid_copy_row(r, r + n, left, right);
+        grid_clear(bottom - n + 1, left, bottom, right);
+    } else {
+        for (r = bottom - 1; r >= top - 1 + n; r--)
+            grid_copy_row(r, r - n, left, right);
+        grid_clear(top, left, top + n - 1, right);
+    }
 }
 
 void os_set_text_style(int new_style)

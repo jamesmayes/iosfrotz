@@ -56,9 +56,9 @@ This was checked in Node with the same objects and a scripted front end, using a
 
 ## Upper window
 
-Window 1 (and the V3 status line, which Frotz draws in window 7) is a grid of `h_screen_rows` × `h_screen_cols` cells in `web_os.c`. Each cell holds a character and an attribute word (style, foreground and background colour). `os_set_cursor` positions writes, and `os_erase_area` and `os_scroll_area` act on the cells. When the interpreter waits for input, the grid goes to `app.js` in one call (pointers into the wasm heap), and it is drawn as rows of styled spans in a monospace font. So status lines, boxes, quotation boxes and menus keep their layout.
+Window 1 (and the V3 status line, which Frotz draws in window 7) is a grid of `h_screen_rows` × `h_screen_cols` cells in `web_os.c`. Each cell holds a character and an attribute word (style, foreground and background colour). `os_set_cursor` positions writes, and `os_erase_area` and `os_scroll_area` act on the cells. `os_scroll_area` first intersects its rectangle with the upper-window grid (the lower window scrolls in the browser) and ignores an empty one. It scrolls up for positive units and down for negative units, and a displacement as tall as the rectangle or taller just clears it. When the interpreter waits for input, the grid goes to `app.js` in one call (pointers into the wasm heap), and it is drawn as rows of styled spans in a monospace font. Every span in the grid is exactly the grid font, so fixed-style or font-4 text keeps the column alignment (the transcript's slightly smaller fixed-pitch text applies only to the transcript). So status lines, boxes, quotation boxes and menus keep their layout.
 
-**Screen size.** At load, `app.js` measures the grid font and picks as many columns as fit the reading column (at most 48rem, so about 79 at 15px). On a narrow screen it keeps at least 52 columns by shrinking the grid font (not the input). Rows come from the window height. The core reads this in `os_init_screen`.
+**Screen size.** At load, `app.js` measures the grid font and picks as many columns as fit the reading column (at most 48rem, so about 79 at 15px). On a narrow screen it keeps at least 52 columns by shrinking the grid font (not the input). Rows come from the height left for the two windows: the page (pinned to the visual viewport) less the toolbar and the command bar, at least 10. The core reads this in `os_init_screen`. The upper window is at most 75% of the page and scrolls inside itself beyond that, so a full-screen menu or a short viewport never pushes the command bar off screen.
 
 **Resize.** On a window resize the page refits the grid at once and passes the new column count to the core at its next read, both before the read and when the read returns, so the game's next status redraw uses it. `web_os.c` then sets `h_screen_cols`/`h_screen_width`, calls `resize_screen()` (the window sizes) and `restart_header()` (the header the game reads). Nothing is interrupted, so no `ZC_TIME_OUT` is sent. Only the width changes at runtime. The row count stays as sized at load, because shrinking it under a split upper window could leave the lower window with no rows. Most games redraw their status line every turn; an upper-window menu already on screen keeps its old layout (clipped) until the game redraws it.
 
@@ -70,10 +70,12 @@ Window 1 (and the V3 status line, which Frotz draws in window 7) is a grid of `h
 - Colours 2–12 (black, red, green, yellow, blue, magenta, cyan, white, then the three greys) map to the CSS variables `--z2` … `--z12` in `index.html`. Each has a light and a dark value under `prefers-color-scheme`, tuned so that the default text stays readable.
 - Reverse video swaps foreground and background, defaults included.
 - Erasing the screen (`erase_window`) fills it with the current background colour by setting `--screen-bg`, which is the page background. Erased upper-window cells keep the background colour too.
+- The toolbar and the command bar have their own surface and text colours (`--chrome-bg`, `--chrome-fg`, one pair per scheme), so a game's white or black screen never makes the input or the buttons unreadable.
 
 ## Mobile Safari
 
-- `viewport-fit=cover`, with `env(safe-area-inset-*)` padding on the toolbar (top), the page sides (landscape notch) and the input bar (bottom, the home indicator).
+- `viewport-fit=cover`, with `env(safe-area-inset-*)` padding on the toolbar (top), the page sides (landscape notch), the input bar and the story picker (bottom, the home indicator).
+- The file pickers (**Open a story file…**, **Import save…**) are visually hidden inputs inside their labels, so they can be reached with Tab and opened with Space.
 - iOS does not shrink the layout viewport for the software keyboard; it shrinks and scrolls the *visual* viewport. `app.js` listens to `visualViewport` `resize`/`scroll` and pins the body to it (`--app-top`, `--app-height`). So the input stays docked just above the keyboard and the transcript fills the rest. With the keyboard up, the bottom inset is dropped.
 - The input is at least 16px (17px here), so iOS does not zoom the page when it gets focus. Only the upper-window grid font may shrink below that on narrow screens, and it is never focused.
 - `manifest.webmanifest` and `icon-512.png` (a copy of `resources/Frotz-512x512.png`) give "Add to Home Screen" a name and icon, plus `apple-touch-icon`, `apple-mobile-web-app-capable` and `theme-color` for each scheme. A Home Screen web app also escapes Safari's 7-day storage eviction.
@@ -83,7 +85,7 @@ Only desktop Safari has been tested. Untested on a real iPhone/iPad: the keyboar
 
 ## Stories
 
-The start screen lists `games/stories.json`. Picking a story sets the URL hash, for example `#story=Balances` (the file name without its extension, case-insensitive), so a link opens that story directly. Changing story while one is running reloads the page, since a story is loaded once per WebAssembly instance.
+The start screen lists `games/stories.json`. Picking a story sets the URL hash, for example `#story=Balances` (the file name without its extension; the parameter and the name are both case-insensitive), so a link opens that story directly. A hash that names no story, or has malformed `%` escapes, shows the picker. While a story loads, the picker says so; a newer pick supersedes a load still fetching, and a failed load puts the picker back with the error. Changing story while one is running reloads the page, since a story is loaded once per WebAssembly instance.
 
 **Open a story file…** plays a Z-code file from the device (`.z3`–`.z8`, `.zblorb`, `.zlb`). Nothing is uploaded. A local file cannot be linked to, so the hash is cleared.
 

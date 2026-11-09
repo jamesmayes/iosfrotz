@@ -51,7 +51,9 @@ function styleClass(style) {
 //
 // The page picks the screen size in characters from its own width: as many
 // columns of the grid font as fit (at least MIN_COLS, shrinking the grid
-// font on narrow screens), and rows from the window height. On resize the
+// font on narrow screens), and rows from the height left for the two
+// windows: the page (pinned to the visual viewport) less the toolbar and
+// the command bar. On resize the
 // new column count is handed to the core at its next read.
 
 const GRID_PX = 15;           // grid font size before fitting
@@ -90,7 +92,12 @@ function fitScreen() {
     cols = Math.floor(avail / ((chw * font) / GRID_PX));
   }
   cols = clamp(cols, 20, MAX_COLS);
-  const rows = clamp(Math.floor(window.innerHeight / (font * GRID_LINE)), 20, MAX_ROWS);
+  const toolbar = document.getElementById("toolbar");
+  const height = (document.body.clientHeight || window.innerHeight) -
+    toolbar.offsetHeight - form.offsetHeight;
+  // web_os.c needs at least 10 rows. If even that does not fit, the upper
+  // window scrolls inside its own box (index.html, #status max-height).
+  const rows = clamp(Math.floor(height / (font * GRID_LINE)), 10, MAX_ROWS);
   return { rows, cols, font };
 }
 
@@ -530,14 +537,27 @@ const storyListEl = document.getElementById("story-list");
 const openInput = document.getElementById("open-story");
 const storiesBtn = document.getElementById("stories-button");
 const titleEl = document.getElementById("story-title");
+const pickerStatus = document.getElementById("picker-status");
 let stories = [];
+// A story can only be loaded once per Module. `running` is set when play()
+// starts creating one; from then on, picking another story reloads the
+// page. Before that, a newer pick supersedes an older one: each load takes
+// a token, and a fetch that completes after a newer pick is dropped.
 let running = false;
+let loadToken = 0;
 
 const stem = (file) => file.replace(/\.[^.]*$/, "");
 
+// #story=<id>, the parameter name in any case. Malformed escapes mean no
+// story (the picker), never an error.
 function hashStory() {
-  const m = /(?:^|[#&])story=([^&]+)/.exec(location.hash);
-  return m ? decodeURIComponent(m[1]) : null;
+  const m = /(?:^|[#&])story=([^&]*)/i.exec(location.hash);
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch (e) {
+    return null;
+  }
 }
 
 function findStory(id) {
@@ -564,31 +584,69 @@ function renderPicker() {
   }
 }
 
-function showPicker() {
+function showPicker(message, isError) {
   document.body.dataset.mode = "picker";
+  delete document.body.dataset.loading;
   pickerEl.hidden = false;
   titleEl.textContent = "Web Frotz";
+  document.title = "Web Frotz";
+  pickerStatus.textContent = message || "";
+  pickerStatus.className = isError ? "error" : "";
 }
 
 function onHashChange() {
   if (running) return location.reload();
   const s = findStory(hashStory());
-  if (s) loadBundled(s).catch((err) => webFrotz.fatal(String(err)));
+  if (s) loadStory(s.file, s.title, () => fetchBundled(s));
+  else showPicker();
 }
 
-async function loadBundled(s) {
+async function fetchBundled(s) {
   const resp = await fetch(`games/${encodeURIComponent(s.file)}`);
   if (!resp.ok) throw new Error(`Could not load ${s.file}: ${resp.status}`);
-  await play(s.file, s.title, new Uint8Array(await resp.arrayBuffer()));
+  return new Uint8Array(await resp.arrayBuffer());
 }
 
-openInput.addEventListener("change", async () => {
+// Claims the loading state before the first await. Failures put the picker
+// back with the error shown.
+async function loadStory(fileName, title, getBytes) {
+  if (running) return;
+  const token = ++loadToken;
+  document.body.dataset.loading = "";
+  pickerStatus.className = "";
+  pickerStatus.textContent = `Loading ${title}…`;
+  let bytes;
+  try {
+    bytes = await getBytes();
+  } catch (err) {
+    if (token === loadToken) loadFailed(err);
+    return;
+  }
+  if (token !== loadToken || running) return; // a later pick won
+  try {
+    await play(fileName, title, bytes);
+  } catch (err) {
+    // createFrotz or the file system failed before the game started.
+    Module = null;
+    running = false;
+    loadFailed(err);
+  }
+}
+
+function loadFailed(err) {
+  console.warn("[frotz] load failed", err);
+  // Drop the hash so picking the same story again is a new hashchange.
+  history.replaceState(null, "", location.pathname + location.search);
+  showPicker(String(err && err.message ? err.message : err), true);
+}
+
+openInput.addEventListener("change", () => {
   const file = openInput.files && openInput.files[0];
   openInput.value = "";
   if (!file || running) return;
   // A local file cannot be linked to, so drop any #story= from the URL.
   history.replaceState(null, "", location.pathname + location.search);
-  await play(file.name, stem(file.name), new Uint8Array(await file.arrayBuffer()));
+  loadStory(file.name, stem(file.name), async () => new Uint8Array(await file.arrayBuffer()));
 });
 
 storiesBtn.addEventListener("click", () => {
@@ -602,23 +660,28 @@ storiesBtn.addEventListener("click", () => {
 async function play(fileName, title, bytes) {
   running = true;
   pickerEl.hidden = true;
+  delete document.body.dataset.loading;
   document.body.dataset.mode = "game";
   titleEl.textContent = title;
   document.title = `${title} · Web Frotz`;
   const name = fileName.replace(/[\/]/g, "_");
 
-  Module = await createFrotz({
-    webFrotz,
-    print: (t) => console.log("[frotz]", t),
-    printErr: (t) => console.warn("[frotz]", t),
-  });
-  Module.FS.mkdir("/games");
-  Module.FS.mkdir(SAVE_DIR);
+  try {
+    Module = await createFrotz({
+      webFrotz,
+      print: (t) => console.log("[frotz]", t),
+      printErr: (t) => console.warn("[frotz]", t),
+    });
+    Module.FS.mkdir("/games");
+    Module.FS.mkdir(SAVE_DIR);
+    Module.FS.writeFile(`/games/${name}`, bytes);
+  } catch (err) {
+    throw new Error(`Could not start ${title}: ${err && err.message ? err.message : err}`);
+  }
   // Saves are read from IndexedDB one file at a time, at RESTORE; this only
   // lists them for the Saves dialog, and the game does not wait for it.
   refreshStored();
   storyFile = fileName;
-  Module.FS.writeFile(`/games/${name}`, bytes);
   // callMain returns when interpret() first suspends; the game then runs
   // from Promise resolutions driven by the input form.
   Module.callMain([`/games/${name}`]);
@@ -626,13 +689,17 @@ async function play(fileName, title, bytes) {
 }
 
 async function init() {
-  const resp = await fetch("games/stories.json");
-  stories = resp.ok ? await resp.json() : [];
-  renderPicker();
   window.addEventListener("hashchange", onHashChange);
+  try {
+    const resp = await fetch("games/stories.json");
+    stories = resp.ok ? await resp.json() : [];
+  } catch (e) {
+    stories = [];
+  }
+  renderPicker();
   const s = findStory(hashStory());
-  if (s) await loadBundled(s);
-  else showPicker();
+  if (s) loadStory(s.file, s.title, () => fetchBundled(s));
+  else showPicker(stories.length ? "" : "Could not load the story list. Open a story file instead.", !stories.length);
 }
 
-init().catch((err) => webFrotz.fatal(String(err)));
+init();
