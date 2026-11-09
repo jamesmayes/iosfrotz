@@ -44,17 +44,26 @@ Cross-Origin-Embedder-Policy: require-corp
 
 `os_read_line` and `os_read_key` call `EM_ASYNC_JS` functions that `await` a Promise from `app.js`. ASYNCIFY unwinds the C stack at that point, so `callMain` returns to the browser. The stack is rewound when the player presses Enter, or when a timed-input timer resolves the Promise with a timeout. Lines submitted while the interpreter is still busy are queued (type-ahead), not dropped.
 
+## Saves
+
+`/saves` is mounted on IDBFS (`-lidbfs.js`), so save files live in the browser's IndexedDB:
+
+- At start, `app.js` mounts `/saves` and calls `FS.syncfs(true)` to load earlier saves before the game runs.
+- After every successful `save` or `restore`, the core calls `os_mark_recent_save()`. `web_os.c` then awaits `FS.syncfs(false)` through an `EM_ASYNC_JS` call, so the file is in IndexedDB before the game prints "Ok.". `quit` (the end of `main()`) and `os_fatal` sync the same way, and the page also syncs when it is hidden.
+- The **Saves** button lists the files in `/saves`. **Export** downloads one as a file. **Import save…** reads a `.sav` file and writes it as the current story's save name (`<story>.sav`), so the game's next `RESTORE` loads it.
+
+**Safari caveat.** WebKit deletes all script-writable storage (IndexedDB included) for a site that has not been visited for 7 days, unless the site has been added to the Home Screen as a web app. Treat browser storage as a cache and export saves you care about.
+
 ## What works
 
 - Z-code v3–v8 text games (tested with `Balances.z5`, v5).
 - Status line / upper window, drawn as a monospaced grid above the transcript.
 - Text styles (bold, italic, fixed, reverse) as CSS classes.
 - Timed input (`read` with a timeout).
-- `save`, `restore`, `undo`, `restart`, `quit`. Saves go to MEMFS under `/saves`.
+- `save`, `restore`, `undo`, `restart`, `quit`. Saves persist across reloads (see below).
 
 ## What does not work (yet)
 
-- Saves do not persist across page reloads. MEMFS only; there is no IDBFS or download.
 - There is no file-name prompt. Every save and restore uses `<story>.sav`.
 - No choice of story: `app.js` hard-codes `games/Balances.z5`. Blorb-wrapped stories (`.zblorb`) have not been tried.
 - No sound, no pictures (V6), no colours (colour is turned off in the header).

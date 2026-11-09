@@ -32,6 +32,43 @@
       display: flex;
       flex-direction: column;
     }
+    #toolbar {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 6px 16px;
+      border-bottom: 1px solid var(--rule);
+      font: 14px/1.4 -apple-system, system-ui, sans-serif;
+    }
+    button, .file-button {
+      font: 14px/1.4 -apple-system, system-ui, sans-serif;
+      color: var(--fg);
+      background: transparent;
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      padding: 3px 10px;
+      cursor: pointer;
+    }
+    .file-button input { display: none; }
+    dialog {
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--rule);
+      border-radius: 10px;
+      max-width: min(32rem, calc(100vw - 32px));
+      width: 100%;
+      font: 15px/1.5 -apple-system, system-ui, sans-serif;
+    }
+    dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+    dialog h2 { font-size: 17px; margin: 0 0 8px; }
+    #saves-list { list-style: none; margin: 0 0 12px; padding: 0; }
+    #saves-list li {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--rule);
+    }
+    #saves-list li.empty { color: var(--muted); }
+    .dialog-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
     #status {
       margin: 0;
       padding: 4px 16px;
@@ -77,12 +114,30 @@
   </style>
 </head>
 <body>
+  <div id="toolbar">
+    <button id="saves-button" type="button">Saves</button>
+  </div>
   <pre id="status" hidden></pre>
   <div id="transcript" aria-live="polite"></div>
   <form id="command-form" autocomplete="off">
     <input id="command" type="text" autocapitalize="off" autocorrect="off"
            spellcheck="false" enterkeyhint="send" aria-label="Command">
   </form>
+  <dialog id="saves-dialog">
+    <form method="dialog">
+      <h2>Saves</h2>
+      <ul id="saves-list"></ul>
+      <div class="dialog-actions">
+        <label class="file-button">Import save…
+          <input id="import-save" type="file" accept=".sav,.qzl,application/octet-stream">
+        </label>
+        <button value="close">Done</button>
+      </div>
+      <p id="import-note" class="note"></p>
+      <p class="note">Saves are kept in this browser's storage. Safari may delete
+        them after 7 days without a visit, so export the ones you care about.</p>
+    </form>
+  </dialog>
   <script src="dist/frotz.js"></script>
   <script src="app.js"></script>
 </body>

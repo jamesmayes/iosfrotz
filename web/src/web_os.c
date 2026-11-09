@@ -18,7 +18,9 @@
  *     browser event loop runs, and the stack is rewound when the player's
  *     line (or a timeout) resolves the Promise.
  *
- * Save and restore go to MEMFS under /saves (lost on reload in this spike).
+ * Saves go to /saves, which app.js mounts on IDBFS. After every successful
+ * save or restore, and before the interpreter exits, js_sync_saves() awaits
+ * FS.syncfs so the files reach IndexedDB.
  */
 
 #include <emscripten.h>
@@ -62,6 +64,15 @@ EM_ASYNC_JS(int, js_read_line, (char *buf, int maxbytes, int timeout_ms), {
     const line = await Module.webFrotz.readLine(timeout_ms);
     if (line === null) return -1;
     return stringToUTF8(line, buf, maxbytes);
+});
+
+/* Flush /saves (IDBFS) to IndexedDB. Awaited, so a quit cannot race it. */
+EM_ASYNC_JS(void, js_sync_saves, (void), {
+    try {
+        await Module.webFrotz.syncSaves();
+    } catch (e) {
+        console.warn("[frotz] syncfs failed", e);
+    }
 });
 
 /* Resolves to a Unicode code point / ZC_* key, or 0 (ZC_TIME_OUT). */
@@ -382,7 +393,12 @@ FILE *os_path_open(const char *name, const char *mode)
     return fopen(name, mode);
 }
 
-void os_mark_recent_save(void) { }
+/* Called by the core after a successful save or restore (fastmem.c). */
+void os_mark_recent_save(void)
+{
+    js_sync_saves();
+}
+
 void os_start_script(void) { }
 void os_stop_script(void) { }
 
@@ -394,6 +410,7 @@ void os_fatal(const char *s)
     flush_output();
     snprintf(msg, sizeof msg, "Fatal error: %s", s);
     js_fatal(msg);
+    js_sync_saves();
     exit(1);
 }
 
@@ -510,5 +527,6 @@ int main(int argc, char *argv[])
     interpret();
     reset_memory();
     os_reset_screen();
+    js_sync_saves();    /* `quit`: make sure the last save reached IndexedDB */
     return 0;
 }
