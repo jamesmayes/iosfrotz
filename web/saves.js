@@ -297,6 +297,7 @@
       snapshot() {
         return guarded("snapshot:", "Reading saves", async (ctx) => {
           const out = await listMeta(ctx);
+          if (!ctx.live()) throw new Superseded("Reading saves"); // abandoned meanwhile
           seen.clear();
           for (const m of out) seen.set(m.name, m.rev || 0);
           return out;
@@ -453,12 +454,14 @@
         });
       },
 
-      // Cancel every write and delete still in progress: a transaction
-      // that has not committed is aborted, and each one rejects with
-      // Revoked. Used when the page stops being the writer.
-      abandon(why) {
+      // Cancel every write and delete still in progress, and any
+      // snapshot (all: every operation, reads too): a transaction that has
+      // not committed is aborted, and each one rejects with Revoked. Used
+      // when the page stops being the writer.
+      abandon(why, all) {
         for (const [key, cancel] of [...liveOps])
-          if (key.startsWith("put:")) cancel(new Revoked(why || "Saving"));
+          if (all || key.startsWith("put:") || key === "snapshot:")
+            cancel(new Revoked(why || "Saving"));
       },
     };
   }
@@ -573,8 +576,12 @@
   //     badge; every write also re-checks ownership in the transaction
   //     callback that would write;
   //   - a queued request that rejects leaves the page a reader.
-  // pagehide revokes writing first, abandons writes in progress (dirty
-  // marks kept), aborts a queued request (AbortSignal) and then releases
+  // Each grant is identified by its epoch: a rejection of the current
+  // grant revokes whatever the mode (a grant still taking its snapshot
+  // never becomes the writer); a rejection of an older one is ignored.
+  // pagehide revokes writing first, abandons every operation in progress
+  // (dirty marks kept; an acquisition snapshot too, so the lock callback
+  // returns at once), aborts a queued request (AbortSignal) and then releases
   // the lock. pageshow with persisted === true asks again, and a page that
   // gets the lock takes a fresh snapshot before it writes.
   function createSaveSession(opts) {
@@ -634,13 +641,14 @@
     // Becoming a writer: freeze the baseline first, so no write ever runs
     // against a guessed rev. A failed snapshot leaves every name at 0, so
     // a save of an existing stored file conflicts (safe) rather than
-    // overwriting it. Does nothing if the grant was lost meanwhile.
+    // overwriting it. Does nothing if the grant was lost meanwhile (a
+    // revoke() abandons the snapshot too).
     async function becomeWriter(m, ep) {
       let snap = null;
       try {
         snap = await store.snapshot();
       } catch (e) {
-        log.warn("could not read the saves in browser storage", e);
+        if (ep === epoch) log.warn("could not read the saves in browser storage", e);
       }
       if (ep !== epoch) return;
       if (snap) stored = snap;
@@ -649,19 +657,35 @@
 
     // Stop writing at once: abandon writes in progress and let go of the
     // lock. why: "lost" (stolen, or a conflict) or "hidden" (pagehide).
+    // Also cancels an acquisition snapshot still in progress, so the
+    // callback holding the lock returns now, not when the snapshot ends;
+    // pagehide cancels every operation.
     function revoke(why) {
       epoch++;
       if (why === "lost") lost = true;
       setMode(why === "hidden" ? "pending" : "reader");
-      store.abandon(why === "lost" ? "Lost browser storage" : "Page hidden");
+      store.abandon(why === "lost" ? "Lost browser storage" : "Page hidden", why === "hidden");
       if (release) { const r = release; release = null; r(); }
       if (queued) { const q = queued; queued = null; try { q.abort(); } catch (e) { /* done */ } }
     }
 
-    // Hold the lock just granted (epoch ep) until release() or the page
-    // goes away.
-    function holdLock() {
-      return new Promise((resolve) => { release = resolve; });
+    // The lock callback for a grant: hold the lock until release(), and
+    // take the snapshot before writing. Returns as soon as release() is
+    // called, even while the snapshot is still in progress, so letting go
+    // never waits on storage. ep identifies the grant.
+    function holdLock(ep, done) {
+      const held = new Promise((resolve) => { release = resolve; });
+      return Promise.race([becomeWriter("writer", ep).then(() => { if (done) done(); }), held])
+        .then(() => held);
+    }
+
+    // The request of grant ep rejected (stolen, or failed): revoke if that
+    // grant is still the current one, whatever the mode (it may be
+    // mid-snapshot, a reader on paper). A rejection of an older grant
+    // must not revoke a newer acquisition.
+    function grantLost(ep, e) {
+      log.warn("lost the browser storage lock", e);
+      if (ep === epoch && mode !== "unlocked") revoke("lost");
     }
 
     // Ask for the lock. Resolves once mode() is no longer "pending".
@@ -672,19 +696,15 @@
       lost = false;
       return new Promise((resolve) => {
         let answered = false;
-        let granted = false;
+        let granted = 0; // epoch of this request's grant, if any
         const answer = () => { if (!answered) { answered = true; resolve(); } };
         let req;
         try {
           req = locks.request(LOCK_NAME, { mode: "exclusive", ifAvailable: true }, async (lock) => {
             if (lock) {
               if (hidden) return null; // hidden before the grant arrived: let go
-              granted = true;
-              const ep = ++epoch;
-              const held = holdLock();
-              await becomeWriter("writer", ep);
-              answer();
-              return held;
+              granted = ++epoch;
+              return holdLock(granted, answer);
             }
             setMode("reader");
             answer();
@@ -703,8 +723,7 @@
             return;
           }
           // Lost after the grant (stolen, perhaps during the snapshot).
-          log.warn("lost the browser storage lock", e);
-          if (writes() || mode === "pending") revoke("lost");
+          grantLost(granted, e);
           answer();
         });
       });
@@ -715,24 +734,20 @@
       const locks = opts.locks;
       const ac = typeof AbortController === "function" ? new AbortController() : null;
       queued = ac;
-      let granted = false;
+      let granted = 0; // epoch of this request's grant, if any
       Promise.resolve()
         .then(() => locks.request(LOCK_NAME, ac ? { mode: "exclusive", signal: ac.signal } :
           { mode: "exclusive" }, async () => {
           if (queued === ac) queued = null;
           if (hidden || lost || mode !== "reader") return null;
-          granted = true;
-          const ep = ++epoch;
-          const held = holdLock();
-          await becomeWriter("writer", ep);
-          return held;
+          granted = ++epoch;
+          return holdLock(granted);
         }))
         .catch((e) => {
           if (queued === ac) queued = null;
           if (ac && ac.signal.aborted && !granted) return; // aborted by revoke()
           if (granted) {
-            log.warn("lost the browser storage lock", e);
-            if (writes() || mode === "pending") revoke("lost");
+            grantLost(granted, e); // even while still a reader, mid-snapshot
             return;
           }
           // The queued request failed: stay a reader, with the notice.
