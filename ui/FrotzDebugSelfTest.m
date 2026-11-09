@@ -806,12 +806,11 @@ static NSString *PhaseName(UITouchPhase phase) {
     }
 }
 
-+(BOOL)fakeBounds:(CGSize *)size {
++(CGSize)boundsSizeReplacing:(CGSize)size {
     NSArray<NSString *> *fake = [[[NSProcessInfo processInfo] environment][@"FROTZ_FAKE_BOUNDS"] componentsSeparatedByString: @"x"];
     if (fake.count != 2 || fake[0].doubleValue <= 0 || fake[1].doubleValue <= 0)
-        return NO;
-    *size = CGSizeMake(fake[0].doubleValue, fake[1].doubleValue);
-    return YES;
+        return size;
+    return CGSizeMake(fake[0].doubleValue, fake[1].doubleValue);
 }
 
 +(void)postureDidChange:(FrotzPostureObserver *)observer {
@@ -861,6 +860,17 @@ static NSString *PhaseName(UITouchPhase phase) {
         }
     }
     return YES;
+}
+
++(BOOL)startFakePostureForObserver:(FrotzPostureObserver *)observer {
+    if (![self fakePosture: NULL angle: NULL fold: NULL inView: nil])
+        return NO;
+    [observer refresh];
+    return YES;
+}
+
++(void)replacePosture:(FrotzPosture *)posture angle:(CGFloat *)angle fold:(CGRect *)fold inView:(nullable UIView *)view {
+    [self fakePosture: posture angle: angle fold: fold inView: view];
 }
 
 +(void)keyboardView:(FrotzKeyboardView *)keyboard willPerformKey:(FrotzKeyboardKey *)key {

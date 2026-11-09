@@ -4205,11 +4205,11 @@ static UIColor *scanColor(NSString *colorStr) {
         NSString *style = [dict stringForKey: @"keyboardStyle"];
         m_keyboardStyle = style.length ? style : nil;
         m_duoLayoutMode = [[dict stringForKey: @"duoLayoutMode"] isEqualToString: @"flow"] ? @"flow" : @"classic";
-        // The first call comes from init, before loadView has made the controller.
+        // The first call comes from init, before loadView has made the controller. In DEBUG a
+        // FROTZ_INAPP_KEYBOARD override wins; viewDidAppear applies it.
         BOOL applyStyle = m_keyboardController != nil;
 #if DEBUG
-        if ([FrotzDebugSelfTest overridesKeyboardStyle])
-            applyStyle = NO; // the override wins; viewDidAppear applies it
+        applyStyle = applyStyle && ![FrotzDebugSelfTest overridesKeyboardStyle];
 #endif
         if (applyStyle)
             m_keyboardController.skinID = m_keyboardStyle;

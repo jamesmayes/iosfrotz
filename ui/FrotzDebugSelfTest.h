@@ -32,10 +32,12 @@ NS_ASSUME_NONNULL_BEGIN
 +(BOOL)overridesKeyboardStyle;                                    // FROTZ_INAPP_KEYBOARD is set, so the pref mustn't replace it
 +(void)openStoryAtLaunchWithBrowser:(StoryBrowser *)browser;      // FROTZ_SELFTEST_STORY
 +(void)window:(UIWindow *)window willSendEvent:(UIEvent *)event;  // "kbtouch" lines for the keyboard's touches
-+(BOOL)fakeBounds:(CGSize *)size;                                 // FROTZ_FAKE_BOUNDS
++(CGSize)boundsSizeReplacing:(CGSize)size;                        // FROTZ_FAKE_BOUNDS when set, otherwise size
 +(void)postureDidChange:(FrotzPostureObserver *)observer;
-// FROTZ_FAKE_POSTURE: YES and the fake state (any pointer may be NULL) when it's set.
-+(BOOL)fakePosture:(nullable FrotzPosture *)posture angle:(nullable CGFloat *)angle fold:(nullable CGRect *)fold inView:(nullable UIView *)view;
+// FROTZ_FAKE_POSTURE: when set, start refreshes the observer from it and returns YES (the hinge isn't installed).
++(BOOL)startFakePostureForObserver:(FrotzPostureObserver *)observer;
+// FROTZ_FAKE_POSTURE: when set, replaces the three values with the fake state; otherwise leaves them.
++(void)replacePosture:(FrotzPosture *)posture angle:(CGFloat *)angle fold:(CGRect *)fold inView:(nullable UIView *)view;
 +(void)keyboardView:(FrotzKeyboardView *)keyboard willPerformKey:(FrotzKeyboardKey *)key;
 +(void)keyboardView:(FrotzKeyboardView *)keyboard willAnnounce:(NSString *)announcement withLayoutChange:(BOOL)layoutChange;
 +(void)notesPageDidChange:(BOOL)notesVisible via:(NSString *)site;

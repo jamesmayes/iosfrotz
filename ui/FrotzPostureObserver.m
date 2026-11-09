@@ -81,10 +81,7 @@
     m_started = YES;
     NSUInteger generation = ++m_generation;
 #if DEBUG
-    if ([FrotzDebugSelfTest fakePosture: NULL angle: NULL fold: NULL inView: nil]) {
-        [self refresh];
-        return;
-    }
+    if ([FrotzDebugSelfTest startFakePostureForObserver: self]) return; // FROTZ_FAKE_POSTURE replaces the hinge
 #endif
 #if FROTZ_HAS_HINGE_API
     if (@available(iOS 27.1, *)) {
@@ -126,16 +123,13 @@
     NSAssert([NSThread isMainThread], @"FrotzPostureObserver is main-thread only");
     if (!m_started)
         return;
+    FrotzPosture posture = m_posture;
+    CGFloat angle = m_hingeAngle;
+    CGRect fold = [self activeFoldFrame];
 #if DEBUG
-    FrotzPosture fakePosture;
-    CGFloat fakeAngle;
-    CGRect fakeFold;
-    if ([FrotzDebugSelfTest fakePosture: &fakePosture angle: &fakeAngle fold: &fakeFold inView: m_view]) {
-        [self updatePosture:fakePosture angle:fakeAngle fold:fakeFold];
-        return;
-    }
+    [FrotzDebugSelfTest replacePosture: &posture angle: &angle fold: &fold inView: m_view];
 #endif
-    [self updatePosture:m_posture angle:m_hingeAngle fold:[self activeFoldFrame]];
+    [self updatePosture:posture angle:angle fold:fold];
 }
 
 #if FROTZ_HAS_HINGE_API

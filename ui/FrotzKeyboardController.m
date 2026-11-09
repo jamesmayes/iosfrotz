@@ -148,12 +148,11 @@ typedef NS_ENUM(NSInteger, FrotzKeyboardPlacement) {
 
 // The view's size; in DEBUG, FROTZ_FAKE_BOUNDS can stand in for it here only (FrotzDebugSelfTest.m).
 -(CGSize)sizeForHeightDecision {
+    CGSize size = m_smvc.view.bounds.size;
 #if DEBUG
-    CGSize fake;
-    if ([FrotzDebugSelfTest fakeBounds: &fake])
-        return fake;
+    size = [FrotzDebugSelfTest boundsSizeReplacing: size];
 #endif
-    return m_smvc.view.bounds.size;
+    return size;
 }
 
 // What the story has to keep clear of: when split everything from the fold band down, so the story
