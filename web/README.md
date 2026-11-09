@@ -23,6 +23,20 @@ make dist       # -> dist-site/, the whole static site (about 3.8 MB, 1.7 MB of 
 make serve      # make dist, then serve dist-site/ on 127.0.0.1:8000
 ```
 
+Sizes at commit `f0608e5` (2026-11-09), in bytes, raw and `gzip -9`; a page fetches the shared scripts plus one interpreter's `.js` and `.wasm`:
+
+| File | Raw | gzip -9 |
+|---|---:|---:|
+| `saves.js`, `ui.js`, `main.js`, `index.html` (every page) | 88,240 | 27,631 |
+| `app.js` + `frotz.js` + `frotz.wasm` (Z-code) | 222,668 | 70,464 |
+| `glk.js` + `git.js` + `git.wasm` (Glulx) | 362,190 | 122,651 |
+| `glk.js` + `tads2.js` + `tads2.wasm` (TADS 2) | 729,525 | 166,738 |
+| `glk.js` + `tads3.js` + `tads3.wasm` (TADS 3) | 1,792,549 | 555,592 |
+| `icon-512.png` (Home Screen only) | 338,877 | 338,869 |
+| `glulx.html`, `manifest.webmanifest` | 901 | |
+| `games/` (catalogue, two stories, `LICENSES.md`) | 316,483 | 122,623 |
+| **Total** (21 files) | **3,807,429** | |
+
 `dist-site/` holds exactly what a static host needs: the start page, the `glulx.html` redirect, manifest, icon, the catalogue with the stories it lists and `games/LICENSES.md`, and in `assets/` the scripts and the four interpreters (`.js` and `.wasm`) under content-hashed names, so they can be cached for good while `index.html` is revalidated. It is ignored by git. [`deploy/README.md`](deploy/README.md) lists the headers a host should send (`application/wasm`, `application/manifest+json`, long caching for `assets/`, no COOP/COEP) and how to publish on GitHub Pages.
 
 ## Develop
@@ -33,8 +47,8 @@ Requires emscripten (`emcc`, tested with 7.0.0 from Homebrew), Node (for `make c
 cd web
 make            # all four interpreters
 make frotz      # -> dist/frotz.js (~63 KB) + dist/frotz.wasm (~145 KB)
-make git        # -> dist/git.js (~71 KB) + dist/git.wasm (~265 KB)
-make tads2      # -> dist/tads2.js (~69 KB) + dist/tads2.wasm (~637 KB)
+make git        # -> dist/git.js (~71 KB) + dist/git.wasm (~269 KB)
+make tads2      # -> dist/tads2.js (~69 KB) + dist/tads2.wasm (~639 KB)
 make tads3      # -> dist/tads3.js (~103 KB) + dist/tads3.wasm (~1.7 MB)
 make bench      # -> dist/bench/git-{async,sync}.{js,wasm}, Node builds for the measurement
 make bench-tads # -> dist/bench/tads{2,3}-{async,sync}.{js,wasm}, the same for TADS
@@ -205,7 +219,7 @@ Not done (yet):
 ### TADS 2 and TADS 3 (tasks 5 and 6)
 
 - Both interpreters build from this repo's `tads/` unmodified (see "How TADS 2 is built", "How TADS 3 is built") and run on the browser Glk under ASYNCIFY, in the same Glk windows as Glulx: the status line is a text grid, the story a text buffer.
-- ASYNCIFY instruments only the functions that can be on the stack at a wait, from generated lists ("ASYNCIFY for TADS"). CPU-bound turns cost 1.00× (TADS 3) and 1.14× (TADS 2) of a plain build in Node, against 1.42× and 1.35× with everything instrumented. `tads3.wasm` is 1.7 MB (was 2.3 MB), `tads2.wasm` 637 KB ("Measurement").
+- ASYNCIFY instruments only the functions that can be on the stack at a wait, from generated lists ("ASYNCIFY for TADS"). CPU-bound turns cost 1.00× (TADS 3) and 1.14× (TADS 2) of a plain build in Node, against 1.42× and 1.35× with everything instrumented. `tads3.wasm` is 1.7 MB (was 2.3 MB), `tads2.wasm` 639 KB ("Measurement").
 - `longjmp`: TADS 3 uses emscripten's JS `invoke_*` wrappers (no emcc warning, no C++ `catch` hazard; decided in task 6). TADS 2 uses wasm `setjmp`/`longjmp` (`-sSUPPORT_LONGJMP=wasm`), because the `invoke_*` path cost it most of its ASYNCIFY overhead. TADS 2 therefore needs Safari 15.2 or later (wasm exception handling); TADS 3 needs nothing the other interpreters do not.
 - The start page opens them from their bytes (`TADS2 bin`, `T3-image`) and loads only that interpreter (`dist/tads2.js` or `dist/tads3.js`, then `glk.js`). **The catalogue lists no TADS game**, pending a game cleared for shipping (James's call). The test games in `bench/tads` (*The Keeper's Errand*, *The Silent Belfry*, `stress2`, `stress3`, `fin3`, `utf8`, `cp1252`, `files3`) were written for this repo and are distributed under its licence, GPL v2 (`COPYING`), not public domain; the TADS 2 ones include `adv.t`/`std.t` from `tads/tads2`, unmodified, which keep their own notice (`games/LICENSES.md`, "Test games"). They are for the checks and measurement, not the catalogue.
 - Saves use the shared store: TADS's stdio save is brought in from and written to IndexedDB by its `/saves` path, `<story>.glksave` (the Glk file prompt's name). What `make check` covers, in Node: `bench/check-tads.js` checks, on the plain builds with a scripted bridge, that the page is asked to load the file before it is opened and to store it once after it is closed, and restores from the same instance's MEMFS; `bench/check-page.js` saves *The Silent Belfry* in one page (`main.js`, `glk.js`, the real save session from `saves.js` through `ui.js`, a fake IndexedDB) on the ASYNCIFY TADS 3 build, then RESTOREs it in a second page, a new interpreter instance whose MEMFS starts empty, which comes back in the saved state. Not covered: a real IndexedDB, a page reload, TADS 2 across instances, and anything in Safari (below). Export works as for the other formats; Import accepts the format's own save file (`TADS2 save`, `T3-state-v`), not Quetzal.

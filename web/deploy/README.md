@@ -9,12 +9,12 @@
 | `index.html` | the start page, with an inline map of the hashed asset names | revalidate |
 | `glulx.html` | redirect for old `glulx.html#story=…` links | revalidate |
 | `manifest.webmanifest`, `icon-512.png` | Home Screen web app | revalidate |
-| `assets/<name>.<hash>.js`, `assets/<name>.<hash>.wasm` | `saves.js`, `ui.js`, `main.js`, `app.js`, `glk.js`, `frotz.js`/`.wasm`, `git.js`/`.wasm` | forever |
+| `assets/<name>.<hash>.js`, `assets/<name>.<hash>.wasm` | `saves.js`, `ui.js`, `main.js`, `app.js`, `glk.js`, `frotz.js`/`.wasm`, `git.js`/`.wasm`, `tads2.js`/`.wasm`, `tads3.js`/`.wasm` | forever |
 | `games/stories.json`, the stories it lists, `games/LICENSES.md` | the catalogue | revalidate |
 
 The hash is the first 10 hex digits of the file's SHA-256, so a changed file always gets a new name, and a page that revalidates `index.html` picks it up. The same sources give the same names (`deploy/build-site.js`). Every URL in the site is relative, so it works at a domain's root or under a path (`https://example.org/frotz/`).
 
-The site is about 1.3 MB, of which `icon-512.png` is 0.34 MB and the two `.wasm` files 0.41 MB. Only the interpreter a story needs is fetched: Frotz for Z-code, git for Glulx.
+The site is about 3.8 MB, of which `icon-512.png` is 0.34 MB and the four `.wasm` files 2.7 MB (1.7 MB of it `tads3.wasm`); the per-file sizes are in the web README ("Deploy"). Only the interpreter a story needs is fetched: Frotz for Z-code, git for Glulx, TADS 2 or TADS 3 for theirs.
 
 ## Headers to send
 
